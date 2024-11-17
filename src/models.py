@@ -1,10 +1,13 @@
 import jax.numpy as jnp
 from jax import jit
+import numpy as np
 from functools import partial
 from src.base import LBMBase
+
 """
 Collision operators are defined in this file for different models.
 """
+
 
 class BGKSim(LBMBase):
     """
@@ -21,7 +24,7 @@ class BGKSim(LBMBase):
         """
         BGK collision step for lattice.
 
-        The collision step is where the main physics of the LBM is applied. In the BGK approximation, 
+        The collision step is where the main physics of the LBM is applied. In the BGK approximation,
         the distribution function is relaxed towards the equilibrium distribution function.
         """
         f = self.precisionPolicy.cast_to_compute(f)
@@ -33,15 +36,19 @@ class BGKSim(LBMBase):
             fout = self.apply_force(fout, feq, rho, u)
         return self.precisionPolicy.cast_to_output(fout)
 
+
 class KBCSim(LBMBase):
     """
     KBC simulation class.
 
     This class implements the Karlin-Bösch-Chikatamarla (KBC) model for the collision step in the Lattice Boltzmann Method.
     """
+
     def __init__(self, **kwargs):
-        if kwargs.get('lattice').name != 'D3Q27' and kwargs.get('nz') > 0:
-            raise ValueError("KBC collision operator in 3D must only be used with D3Q27 lattice.")
+        if kwargs.get("lattice").name != "D3Q27" and kwargs.get("nz") > 0:
+            raise ValueError(
+                "KBC collision operator in 3D must only be used with D3Q27 lattice."
+            )
         super().__init__(**kwargs)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
@@ -61,7 +68,9 @@ class KBCSim(LBMBase):
             deltaS = self.fdecompose_shear_d3q27(fneq) * rho
         deltaH = fneq - deltaS
         invBeta = 1.0 / beta
-        gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(deltaS, deltaH, feq) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
+        gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(
+            deltaS, deltaH, feq
+        ) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
 
         fout = f - beta * (2.0 * deltaS + gamma[..., None] * deltaH)
 
@@ -69,17 +78,17 @@ class KBCSim(LBMBase):
         if self.force is not None:
             fout = self.apply_force(fout, feq, rho, u)
         return self.precisionPolicy.cast_to_output(fout)
-    
+
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision_modified(self, f):
         """
         Alternative KBC collision step for lattice.
-        Note: 
+        Note:
         At low Reynolds number the orignal KBC collision above produces inaccurate results because
-        it does not check for the entropy increase/decrease. The KBC stabalizations should only be 
-        applied in principle to cells whose entropy decrease after a regular BGK collision. This is 
-        the case in most cells at higher Reynolds numbers and hence a check may not be needed. 
-        Overall the following alternative collision is more reliable and may replace the original 
+        it does not check for the entropy increase/decrease. The KBC stabalizations should only be
+        applied in principle to cells whose entropy decrease after a regular BGK collision. This is
+        the case in most cells at higher Reynolds numbers and hence a check may not be needed.
+        Overall the following alternative collision is more reliable and may replace the original
         implementation. The issue at the moment is that it is about 60-80% slower than the above method.
         """
         f = self.precisionPolicy.cast_to_compute(f)
@@ -101,7 +110,9 @@ class KBCSim(LBMBase):
             deltaS = self.fdecompose_shear_d3q27(fneq) * rho
         deltaH = fneq - deltaS
         invBeta = 1.0 / beta
-        gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(deltaS, deltaH, feq) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
+        gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(
+            deltaS, deltaH, feq
+        ) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
 
         f_kbc = f - beta * (2.0 * deltaS + gamma[..., None] * deltaH)
         fout = jnp.where(H_fout > H_fin, f_kbc, f_bgk)
@@ -253,8 +264,37 @@ class AdvectionDiffusionBGK(LBMBase):
         BGK collision step for lattice.
         """
         f = self.precisionPolicy.cast_to_compute(f)
-        rho =jnp.sum(f, axis=-1, keepdims=True)
+        rho = jnp.sum(f, axis=-1, keepdims=True)
         feq = self.equilibrium(rho, self.vel, cast_output=False)
         fneq = f - feq
         fout = f - self.omega * fneq
         return self.precisionPolicy.cast_to_output(fout)
+
+
+class MRTSim(LBMBase):
+    def __init__(self, **kwargs):
+        kwargs.update({"omega": 1.0})
+        super().__init__(**kwargs)
+        self.M_inv = jnp.array(
+            np.transpose(np.linalg.inv(kwargs.get("M"))),
+            dtype=self.precisionPolicy.compute_dtype,
+        )
+        self.M = jnp.array(
+            np.transpose(kwargs.get("M")), dtype=self.precisionPolicy.compute_dtype
+        )
+        self.S = jnp.array(kwargs.get("S"), dtype=self.precisionPolicy.compute_dtype)
+
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    def collision(self, f):
+        """
+        MRT collision step for lattice.
+        """
+        f = self.precisionPolicy.cast_to_compute(f)
+        m = jnp.dot(f, self.M)
+        rho, u = self.update_macroscopic(f)
+        feq = self.equilibrium(rho, u)
+        meq = jnp.dot(feq, self.M)
+        mout = -jnp.dot(m - meq, self.S)
+        if self.force is not None:
+            mout = self.apply_force(mout, meq, rho, u)
+        return self.precisionPolicy.cast_to_output(f + jnp.dot(mout, self.M_inv))

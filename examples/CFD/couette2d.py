@@ -1,5 +1,5 @@
 """
-This script performs a 2D simulation of Couette flow using the lattice Boltzmann method (LBM). 
+This script performs a 2D simulation of Couette flow using the lattice Boltzmann method (LBM).
 """
 
 import os
@@ -9,28 +9,37 @@ from src.utils import *
 from jax import config
 
 
-from src.models import BGKSim
+from src.models import MRTSim
 from src.boundary_conditions import *
 from src.lattice import LatticeD2Q9
 
 # config.update('jax_disable_jit', True)
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
 
-class Couette(BGKSim):
+
+class Couette(MRTSim):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
     def set_boundary_conditions(self):
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate(
+            (self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"])
+        )
         self.BCs.append(BounceBack(tuple(walls.T), self.gridInfo, self.precisionPolicy))
 
         outlet = self.boundingBoxIndices["right"]
         inlet = self.boundingBoxIndices["left"]
 
-        rho_wall = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        rho_wall = np.ones(
+            (inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype
+        )
         vel_wall = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
         vel_wall[:, 0] = prescribed_vel
-        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall))
+        self.BCs.append(
+            EquilibriumBC(
+                tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall
+            )
+        )
 
         self.BCs.append(DoNothing(tuple(outlet.T), self.gridInfo, self.precisionPolicy))
 
@@ -49,6 +58,7 @@ class Couette(BGKSim):
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
         save_fields_vtk(timestep, fields)
 
+
 if __name__ == "__main__":
     precision = "f32/f32"
     lattice = LatticeD2Q9(precision)
@@ -66,14 +76,20 @@ if __name__ == "__main__":
     os.system("rm -rf ./*.vtk && rm -rf ./*.png")
 
     kwargs = {
-        'lattice': lattice,
-        'omega': omega,
-        'nx': nx,
-        'ny': ny,
-        'nz': 0,
-        'precision': precision,
-        'io_rate': 100,
-        'print_info_rate': 100
-        }
+        "lattice": lattice,
+        "M": np.eye(9),
+        "S": omega
+        * np.diag(
+            np.ones(
+                9,
+            )
+        ),
+        "nx": nx,
+        "ny": ny,
+        "nz": 0,
+        "precision": precision,
+        "io_rate": 100,
+        "print_info_rate": 100,
+    }
     sim = Couette(**kwargs)
     sim.run(20000)
