@@ -223,8 +223,8 @@ def run_simulation():
     rho2 = jnp.ones(mask.shape, dtype=jnp.float64) * 0.5 # Native Air
     u_init = jnp.zeros(mask.shape + (3,), dtype=jnp.float64)
     
-    f1 = sim.equilibrium(rho1, u_init)
-    f2 = sim.equilibrium(rho2, u_init)
+    f1 = sim.equilibrium(rho1[..., None], u_init)
+    f2 = sim.equilibrium(rho2[..., None], u_init)
     f_tree = [f1, f2] # โครงสร้าง PyTree สำหรับ MCMP
     
     T_field = jnp.ones(mask.shape, dtype=jnp.float64) * T_cold
