@@ -120,6 +120,9 @@ class Lattice(object):
             cx = [0, 1, 0, -1, 0, 1, -1, -1, 1]
             cy = [0, 0, 1, 0, -1, 1, 1, -1, -1]
             c = np.array(tuple(zip(cx, cy)))
+        elif self.name == "D2Q25":
+            c = [(x, y) for x in [0, -1, 1, -2, 2] for y in [0, -1, 1, -2, 2]]
+            c = np.array(c)
         elif self.name == "D3Q19":  # D3Q19
             c = [(x, y, z) for x in [0, -1, 1] for y in [0, -1, 1] for z in [0, -1, 1]]
             c = np.array([ci for ci in c if np.linalg.norm(ci) < 1.5])
@@ -154,6 +157,14 @@ class Lattice(object):
         if self.name == "D2Q9":
             w[np.linalg.norm(c, axis=1) < 1.1] = 1.0 / 9.0
             w[0] = 4.0 / 9.0
+        elif self.name == "D2Q25":
+            w = np.zeros(self.q)
+            cl = np.linalg.norm(c, axis=1)
+            w[np.isclose(cl, 1.0, atol=1e-8)] = 4.0 / 63.0
+            w[np.isclose(cl, 2.0, atol=1e-8)] = 4.0 / 135.0
+            w[np.isclose(cl, 4.0, atol=1e-8)] = 1.0 / 180.0
+            w[np.isclose(cl, 5.0, atol=1e-8)] = 2.0 / 945.0
+            w[np.isclose(cl, 8.0, atol=1e-8)] = 1.0 / 15120.0
         elif self.name == "D3Q19":
             w[np.linalg.norm(c, axis=1) < 1.1] = 2.0 / 36.0
             w[0] = 1.0 / 3.0
@@ -164,7 +175,7 @@ class Lattice(object):
             w[(cl > np.sqrt(2)) & (cl <= np.sqrt(3))] = 1.0 / 216.0
             w[0] = 8.0 / 27.0
         else:
-            raise ValueError("Supported Lattice types are D2Q9, D3Q19 and D3Q27")
+            raise ValueError("Supported Lattice types are D2Q9, D2Q25, D3Q19 and D3Q27")
 
         # Return the weights
         return w
@@ -205,7 +216,7 @@ class LatticeD2Q9(Lattice):
     Lattice class for 2D D2Q9 lattice.
 
     D2Q9 stands for two-dimensional nine-velocity model. It is a common model used in the
-    Lat tice Boltzmann Method for simulating fluid flows in two dimensions.
+    Lattice Boltzmann Method for simulating fluid flows in two dimensions.
 
     Parameters
     ----------
@@ -223,6 +234,31 @@ class LatticeD2Q9(Lattice):
         self.i_s = jnp.asarray(list(range(9)), dtype=jnp.int8)
         self.im = 3  # Number of imiddles (includes center)
         self.ik = 3  # Number of iknowns or iunknowns
+
+
+class LatticeD2Q25(Lattice):
+    """
+    Lattice class for 2D D2Q25 lattice.
+
+    D2Q25 stands for two-dimensional twenty-five-velocity model. Currently, this lattice is only used
+    for computing normal vector for geometric wetting scheme implementation
+
+    Parameters
+    ----------
+    precision (str, optional): The precision of the lattice. The default is "f32/f32"
+    """
+
+    def __init__(self, precision="f32/f32"):
+        super().__init__("D2Q25", precision)
+        self._set_constants()
+
+    def _set_constants(self):
+        self.cs = jnp.sqrt(3) / 3.0
+        self.cs2 = 1.0 / 3.0
+        self.inv_cs2 = 3.0
+        self.i_s = jnp.asarray(list(range(25)), dtype=jnp.int8)
+        self.im = 5  # Number of imiddles (includes center)
+        self.ik = 10  # Number of iknowns or iunknowns
 
 
 class LatticeD3Q19(Lattice):
