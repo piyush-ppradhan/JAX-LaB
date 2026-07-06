@@ -76,6 +76,10 @@ class Multiphase(LBMBase):
         self.g_kkprime = kwargs.get("g_kkprime")  # Fluid-fluid interaction strength
         # self.g_ks = kwargs.get("g_ks")  # Fluid-solid interaction strength
         self.body_force = kwargs.get("body_force", None)
+        self.wetting_formulation = kwargs.get("wetting_formulation", "improved_virtual_density")  # "geometric" or "improved_virtual_density"
+
+        if self.wetting_formulation == "geometric":
+            self.computed_nearest_next_nearest_nbr = False
 
         self.G_ff = self.compute_ff_greens_function()
         # self.G_fs = self.compute_fs_greens_function()
@@ -84,6 +88,9 @@ class Multiphase(LBMBase):
         self.g_kkprime = jnp.array(self.g_kkprime, dtype=self.precisionPolicy.compute_dtype)
 
         self.solid_mask_streamed = self.get_solid_mask_streamed()
+        self.geometric_wetting_data, self.geometric_fluid_mask = (
+            self._create_geometric_wetting_data() if self.wetting_formulation == "geometric" else (None, None)
+        )
 
     @property
     def omega(self):
@@ -179,6 +186,426 @@ class Multiphase(LBMBase):
     #             value.shape, self.precisionPolicy.compute_dtype, value
     #         )
     #     self._g_ks = value
+
+    @property
+    def wetting_formulation(self):
+        return self._wetting_formulation
+
+    @wetting_formulation.setter
+    def wetting_formulation(self, value):
+        if value in ["geometric", "improved_virtual_density"]:
+            self._wetting_formulation = value
+        else:
+            raise ValueError("Invalid wetting scheme type. Supported schemes: geometric and improved_virtual_density.")
+
+    def _is_wetting_boundary_condition(self, bc):
+        return isinstance(bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable))
+
+    def _create_component_solid_mask(self, BC):
+        """
+        Create a solid mask for computing wall normals in geometric wetting.
+
+        Parameters
+        ----------
+        BC (list): Boundary conditions for one component.
+
+        Returns
+        -------
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+        """
+        shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
+        solid_mask = np.zeros(shape, dtype=bool)
+        for bc in BC:
+            if self._is_wetting_boundary_condition(bc):
+                indices = np.array(bc.indices, dtype=np.int64)
+                if self.dim == 2:
+                    bounds = [(self.nx, indices[0]), (self.ny, indices[1])]
+                else:
+                    bounds = [(self.nx, indices[0]), (self.ny, indices[1]), (self.nz, indices[2])]
+                valid = np.ones((indices.shape[1],), dtype=bool)
+                for size, index in bounds:
+                    valid &= (index >= 0) & (index < size)
+                solid_mask[tuple(indices[:, valid])] = True
+        return solid_mask
+
+    def _compute_geometric_normals(self, bc, solid_mask):
+        """
+        Compute normals for geometric wetting using boundary data and solid mask.
+
+        Parameters
+        ----------
+        bc (BoundaryCondition): Boundary condition with wettability data.
+
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+
+        Returns
+        -------
+        normals (numpy.ndarray): Unit normals pointing from wall nodes toward fluid nodes.
+        """
+        indices = np.array(bc.indices, dtype=np.int64).T
+        normals = np.zeros((indices.shape[0], self.dim), dtype=np.float64)
+
+        if bc.isSolid and hasattr(bc, "normals"):
+            bc_normals = np.asarray(bc.normals, dtype=np.float64)
+            if bc_normals.shape == normals.shape:
+                normal_norm = np.linalg.norm(bc_normals, axis=1, keepdims=True)
+                normals = np.divide(bc_normals, normal_norm, out=normals, where=normal_norm > 1e-12)
+
+        c = np.array(self.lattice.c).T
+        c = c[np.linalg.norm(c, axis=1) > 0]
+        missing_normal = np.linalg.norm(normals, axis=1) <= 1e-12
+        for i in np.where(missing_normal)[0]:
+            idx = indices[i]
+            normal = np.zeros((self.dim,), dtype=np.float64)
+            for ci in c:
+                nbr = idx + ci
+                in_bounds = (0 <= nbr[0] < self.nx) and (0 <= nbr[1] < self.ny)
+                if self.dim == 3:
+                    in_bounds = in_bounds and (0 <= nbr[2] < self.nz)
+                if in_bounds and not solid_mask[tuple(nbr)]:
+                    normal += ci / np.linalg.norm(ci)
+            normal_norm = np.linalg.norm(normal)
+            if normal_norm > 1e-12:
+                normals[i] = normal / normal_norm
+
+        return normals
+
+    def _solid_fluid_interface_mask(self, indices, solid_mask):
+        lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
+        lattice_directions = lattice_directions[np.linalg.norm(lattice_directions, axis=1) > 0]
+        interface = np.zeros((indices.shape[0],), dtype=bool)
+
+        for i, index in enumerate(indices):
+            for direction in lattice_directions:
+                nbr = index + direction
+                in_bounds = (0 <= nbr[0] < self.nx) and (0 <= nbr[1] < self.ny)
+                if self.dim == 3:
+                    in_bounds = in_bounds and (0 <= nbr[2] < self.nz)
+                if in_bounds and not solid_mask[tuple(nbr)]:
+                    interface[i] = True
+                    break
+
+        return interface
+
+    def _first_mesh_intersection(self, indices, directions):
+        """
+        Find first mesh-line intersections from boundary nodes.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, 2).
+
+        directions (numpy.ndarray): Characteristic directions with shape (n, 2).
+
+        Returns
+        -------
+        points (numpy.ndarray): First intersection points with mesh lines.
+        """
+        eps = 1e-12
+        abs_dir = np.abs(directions)
+        t_axis = np.divide(1.0, abs_dir, out=np.full_like(abs_dir, np.inf, dtype=np.float64), where=abs_dir > eps)
+        t = np.min(t_axis, axis=1)
+        t = np.where(np.isfinite(t), t, 1.0)
+        points = indices + t[:, None] * directions
+        rounded = np.round(points)
+        return np.where(np.isclose(points, rounded, atol=eps), rounded, points)
+
+    def _uses_only_fluid_nodes(self, point, solid_mask):
+        eps = 1e-12
+        floor_point = np.floor(point)
+        lower = floor_point.astype(np.int64)
+        upper = lower + 1
+        frac = point - floor_point
+        stencil = []
+        for corner in np.ndindex(*(2 for _ in range(self.dim))):
+            index = np.where(corner, upper, lower)
+            weight = np.prod(np.where(corner, frac, 1.0 - frac))
+            stencil.append((index, weight))
+
+        for index, weight in stencil:
+            if weight <= eps:
+                continue
+            in_bounds = (0 <= index[0] < self.nx) and (0 <= index[1] < self.ny)
+            if self.dim == 3:
+                in_bounds = in_bounds and (0 <= index[2] < self.nz)
+            if not in_bounds or solid_mask[tuple(index)]:
+                return False
+        return True
+
+    def _first_fluid_mesh_intersection(self, indices, directions, solid_mask, return_valid=False, max_intersections=None):
+        """
+        Find first mesh-line intersections with fluid-only interpolation stencils.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, 2).
+
+        directions (numpy.ndarray): Characteristic directions with shape (n, 2).
+
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+
+        Returns
+        -------
+        points (numpy.ndarray): First fluid-side mesh intersection points.
+        """
+        eps = 1e-12
+        points = self._first_mesh_intersection(indices, directions)
+        valid = np.zeros((indices.shape[0],), dtype=bool)
+        max_steps = self.nx + self.ny if self.dim == 2 else self.nx + self.ny + self.nz
+        for i, (idx, direction) in enumerate(zip(indices, directions)):
+            candidates = []
+            for component in direction:
+                if np.abs(component) > eps:
+                    candidates.append(np.arange(1, max_steps + 1, dtype=np.float64) / np.abs(component))
+            if not candidates:
+                continue
+            t_candidates = np.unique(np.round(np.sort(np.concatenate(candidates)), decimals=12))
+            for candidate_count, t in enumerate(t_candidates):
+                if max_intersections is not None and candidate_count >= max_intersections:
+                    break
+                point = idx + t * direction
+                rounded = np.round(point)
+                point = np.where(np.isclose(point, rounded, atol=eps), rounded, point)
+                if self._uses_only_fluid_nodes(point, solid_mask):
+                    points[i] = point
+                    valid[i] = True
+                    break
+        if return_valid:
+            return points, valid
+        return points
+
+    def _build_interpolation_data(self, points):
+        """
+        Build multilinear interpolation data for density samples.
+
+        Parameters
+        ----------
+        points (numpy.ndarray): Off-lattice or on-lattice sample points.
+
+        Returns
+        -------
+        data (tuple): Index arrays and weights for multilinear interpolation.
+        """
+        floor_points = np.floor(points)
+        lower = floor_points.astype(np.int64)
+        upper = lower + 1
+        frac = points - floor_points
+
+        if self.dim == 2:
+            x0 = np.clip(lower[:, 0], 0, self.nx - 1)
+            y0 = np.clip(lower[:, 1], 0, self.ny - 1)
+            x1 = np.clip(upper[:, 0], 0, self.nx - 1)
+            y1 = np.clip(upper[:, 1], 0, self.ny - 1)
+            wx = frac[:, 0]
+            wy = frac[:, 1]
+
+            return (
+                jnp.array(x0, dtype=jnp.int32),
+                jnp.array(y0, dtype=jnp.int32),
+                jnp.array(x1, dtype=jnp.int32),
+                jnp.array(y1, dtype=jnp.int32),
+                jnp.array((1.0 - wx) * (1.0 - wy), dtype=self.precisionPolicy.compute_dtype),
+                jnp.array(wx * (1.0 - wy), dtype=self.precisionPolicy.compute_dtype),
+                jnp.array((1.0 - wx) * wy, dtype=self.precisionPolicy.compute_dtype),
+                jnp.array(wx * wy, dtype=self.precisionPolicy.compute_dtype),
+            )
+
+        x0 = np.clip(lower[:, 0], 0, self.nx - 1)
+        y0 = np.clip(lower[:, 1], 0, self.ny - 1)
+        z0 = np.clip(lower[:, 2], 0, self.nz - 1)
+        x1 = np.clip(upper[:, 0], 0, self.nx - 1)
+        y1 = np.clip(upper[:, 1], 0, self.ny - 1)
+        z1 = np.clip(upper[:, 2], 0, self.nz - 1)
+        wx = frac[:, 0]
+        wy = frac[:, 1]
+        wz = frac[:, 2]
+
+        return (
+            jnp.array(x0, dtype=jnp.int32),
+            jnp.array(y0, dtype=jnp.int32),
+            jnp.array(z0, dtype=jnp.int32),
+            jnp.array(x1, dtype=jnp.int32),
+            jnp.array(y1, dtype=jnp.int32),
+            jnp.array(z1, dtype=jnp.int32),
+            jnp.array((1.0 - wx) * (1.0 - wy) * (1.0 - wz), dtype=self.precisionPolicy.compute_dtype),
+            jnp.array(wx * (1.0 - wy) * (1.0 - wz), dtype=self.precisionPolicy.compute_dtype),
+            jnp.array((1.0 - wx) * wy * (1.0 - wz), dtype=self.precisionPolicy.compute_dtype),
+            jnp.array(wx * wy * (1.0 - wz), dtype=self.precisionPolicy.compute_dtype),
+            jnp.array((1.0 - wx) * (1.0 - wy) * wz, dtype=self.precisionPolicy.compute_dtype),
+            jnp.array(wx * (1.0 - wy) * wz, dtype=self.precisionPolicy.compute_dtype),
+            jnp.array((1.0 - wx) * wy * wz, dtype=self.precisionPolicy.compute_dtype),
+            jnp.array(wx * wy * wz, dtype=self.precisionPolicy.compute_dtype),
+        )
+
+    def _build_geometric_3d_lattice_data(self, indices, normals, solid_mask):
+        lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
+        nonzero_direction_indices = np.flatnonzero(np.linalg.norm(lattice_directions, axis=1) > 0)
+        nonzero_directions = lattice_directions[nonzero_direction_indices]
+        unit_directions = nonzero_directions / np.linalg.norm(nonzero_directions, axis=1, keepdims=True)
+
+        normal_2_indices = np.zeros_like(indices)
+        tangent_indices = [np.zeros_like(indices) for _ in range(4)]
+        active = np.zeros((indices.shape[0],), dtype=bool)
+        tangent_pair_valid = np.zeros((2, indices.shape[0]), dtype=bool)
+
+        for i, (index, normal) in enumerate(zip(indices, normals)):
+            fluid_direction = None
+            sorted_direction_indices = np.argsort(-(unit_directions @ normal))
+            for direction_index in sorted_direction_indices:
+                direction = nonzero_directions[direction_index]
+                unit_direction = unit_directions[direction_index]
+                if unit_direction @ normal <= 1e-12:
+                    break
+                normal_1 = index + direction
+                normal_2 = index + 2 * direction
+                in_bounds_1 = (0 <= normal_1[0] < self.nx) and (0 <= normal_1[1] < self.ny) and (0 <= normal_1[2] < self.nz)
+                in_bounds_2 = (0 <= normal_2[0] < self.nx) and (0 <= normal_2[1] < self.ny) and (0 <= normal_2[2] < self.nz)
+                if in_bounds_1 and in_bounds_2 and not solid_mask[tuple(normal_1)] and not solid_mask[tuple(normal_2)]:
+                    fluid_direction = direction
+                    normal_2_indices[i] = normal_2
+                    active[i] = True
+                    break
+
+            if fluid_direction is None:
+                continue
+
+            normal_1 = index + fluid_direction
+            tangent_candidates = nonzero_directions[nonzero_directions @ fluid_direction == 0]
+            tangent_candidates = tangent_candidates[np.linalg.norm(tangent_candidates, axis=1) > 0]
+            tangent_scores = np.abs(tangent_candidates @ normal)
+            sorted_tangents = tangent_candidates[np.argsort(tangent_scores)]
+            selected_tangents = []
+            for tangent in sorted_tangents:
+                if any(np.all(tangent == selected) or np.all(tangent == -selected) for selected in selected_tangents):
+                    continue
+                plus = normal_1 + tangent
+                minus = normal_1 - tangent
+                in_bounds_plus = (0 <= plus[0] < self.nx) and (0 <= plus[1] < self.ny) and (0 <= plus[2] < self.nz)
+                in_bounds_minus = (0 <= minus[0] < self.nx) and (0 <= minus[1] < self.ny) and (0 <= minus[2] < self.nz)
+                if in_bounds_plus and in_bounds_minus and not solid_mask[tuple(plus)] and not solid_mask[tuple(minus)]:
+                    pair_index = len(selected_tangents)
+                    selected_tangents.append(tangent)
+                    tangent_indices[2 * pair_index][i] = plus
+                    tangent_indices[2 * pair_index + 1][i] = minus
+                    tangent_pair_valid[pair_index, i] = True
+                    if len(selected_tangents) == 2:
+                        break
+
+            for pair_index in range(len(selected_tangents), 2):
+                tangent_indices[2 * pair_index][i] = normal_1
+                tangent_indices[2 * pair_index + 1][i] = normal_1
+
+        if not np.any(active):
+            empty = tuple(jnp.array([], dtype=jnp.int32) for _ in range(3))
+            return active, empty, (), jnp.array([], dtype=jnp.bool_)
+
+        return (
+            active,
+            tuple(jnp.array(index, dtype=jnp.int32) for index in normal_2_indices[active].T),
+            tuple(tuple(jnp.array(index, dtype=jnp.int32) for index in point_indices[active].T) for point_indices in tangent_indices),
+            jnp.array(tangent_pair_valid[:, active], dtype=jnp.bool_),
+        )
+
+    def _create_geometric_wetting_data(self):
+        """
+        Precompute interpolation data for the geometric wetting scheme.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        geometric_wetting_data (list): Component-wise interpolation data for wetted boundary nodes.
+
+        geometric_fluid_mask (list): Component-wise boolean masks (jax.numpy.ndarray) with True on fluid nodes,
+        used to clamp wall densities to the fluid density range.
+
+        Notes
+        -----
+        Assumes theta is prescribed in radians for each wetted boundary node. 2D and 3D implementations are based on
+        Fei et. al (2023) and Wang et. al (2013) respectively.
+
+        References
+        ----------
+        1. Fei, Linlin, Feifei Qin, Jianlin Zhao, Dominique Derome, and Jan Carmeliet.
+        “Lattice Boltzmann Modelling of Isothermal Two-Component Evaporation in Porous Media.”
+        Journal of Fluid Mechanics 955 (January 2023): A18. doi: 10.1017/jfm.2022.1048.
+        2. Wang, Lei, Hai-bo Huang, and Xi-Yun Lu. “Scheme for Contact Angle and Its Hysteresis in a Multiphase Lattice Boltzmann Method.”
+        Physical Review E 87, no. 1 (2013): 013301. doi:10.1103/PhysRevE.87.013301.
+        """
+        geometric_wetting_data = []
+        geometric_fluid_mask = []
+        for BC in self.BCs:
+            solid_mask = self._create_component_solid_mask(BC)
+            geometric_fluid_mask.append(jnp.array(~solid_mask[..., None], dtype=jnp.bool_))
+            component_data = []
+            for bc in BC:
+                if not self._is_wetting_boundary_condition(bc):
+                    continue
+                if bc.theta is None:
+                    raise ValueError("Geometric wetting requires theta to be defined for every wetted wall boundary condition.")
+
+                indices = np.array(bc.indices, dtype=np.int64).T
+                theta = np.asarray(bc.theta, dtype=np.float64).reshape(-1)
+                if theta.size == 1:
+                    theta = np.full((indices.shape[0],), theta.item(), dtype=np.float64)
+                if theta.shape[0] != indices.shape[0]:
+                    raise ValueError("Geometric wetting theta must be scalar or match the number of boundary nodes.")
+
+                normals = self._compute_geometric_normals(bc, solid_mask)
+                normal_norm = np.linalg.norm(normals, axis=1)
+                interface = self._solid_fluid_interface_mask(indices, solid_mask)
+                valid = interface & (normal_norm > 1e-12)
+                if not np.any(valid):
+                    continue
+                indices = indices[valid]
+                theta = theta[valid]
+                normals = normals[valid]
+
+                if self.dim == 3:
+                    (
+                        active,
+                        normal_2_indices,
+                        tangent_indices,
+                        tangent_pair_valid,
+                    ) = self._build_geometric_3d_lattice_data(indices, normals, solid_mask)
+                    if not np.any(active):
+                        continue
+                    indices = indices[active]
+                    theta = theta[active]
+                    component_data.append({
+                        "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
+                        "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precisionPolicy.compute_dtype),
+                        "normal_2_indices": normal_2_indices,
+                        "tangent_indices": tangent_indices,
+                        "tangent_pair_valid": tangent_pair_valid,
+                    })
+                    continue
+
+                angle = np.pi / 2 - theta
+                cos_angle = np.cos(angle)
+                sin_angle = np.sin(angle)
+                direction_1 = np.column_stack((
+                    normals[:, 0] * cos_angle - normals[:, 1] * sin_angle,
+                    normals[:, 0] * sin_angle + normals[:, 1] * cos_angle,
+                ))
+                direction_2 = np.column_stack((
+                    normals[:, 0] * cos_angle + normals[:, 1] * sin_angle,
+                    -normals[:, 0] * sin_angle + normals[:, 1] * cos_angle,
+                ))
+
+                points_1 = self._first_fluid_mesh_intersection(indices, direction_1, solid_mask)
+                points_2 = self._first_fluid_mesh_intersection(indices, direction_2, solid_mask)
+                component_data.append({
+                    "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
+                    "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precisionPolicy.compute_dtype),
+                    "point_1": self._build_interpolation_data(points_1),
+                    "point_2": self._build_interpolation_data(points_2),
+                })
+            geometric_wetting_data.append(component_data)
+
+        return geometric_wetting_data, geometric_fluid_mask
 
     def get_solid_mask_streamed(self):
         """
@@ -327,6 +754,9 @@ class Multiphase(LBMBase):
         self.theta_tree, self.phi_tree and self.delta_rho_tree. The max and min density fields are identified from initial configuration.
         By default, any wall boundary condition can accept optional wettability parameters. By default, these parameters are None.
 
+        For "geometric" scheme, only contact angle (theta) should be specified. For "improved_virtual_density",
+        both theta and phi or delta_rho should be specified.
+
         Parameters
         ----------
         rho_tree (pytree of jax.numpy.ndarray): Density field.
@@ -339,31 +769,88 @@ class Multiphase(LBMBase):
         ---------
         1. Li, Q., Yu, Y. & Luo, K. H. "Implementation of contact angles in pseudopotential lattice Boltzmann simulations with
         curved boundaries." Phys. Rev. E 100, 053313 (2019).
+        2. Ding, Hang, and Peter D. M. Spelt. “Wetting Condition in Diffuse Interface Simulations of Contact Line Motion.”
+        Physical Review E 75, no. 4 (2007).
         """
-        rho_ave_tree = self.compute_average_density(rho_tree)
+        if self.wetting_formulation == "improved_virtual_density":
+            rho_ave_tree = self.compute_average_density(rho_tree)
 
-        def set_contact_angle(rho, rho_ave, BC):
-            rho_min = jnp.min(rho)
-            rho_max = jnp.max(rho)
-            for bc in BC:
-                if isinstance(
-                    bc,
-                    (
-                        BounceBackHalfway,
-                        BounceBack,
-                        BounceBackMoving,
-                        InterpolatedBounceBackBouzidi,
-                        InterpolatedBounceBackDifferentiable,
-                    ),
-                ):
-                    if bc.theta is not None:
-                        rho = rho.at[bc.indices].set(
-                            (bc.theta <= jnp.pi / 2) * (bc.phi * rho_ave[bc.indices]) + (bc.theta > jnp.pi / 2) * (rho_ave[bc.indices] - bc.delta_rho)
+            def set_contact_angle(rho, rho_ave, BC):
+                rho_min = jnp.min(rho)
+                rho_max = jnp.max(rho)
+                for bc in BC:
+                    if isinstance(
+                        bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable)
+                    ):
+                        if bc.theta is not None:
+                            rho = rho.at[bc.indices].set(
+                                (bc.theta <= jnp.pi / 2) * (bc.phi * rho_ave[bc.indices])
+                                + (bc.theta > jnp.pi / 2) * (rho_ave[bc.indices] - bc.delta_rho)
+                            )
+                        rho = jnp.clip(rho, min=rho_min, max=rho_max)
+                return rho
+
+            return map(lambda rho, rho_ave, BC: set_contact_angle(rho, rho_ave, BC), rho_tree, rho_ave_tree, self.BCs)
+        else:
+
+            def interpolate_density(rho, interpolation_data):
+                if self.dim == 2:
+                    x0, y0, x1, y1, w00, w10, w01, w11 = interpolation_data
+                    return w00[:, None] * rho[x0, y0] + w10[:, None] * rho[x1, y0] + w01[:, None] * rho[x0, y1] + w11[:, None] * rho[x1, y1]
+
+                x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = interpolation_data
+                return (
+                    w000[:, None] * rho[x0, y0, z0]
+                    + w100[:, None] * rho[x1, y0, z0]
+                    + w010[:, None] * rho[x0, y1, z0]
+                    + w110[:, None] * rho[x1, y1, z0]
+                    + w001[:, None] * rho[x0, y0, z1]
+                    + w101[:, None] * rho[x1, y0, z1]
+                    + w011[:, None] * rho[x0, y1, z1]
+                    + w111[:, None] * rho[x1, y1, z1]
+                )
+
+            def set_geometric_contact_angle(rho, component_data, fluid_mask):
+                # Bound wall densities by the fluid density range so the wall can never introduce
+                # a density outside what exists in the fluid. Using the global field range instead
+                # would include the unphysical densities stored at solid nodes by bounce-back and
+                # let the wall values ratchet the fluid range upward.
+                rho_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
+                rho_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
+                for data in component_data:
+                    if self.dim == 2:
+                        rho_1 = interpolate_density(rho, data["point_1"])
+                        rho_2 = interpolate_density(rho, data["point_2"])
+                        rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, jnp.maximum(rho_1, rho_2), jnp.minimum(rho_1, rho_2))
+                    else:
+                        rho_normal_2 = rho[data["normal_2_indices"]]
+                        rho_tangent = [rho[point_indices] for point_indices in data["tangent_indices"]]
+                        tangent_delta_1 = rho_tangent[0] - rho_tangent[1]
+                        tangent_delta_2 = rho_tangent[2] - rho_tangent[3]
+                        tangent_pair_valid = data["tangent_pair_valid"][..., None]
+                        eta_squared = jnp.where(tangent_pair_valid[0], jnp.square(tangent_delta_1), 0.0) + jnp.where(
+                            tangent_pair_valid[1], jnp.square(tangent_delta_2), 0.0
                         )
-                    rho = jnp.clip(rho, min=rho_min, max=rho_max)
-            return rho
+                        eta = jnp.sqrt(eta_squared)
+                        rho_wall = rho_normal_2 + jnp.tan(jnp.pi / 2 - data["theta"]) * eta
+                        local_min = rho_normal_2
+                        local_max = rho_normal_2
+                        for pair_index in range(2):
+                            pair_valid = tangent_pair_valid[pair_index]
+                            pair_min = jnp.minimum(rho_tangent[2 * pair_index], rho_tangent[2 * pair_index + 1])
+                            pair_max = jnp.maximum(rho_tangent[2 * pair_index], rho_tangent[2 * pair_index + 1])
+                            local_min = jnp.where(pair_valid, jnp.minimum(local_min, pair_min), local_min)
+                            local_max = jnp.where(pair_valid, jnp.maximum(local_max, pair_max), local_max)
+                        rho_wall = jnp.clip(rho_wall, local_min, local_max)
+                    rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
+                return rho
 
-        return map(lambda rho, rho_ave, BC: set_contact_angle(rho, rho_ave, BC), rho_tree, rho_ave_tree, self.BCs)
+            return map(
+                lambda rho, component_data, fluid_mask: set_geometric_contact_angle(rho, component_data, fluid_mask),
+                rho_tree,
+                self.geometric_wetting_data,
+                self.geometric_fluid_mask,
+            )
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision(self, fin_tree):
@@ -634,7 +1121,7 @@ class Multiphase(LBMBase):
         return psi_tree, U_tree
 
     # Compute the force using the effective mass (psi) and the interaction potential (phi)
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def compute_force(self, rho_tree):
         """
         Compute the force acting on each component(fluid). This includes fluid-fluid, fluid-solid, and body forces.
@@ -652,9 +1139,12 @@ class Multiphase(LBMBase):
         fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree, U_tree)
         # fluid_solid_force = self.compute_fluid_solid_force(rho_tree)
         if self.body_force is not None:
-            return map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
+            force_tree = map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
         else:
-            return fluid_fluid_force
+            force_tree = fluid_fluid_force
+        if self.wetting_formulation == "geometric":
+            force_tree = map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
+        return force_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_fluid_fluid_force(self, psi_tree, U_tree):
@@ -1315,12 +1805,13 @@ class MultiphaseMRT(Multiphase):
         u_temp_tree = map(lambda u, delta_u: u + delta_u, u_tree, delta_u_tree)
         feq_force_tree = self.equilibrium(rho_tree, u_temp_tree, cast_output=False)
         meq_force_tree = map(lambda feq, M: jnp.dot(feq, M), feq_force_tree, self.M)
-        return map(
+        mout_tree = map(
             lambda m, meq_force, meq: m + meq_force - meq,
             m_tree,
             meq_force_tree,
             meq_tree,
         )
+        return mout_tree
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision(self, fin_tree):
@@ -1342,6 +1833,9 @@ class MultiphaseMRT(Multiphase):
         )
         mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree)
         fout_tree = map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
+        if self.wetting_formulation == "geometric" and self.dim == 3:
+            rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+            fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         # fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
         return map(
             lambda fout: self.precisionPolicy.cast_to_output(fout),
