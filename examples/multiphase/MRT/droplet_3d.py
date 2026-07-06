@@ -79,6 +79,9 @@ class Droplet3D(MultiphaseMRT):
         p_back = p[self.nx // 2 + offset, self.ny // 2, self.nz // 2 - offset, 0]
         pressure_difference = p[self.nx // 2, self.ny // 2, self.nz // 2, 0] - (p_north + p_south + p_west + p_east + p_front + p_back) / 6
         print(f"Pressure difference: {pressure_difference}")
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         save_fields_vtk(timestep, fields, "output", "data")
 
 

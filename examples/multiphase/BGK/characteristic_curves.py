@@ -112,6 +112,9 @@ class Droplet3D(MultiphaseBGK):
         print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
         print(f"rho_l: {rho_l_pred}, rho_g: {rho_g_pred}")
 
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
         if timestep == 20000:
             file.write(f"{r},{pressure_difference}\n")
@@ -189,7 +192,18 @@ class DropletOnWall3D(MultiphaseBGK):
             "uz": u[..., 2],
             "flag": self.solid_mask_streamed[0][..., 0],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
+        # static_fields = {"flag": fields["flag"]}
+        # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)
         save_fields_vtk(timestep, fields, "output", "data")
+
+
+class DropletOnWall3DGeometric(DropletOnWall3D):
+    def set_boundary_conditions(self):
+        self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(ind.T)]))
+        self.BCs[1].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_a[tuple(ind.T)]))
 
 
 class PorousMedia(MultiphaseBGK):
@@ -340,6 +354,11 @@ class PorousMedia(MultiphaseBGK):
             "p_water": p_water[..., 0],
             "flag": self.solid_mask_streamed[0][:, 1:-1, 1:-1, 0],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
+        # static_fields = {"flag": fields["flag"]}
+        # save_fields_hdf5_xdmf(timestep, dynamic_fields, f"output_{simulation}", "data", static_fields=static_fields)
         save_fields_vtk(timestep, fields, f"output_{simulation}", "data")
 
         # Computing capillary pressure, saturation using values inside porous media only
@@ -424,6 +443,74 @@ class PorousMedia(MultiphaseBGK):
             f"images/porous_{simulation}" + str(kwargs["timestep"]).zfill(7) + ".png",
             np.minimum(screen_buffer.image.get(), 1.0),
         )
+
+
+class PorousMediaGeometric(PorousMedia):
+    def set_boundary_conditions(self):
+        if simulation == "imbibition":
+            inlet = self.boundingBoxIndices["left"]
+            rho_inlet = (rho_w_g + drho) * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            vel = 0.004 * np.ones((inlet.shape[0], 3), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel))
+            rho_inlet = (rho_a_l + drho) * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel))
+            outlet = self.boundingBoxIndices["right"]
+            rho_outlet = (rho_w_g - drho) * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel))
+            rho_outlet = (rho_a_l - drho) * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel))
+            wall = np.concatenate((
+                self.boundingBoxIndices["top"],
+                self.boundingBoxIndices["bottom"],
+                self.boundingBoxIndices["front"],
+                self.boundingBoxIndices["back"],
+            ))
+            wall = tuple(wall.T)
+            self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy))
+            wall = tuple(idx.T)
+            self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_w[wall]))
+            wall = np.concatenate((
+                self.boundingBoxIndices["top"],
+                self.boundingBoxIndices["bottom"],
+                self.boundingBoxIndices["front"],
+                self.boundingBoxIndices["back"],
+            ))
+            wall = tuple(wall.T)
+            self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy))
+            wall = tuple(idx.T)
+            self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_a[wall]))
+        else:
+            inlet = self.boundingBoxIndices["left"]
+            rho_inlet = (rho_w_l + drho) * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            vel = 0.004 * np.ones((inlet.shape[0], 3), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel))
+            rho_inlet = (rho_a_g + drho) * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel))
+            outlet = self.boundingBoxIndices["right"]
+            rho_outlet = (rho_w_l - drho) * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel))
+            rho_outlet = (rho_a_g - drho) * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+            self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel))
+            wall = np.concatenate((
+                self.boundingBoxIndices["top"],
+                self.boundingBoxIndices["bottom"],
+                self.boundingBoxIndices["front"],
+                self.boundingBoxIndices["back"],
+            ))
+            wall = tuple(wall.T)
+            self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy))
+            wall = tuple(idx.T)
+            self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_w[wall]))
+            wall = np.concatenate((
+                self.boundingBoxIndices["top"],
+                self.boundingBoxIndices["bottom"],
+                self.boundingBoxIndices["front"],
+                self.boundingBoxIndices["back"],
+            ))
+            wall = tuple(wall.T)
+            self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy))
+            wall = tuple(idx.T)
+            self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_a[wall]))
 
 
 if __name__ == "__main__":

@@ -92,6 +92,9 @@ class Droplet2D(MultiphaseMRT):
         p_east = p_d[self.nx // 2 + offset_x, self.ny // 2, 0]
         pressure_difference = p_i[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         print(f"Pressure difference: {pressure_difference}")
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
         file.write(f"{r},{pressure_difference}\n")
 
@@ -275,7 +278,20 @@ class CapillaryFingering(MultiphaseMRT):
             "ux": u[..., 0],
             "uy": u[..., 1],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_fx_{fx}_visc_ratio_{visc_ratio}", "data")
         save_fields_vtk(timestep, fields, f"output_fx_{fx}_visc_ratio_{visc_ratio}", "data")
+
+
+class CapillaryFingeringGeometric(CapillaryFingering):
+    def set_boundary_conditions(self):
+        # concatenate the indices of the left, right, and bottom walls
+        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        wall_indices = tuple(walls.T)
+        # apply bounce back boundary condition to the walls
+        self.BCs[0].append(BounceBack(wall_indices, self.gridInfo, self.precisionPolicy, theta_1[wall_indices]))
+        self.BCs[1].append(BounceBack(wall_indices, self.gridInfo, self.precisionPolicy, theta_2[wall_indices]))
 
 
 if __name__ == "__main__":

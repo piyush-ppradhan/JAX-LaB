@@ -112,6 +112,9 @@ class Droplet3D(MultiphaseMRT):
         rho_l_pred = rho_water[self.nx // 2, self.ny // 2, self.nz // 2, 0]
         print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
 
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
 
 
@@ -198,7 +201,16 @@ class DropletOnWall3D(MultiphaseMRT):
         rho_l_pred = rho_water[self.nx // 2, self.ny // 2, self.nz // 2, 0]
         print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
 
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
+
+
+class DropletOnWall3DGeometric(DropletOnWall3D):
+    def set_boundary_conditions(self):
+        self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(ind.T)]))
+        self.BCs[1].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_c[tuple(ind.T)]))
 
 
 class PorousMedia(MultiphaseMRT):
@@ -351,7 +363,21 @@ class PorousMedia(MultiphaseMRT):
             "theta_c": theta_c[1:-1, 1:-1, 1:-1, 0],
             "flag": self.solid_mask_streamed[0][1:-1, 1:-1, 1:-1, 0],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
+        # static_fields = {"flag": fields["flag"]}
+        # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)
         save_fields_vtk(timestep, fields, "output", "data")
+
+
+class PorousMediaGeometric(PorousMedia):
+    def set_boundary_conditions(self):
+        # Wall boundary condition
+        wall = idx
+        wall = tuple(wall.T)
+        self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_w[wall]))
+        self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_c[wall]))
 
 
 if __name__ == "__main__":

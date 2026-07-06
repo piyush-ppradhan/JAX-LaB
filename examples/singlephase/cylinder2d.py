@@ -99,6 +99,10 @@ class Cylinder(BGKSim):
             self.CL_max = max(self.CL_max, cl)
             self.CD_max = max(self.CD_max, cd)
             print("error= {:07.6f}, CL = {:07.6f}, CD = {:07.6f}".format(err, cl, cd))
+            # HDF5/XDMF output option:
+            # from src.utils import save_fields_hdf5_xdmf
+            # fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
+            # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
             # save_image(timestep, u)
 
 

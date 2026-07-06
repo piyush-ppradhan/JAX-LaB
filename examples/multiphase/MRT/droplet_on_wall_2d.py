@@ -38,7 +38,14 @@ class DropletOnWall2D(MultiphaseMRT):
 
     def set_boundary_conditions(self):
         self.BCs[0].append(
-            BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta[tuple(ind.T)], phi[tuple(ind.T)], delta_rho[tuple(ind.T)])
+            BounceBack(
+                tuple(ind.T),
+                self.gridInfo,
+                self.precisionPolicy,
+                theta[tuple(ind.T)],
+                phi[tuple(ind.T)],
+                delta_rho[tuple(ind.T)],
+            )
         )
 
     def output_data(self, **kwargs):
@@ -48,7 +55,17 @@ class DropletOnWall2D(MultiphaseMRT):
         fields = {"rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1], "flag": np.array(self.solid_mask_streamed[0][..., 0])}
         u_sp = np.sqrt(np.sum(np.square(u), axis=-1))
         print(f"Max spurious velocity: {np.max(u_sp)}")
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
+        # static_fields = {"flag": fields["flag"]}
+        # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)
         save_fields_vtk(timestep, fields, "output", "data")
+
+
+class DropletOnWall2DGeometric(DropletOnWall2D):
+    def set_boundary_conditions(self):
+        self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta[tuple(ind.T)]))
 
 
 if __name__ == "__main__":
@@ -105,9 +122,9 @@ if __name__ == "__main__":
     s_q = [1.0]
     s_v = [1 / tau]
 
-    theta = 170 * np.pi / 180 * np.ones((nx, ny, 1))
+    theta = 5 * np.pi / 180 * np.ones((nx, ny, 1))
     phi = 0.0 * np.ones((nx, ny, 1))
-    delta_rho = 1.0 * np.ones((nx, ny, 1))
+    delta_rho = 0.0 * np.ones((nx, ny, 1))
     kwargs = {
         "lattice": LatticeD2Q9(precision),
         "nx": nx,
@@ -125,7 +142,6 @@ if __name__ == "__main__":
         "s_v": s_v,
         "EOS": eos,
         "kappa": [0],
-        # values not used, can be set as anything
         "k": [1.0],
         "A": 0.0 * np.zeros((1, 1)),
         "precision": precision,
@@ -134,7 +150,8 @@ if __name__ == "__main__":
         "checkpoint_rate": -1,  # Disable checkpointing
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
         "restore_checkpoint": False,
+        "wetting_formulation": "geometric",  # Remove and use DropletOnWall2D for improved virtual density scheme
     }
     os.system("rm -rf output*/")
-    sim = DropletOnWall2D(**kwargs)
+    sim = DropletOnWall2DGeometric(**kwargs)
     sim.run(20000)

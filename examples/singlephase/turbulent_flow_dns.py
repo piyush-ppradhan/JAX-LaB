@@ -59,6 +59,9 @@ class Rectangle(CLBMSim):
         u = np.array(kwargs["u"][0, ...])
 
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, "output")
         save_fields_vtk(timestep, fields, "output")
 
 

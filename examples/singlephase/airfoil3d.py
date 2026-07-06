@@ -152,6 +152,12 @@ class Airfoil(KBCSim):
         boundary_colormap = pg.Colormap("bone_r", vmin=0.0, vmax=3.0, opacity=np.linspace(0.0, 6.0, 256))
         screen_buffer = pg.render.volume(boundary_volume, camera=camera, colormap=boundary_colormap, screen_buffer=screen_buffer)
 
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # fields = {"q": np.array(q), "vorticity_magnitude": np.array(norm_mu)}
+        # static_fields = {"flag": np.array(self.visualization_bc)}
+        # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output", "airfoil", static_fields=static_fields)
+
         # Show the rendered image
         plt.imsave("q_criterion_" + str(kwargs["timestep"]).zfill(7) + ".png", np.minimum(screen_buffer.image.get(), 1.0))
 

@@ -564,12 +564,9 @@ class Multiphase(LBMBase):
                 normals = normals[valid]
 
                 if self.dim == 3:
-                    (
-                        active,
-                        normal_2_indices,
-                        tangent_indices,
-                        tangent_pair_valid,
-                    ) = self._build_geometric_3d_lattice_data(indices, normals, solid_mask)
+                    (active, normal_2_indices, tangent_indices, tangent_pair_valid) = self._build_geometric_3d_lattice_data(
+                        indices, normals, solid_mask
+                    )
                     if not np.any(active):
                         continue
                     indices = indices[active]
@@ -583,6 +580,10 @@ class Multiphase(LBMBase):
                     })
                     continue
 
+                # Characteristics determination for density interpolation
+                # The density of nearest intersection to mesh is used for solid density.
+                # In most cases, intersection does not occur on a fluid point so the density is interpolated from neighboring fluid points.
+                # This ensures a local density value is used.
                 angle = np.pi / 2 - theta
                 cos_angle = np.cos(angle)
                 sin_angle = np.sin(angle)
@@ -769,8 +770,10 @@ class Multiphase(LBMBase):
         ---------
         1. Li, Q., Yu, Y. & Luo, K. H. "Implementation of contact angles in pseudopotential lattice Boltzmann simulations with
         curved boundaries." Phys. Rev. E 100, 053313 (2019).
-        2. Ding, Hang, and Peter D. M. Spelt. “Wetting Condition in Diffuse Interface Simulations of Contact Line Motion.”
+        2. [3D Implementation] Ding, Hang, and Peter D. M. Spelt. “Wetting Condition in Diffuse Interface Simulations of Contact Line Motion.”
         Physical Review E 75, no. 4 (2007).
+        3. [2D Implementation] Fei, Linlin, Feifei Qin, Jianlin Zhao, Dominique Derome, and Jan Carmeliet. “Lattice Boltzmann Modelling of Isothermal Two-Component Evaporation in Porous Media.”
+        Journal of Fluid Mechanics 955 (January 2023): A18.
         """
         if self.wetting_formulation == "improved_virtual_density":
             rho_ave_tree = self.compute_average_density(rho_tree)
@@ -1805,12 +1808,7 @@ class MultiphaseMRT(Multiphase):
         u_temp_tree = map(lambda u, delta_u: u + delta_u, u_tree, delta_u_tree)
         feq_force_tree = self.equilibrium(rho_tree, u_temp_tree, cast_output=False)
         meq_force_tree = map(lambda feq, M: jnp.dot(feq, M), feq_force_tree, self.M)
-        mout_tree = map(
-            lambda m, meq_force, meq: m + meq_force - meq,
-            m_tree,
-            meq_force_tree,
-            meq_tree,
-        )
+        mout_tree = map(lambda m, meq_force, meq: m + meq_force - meq, m_tree, meq_force_tree, meq_tree)
         return mout_tree
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
@@ -1825,22 +1823,14 @@ class MultiphaseMRT(Multiphase):
         meq_tree = map(lambda feq, M: jnp.dot(feq, M), feq_tree, self.M)
         psi_tree, _ = self.compute_potential(rho_tree)
         C_tree = self.adjust_surface_tension(psi_tree)
-        mout_tree = map(
-            lambda m, meq, S: m - jnp.dot(m - meq, S),
-            m_tree,
-            meq_tree,
-            self.S,
-        )
+        mout_tree = map(lambda m, meq, S: m - jnp.dot(m - meq, S), m_tree, meq_tree, self.S)
         mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree)
         fout_tree = map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
             rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         # fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
-        return map(
-            lambda fout: self.precisionPolicy.cast_to_output(fout),
-            fout_tree,
-        )
+        return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
 
 
 class MultiphaseCascade(Multiphase):

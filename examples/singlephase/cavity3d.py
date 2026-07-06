@@ -96,6 +96,9 @@ class Cavity(KBCSim):
             "u_y": u[..., 1],
             "u_z": u[..., 2],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields)
         # save_fields_vtk(timestep, fields)
 
         # output profiles of velocity at mid-plane for benchmarking

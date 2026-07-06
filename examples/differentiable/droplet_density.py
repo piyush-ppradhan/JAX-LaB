@@ -72,6 +72,9 @@ class GroundTruthBGK(MultiphaseBGK):
         rho = np.array(kwargs["rho_tree"][0])
         u = np.array(kwargs["u_tree"][0])
         fields = {"rho": rho[0, ..., 0], "ux": u[0, ..., 0], "uy": u[0, ..., 1]}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output_actual", "data")
         save_fields_vtk(kwargs["timestep"], fields, "output_actual", "data")
 
 
@@ -100,6 +103,9 @@ class AutodiffMultiphaseBGK(MultiphaseBGK):
         rho = np.array(kwargs["rho_tree"][0])
         u = np.array(kwargs["u_tree"][0])
         fields = {"rho": rho[0, ..., 0], "ux": u[0, ..., 0], "uy": u[0, ..., 1]}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output_predicted", "data")
         save_fields_vtk(kwargs["timestep"], fields, "output_predicted", "data")
 
 

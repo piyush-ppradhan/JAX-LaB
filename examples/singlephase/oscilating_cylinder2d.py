@@ -109,6 +109,9 @@ class Cylinder(KBCSim):
         save_image(timestep, u)
         # u magnitude
         fields = {"rho": rho[..., 0], "u": np.linalg.norm(u, axis=2)}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
         save_BCs_vtk(timestep, self.BCs, self.gridInfo)
 

@@ -92,7 +92,23 @@ class DropletOnWall3D(MultiphaseMRT):
         screen_buffer = pg.render.contour(rho_volume, threshold=7.6, colormap=red, camera=camera)
         screen_buffer = pg.render.contour(boundary_volume, camera, threshold=0.95, colormap=grey, screen_buffer=screen_buffer)
 
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # fields = {"rho": np.array(rho)}
+        # static_fields = {"flag": np.array(self.visualization_bc)}
+        # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output", "data", static_fields=static_fields)
+
         plt.imsave("droplet_impact" + str(kwargs["timestep"]).zfill(7) + ".png", np.minimum(screen_buffer.image.get(), 1.0))
+
+
+class DropletOnWall3DGeometric(DropletOnWall3D):
+    def set_boundary_conditions(self):
+        walls = np.concatenate((self.boundingBoxIndices["front"], self.boundingBoxIndices["back"]))
+        walls = tuple(walls.T)
+        self.BCs[0].append(BounceBackHalfway(walls, self.gridInfo, self.precisionPolicy, vel=None, theta=theta[walls]))
+
+        self.visualization_bc = jnp.zeros((self.nx, self.ny, self.nz), dtype=jnp.float32)
+        self.visualization_bc = self.visualization_bc.at[tuple(self.boundingBoxIndices["back"].T)].set(1.0)
 
 
 if __name__ == "__main__":

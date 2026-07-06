@@ -76,10 +76,22 @@ class Channel2D(MultiphaseMRT):
             "ux_total": u_total[..., 0],
             "uy_total": u_total[..., 1],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_channel_{wetting_type}_visc_ratio_{visc_ratio}", "data")
         save_fields_vtk(timestep, fields, f"output_channel_{wetting_type}_visc_ratio_{visc_ratio}", "data")
         if timestep == 20000:
             Q = np.sum(u[self.nx // 2, :, 0])
             file.write(f"{wetting_type},{visc_ratio},{Q}\n")
+
+
+class Channel2DGeometric(Channel2D):
+    def set_boundary_conditions(self):
+        # concatenate the indices of the left, right, and bottom walls
+        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = tuple(walls.T)
+        # apply bounce back boundary condition to the walls
+        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls]))
 
 
 class CocurrentFlow(MultiphaseMRT):
@@ -156,6 +168,9 @@ class CocurrentFlow(MultiphaseMRT):
             "ux": u[..., 0],
             "uy": u[..., 1],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, f"output_cocurrent_flow_a_{a}_visc_ratio_{visc_ratio}", "data")
         save_fields_vtk(timestep, fields, f"output_cocurrent_flow_a_{a}_visc_ratio_{visc_ratio}", "data")
 
         S_nw = 2 * a / self.ny
@@ -170,6 +185,16 @@ class CocurrentFlow(MultiphaseMRT):
             k_rnw = Q_nw / single_Q_nw
             # Write saturation and relative permeability to file
             file.write(f"{S_w},{S_nw},{k_rw},{k_rnw}\n")
+
+
+class CocurrentFlowGeometric(CocurrentFlow):
+    def set_boundary_conditions(self):
+        # concatenate the indices of the left, right, and bottom walls
+        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = tuple(walls.T)
+        # apply bounce back boundary condition to the walls
+        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_w[walls]))
+        self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_nw[walls]))
 
 
 if __name__ == "__main__":

@@ -124,7 +124,48 @@ class PoreDoublet(MultiphaseMRT):
             "ux": u[..., 0],
             "uy": u[..., 1],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, "output_pore_doublet", "data")
         save_fields_vtk(timestep, fields, "output_pore_doublet", "data")
+
+
+class PoreDoubletGeometric(PoreDoublet):
+    def set_boundary_conditions(self):
+        coord = np.array([(i, j) for i in range(self.nx) for j in range(self.ny)])
+        _, yy = coord[:, 0], coord[:, 1]
+        poiseuille_profile = lambda x, x0, d, umax: np.maximum(0.0, 4.0 * umax / (d**2) * ((x - x0) * d - (x - x0) ** 2))
+
+        # apply bounce back boundary condition to the walls
+        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_i[walls]))
+        self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_d[walls]))
+
+        # apply inlet equilibrium boundary condition at the left
+        yy_inlet = yy.reshape(self.nx, self.ny)[tuple(inlet.T)]
+        rho_inlet = fraction * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        vel_inlet[:, 0] = poiseuille_profile(
+            yy_inlet,
+            yy_inlet.min(),
+            yy_inlet.max() - yy_inlet.min(),
+            3.0 / 2.0 * prescribed_vel,
+        )
+        self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
+        rho_inlet = (1 - fraction) * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        vel_inlet[:, 0] = poiseuille_profile(yy_inlet, yy_inlet.min(), yy_inlet.max() - yy_inlet.min(), 3.0 / 2.0 * prescribed_vel)
+        self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
+
+        # Same at the outlet
+        yy_outlet = yy.reshape(self.nx, self.ny)[tuple(outlet.T)]
+        rho_outlet = fraction * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        vel_outlet[:, 0] = poiseuille_profile(yy_outlet, yy_outlet.min(), yy_outlet.max() - yy_outlet.min(), 3.0 / 2.0 * prescribed_vel)
+        self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel_outlet))
+        rho_outlet = (1 - fraction) * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        vel_outlet[:, 0] = poiseuille_profile(yy_outlet, yy_outlet.min(), yy_outlet.max() - yy_outlet.min(), 3.0 / 2.0 * prescribed_vel)
+        self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel_outlet))
 
 
 if __name__ == "__main__":

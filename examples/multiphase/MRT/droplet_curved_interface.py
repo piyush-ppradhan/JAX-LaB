@@ -72,7 +72,21 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
         p_east = p[self.nx // 2 + offset, self.ny // 2, 0]
         pressure_difference = p[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         print(f"Pressure difference: {pressure_difference}")
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         save_fields_vtk(timestep, fields, "output", "data")
+
+
+class DropletOnCurvedSurface2DGeometric(DropletOnCurvedSurface2D):
+    def set_boundary_conditions(self):
+        sphere_1 = (x - self.nx // 2) ** 2 + (y - self.ny // 2 + spacing // 2) ** 2 - R_grain**2
+        sphere_2 = (x - self.nx // 2) ** 2 + (y - self.ny // 2 - spacing // 2) ** 2 - R_grain**2
+        ind_1 = np.array(np.where(sphere_1 <= 0)).T
+        ind_2 = np.array(np.where(sphere_2 <= 0)).T
+        ind = np.concatenate((ind_1, ind_2))
+        ind = tuple(ind.T)
+        self.BCs[0].append(BounceBack(ind, self.gridInfo, self.precisionPolicy, theta[ind]))
 
 
 if __name__ == "__main__":

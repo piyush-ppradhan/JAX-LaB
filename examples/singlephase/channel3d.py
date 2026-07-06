@@ -583,6 +583,9 @@ class TurbulentChannel(KBCSim):
         fname = "uplus_" + str(timestep // 10000).zfill(5) + ".pdf"
         plt.savefig(fname, format="pdf")
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
 
 

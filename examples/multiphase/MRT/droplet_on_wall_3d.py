@@ -1,11 +1,9 @@
 """
-Multi-component droplet on wall example. Used for parameter tuning (phi and delta_rho) for setting contact angle. Parameters set here are used in channe_rel_perm example.
-Unlike Free-Energy method, contact angle in Shan-Chen method is dependent on the interaction coefficient between wall and the fluid and it changes with lattice size. A good approach to
-set interaction strengths can be use equivalent size domain and then compute contact angle v/s inital volume (radius) if it convergences after some volume sizes, that intetraction value is
-good enough.
+Multi-component droplet on wall example. Used for parameter tuning (phi and delta_rho) for setting contact angle for improved virtual density scheme.
 
 The collision matrix is based on:
-1. Coveney, P. V. et al. Multiple–relaxation–time lattice Boltzmann models in three dimensions. Philosophical Transactions of the Royal Society of London.
+1. Coveney, P. V. et al. Multiple-relaxation-time lattice Boltzmann models in three dimensions.
+Philosophical Transactions of the Royal Society of London.
 Series A: Mathematical, Physical and Engineering Sciences 360, 437–451 (2002).
 """
 
@@ -25,7 +23,7 @@ from src.utils import save_fields_vtk
 
 class DropletOnWall3D(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
-        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2 - 100) ** 2)
+        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2 - 70) ** 2)
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
         # rho[ind[:, 0], ind[:, 1]] = 1.0
         rho = rho.reshape((nx, ny, nz, 1))
@@ -51,15 +49,37 @@ class DropletOnWall3D(MultiphaseMRT):
         timestep = kwargs["timestep"]
         fields = {"rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1], "uz": u[..., 2], "flag": np.array(self.solid_mask_streamed[0][..., 0])}
         u_sp = np.sqrt(np.sum(np.square(u), axis=-1))
+        fluid_mask = np.ones(rho.shape[:-1], dtype=bool)
+        fluid_mask[ind] = False
+        rho_scalar = rho[..., 0]
+        f = np.array(kwargs["f_poststreaming_tree"][0])
+        f_mass = np.sum(f, dtype=np.float64)
+        total_mass = np.sum(rho_scalar, dtype=np.float64)
+        fluid_mass = np.sum(rho_scalar[fluid_mask], dtype=np.float64)
+        solid_mass = np.sum(rho_scalar[~fluid_mask], dtype=np.float64)
         print(f"Max spurious velocity: {np.max(u_sp)}")
+        print(f"Distribution mass: {f_mass}")
+        print(f"Total mass: {total_mass}")
+        print(f"Fluid mass: {fluid_mass}")
+        print(f"Solid mass: {solid_mass}")
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
+        # static_fields = {"flag": fields["flag"]}
+        # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)
         save_fields_vtk(timestep, fields, "output", "data")
+
+
+class DropletOnWall3DGeometric(DropletOnWall3D):
+    def set_boundary_conditions(self):
+        self.BCs[0].append(BounceBack(ind, self.gridInfo, self.precisionPolicy, theta[ind]))
 
 
 if __name__ == "__main__":
     precision = "f32/f32"
 
     # Initial semi circular droplet specification
-    r = 50
+    r = 40
     nx = 300
     ny = 300
     nz = 350
@@ -71,7 +91,7 @@ if __name__ == "__main__":
     y = np.linspace(0, ny - 1, ny)
     z = np.linspace(0, nz - 1, nz)
     x, y, z = np.meshgrid(x, y, z)
-    sphere = (x - nx / 2) ** 2 + (y - ny / 2) ** 2 + (z - nz / 2 + 20) ** 2 - R**2
+    sphere = (x - nx / 2) ** 2 + (y - ny / 2) ** 2 + (z - nz / 2 + 40) ** 2 - R**2
     ind = np.array(np.where(sphere <= 0), dtype=int)
     ind = tuple(ind)
 
@@ -124,7 +144,7 @@ if __name__ == "__main__":
     s_pi = [1.0]
     s_v = [1.0]
 
-    theta = 170 * np.pi / 180 * np.ones((nx, ny, nz, 1))
+    theta = 30 * np.pi / 180 * np.ones((nx, ny, nz, 1))
     phi = 0.0 * np.ones((nx, ny, nz, 1))
     delta_rho = 1.0 * np.ones((nx, ny, nz, 1))
 
@@ -156,7 +176,8 @@ if __name__ == "__main__":
         "checkpoint_rate": -1,  # Disable checkpointing
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
         "restore_checkpoint": False,
+        "wetting_formulation": "geometric",
     }
     os.system("rm -rf output*/")
-    sim = DropletOnWall3D(**kwargs)
+    sim = DropletOnWall3DGeometric(**kwargs)
     sim.run(20000)

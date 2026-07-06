@@ -107,12 +107,29 @@ class DropletOnLiquid3D(MultiphaseMRT):
             "uy": u[..., 1],
             "uz": u[..., 2],
         }
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(
+        #     timestep,
+        #     fields,
+        #     "output",
+        #     "data",
+        # )
         save_fields_vtk(
             timestep,
             fields,
             "output",
             "data",
         )
+
+
+class DropletOnLiquid3DGeometric(DropletOnLiquid3D):
+    def set_boundary_conditions(self):
+        walls = np.array(
+            [[i, j, k] for i in range(self.nx) for j in [0, 1, 2, self.ny - 3, self.ny - 2, self.ny - 1] for k in range(self.nz)], dtype=int
+        )
+        walls = tuple(walls.T)
+        self.BCs[0].append(BounceBackHalfway(walls, self.gridInfo, self.precisionPolicy, theta=theta[walls]))
 
 
 if __name__ == "__main__":

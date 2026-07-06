@@ -81,6 +81,10 @@ class TaylorGreenVortex(KBCSim):
         if timestep == endTime:
             ErrL2ResList.append(vel_err_L2)
             ErrL2ResListRho.append(rho_err_L2)
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
+        # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         # save_image(timestep, u)
 
 

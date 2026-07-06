@@ -51,6 +51,9 @@ class Couette(BGKSim):
         print("error= {:07.6f}".format(err))
         # save_image(timestep, u)
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
 
 

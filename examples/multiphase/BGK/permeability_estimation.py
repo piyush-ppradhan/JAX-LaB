@@ -96,7 +96,39 @@ class PorousMedia(MultiphaseBGK):
         u = np.array(kwargs["u_tree"][0][0, ...])
         timestep = kwargs["timestep"]
         fields = {"p": p[..., 0], "rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1]}
+        # HDF5/XDMF output option:
+        # from src.utils import save_fields_hdf5_xdmf
+        # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         save_fields_vtk(timestep, fields, "output", "data")
+
+
+class PorousMediaGeometric(PorousMedia):
+    def set_boundary_conditions(self):
+        # apply inlet equilibrium boundary condition at the left
+        inlet = self.boundingBoxIndices["left"]
+        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        self.BCs[0].append(Regularized(tuple(inlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_inlet))
+
+        # Same at the outlet
+        outlet = self.boundingBoxIndices["right"]
+        rho_outlet = 0.97 * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        self.BCs[0].append(Regularized(tuple(outlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_outlet))
+
+        # Wall boundary condition
+        ind = np.where(binary == 1.0)
+        idx = np.zeros((len(ind[0]), 3), dtype=int)
+        idx[:, 0] = ind[0]
+        idx[:, 1] = ind[1]
+        idx[:, 2] = ind[2]
+        wall = np.concatenate((
+            idx,
+            self.boundingBoxIndices["top"],
+            self.boundingBoxIndices["bottom"],
+            self.boundingBoxIndices["front"],
+            self.boundingBoxIndices["back"],
+        ))
+        wall = tuple(wall.T)
+        self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta[wall]))
 
 
 if __name__ == "__main__":
