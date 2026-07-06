@@ -199,6 +199,17 @@ class Multiphase(LBMBase):
             raise ValueError("Invalid wetting scheme type. Supported schemes: geometric and improved_virtual_density.")
 
     def _is_wetting_boundary_condition(self, bc):
+        """
+        Check whether a boundary condition can carry wetting parameters.
+
+        Parameters
+        ----------
+        bc (BoundaryCondition): Boundary condition object.
+
+        Returns
+        -------
+        (bool): True if the boundary condition supports contact angle data.
+        """
         return isinstance(bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable))
 
     def _create_component_solid_mask(self, BC):
@@ -271,6 +282,19 @@ class Multiphase(LBMBase):
         return normals
 
     def _solid_fluid_interface_mask(self, indices, solid_mask):
+        """
+        Identify solid boundary nodes that touch at least one fluid node.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, dim).
+
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+
+        Returns
+        -------
+        interface (numpy.ndarray): Boolean mask with True for solid-fluid interface nodes.
+        """
         lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
         lattice_directions = lattice_directions[np.linalg.norm(lattice_directions, axis=1) > 0]
         interface = np.zeros((indices.shape[0],), dtype=bool)
@@ -293,9 +317,9 @@ class Multiphase(LBMBase):
 
         Parameters
         ----------
-        indices (numpy.ndarray): Boundary node coordinates with shape (n, 2).
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, dim).
 
-        directions (numpy.ndarray): Characteristic directions with shape (n, 2).
+        directions (numpy.ndarray): Characteristic directions with shape (n, dim).
 
         Returns
         -------
@@ -311,6 +335,19 @@ class Multiphase(LBMBase):
         return np.where(np.isclose(points, rounded, atol=eps), rounded, points)
 
     def _uses_only_fluid_nodes(self, point, solid_mask):
+        """
+        Check if a multilinear interpolation stencil contains only fluid nodes.
+
+        Parameters
+        ----------
+        point (numpy.ndarray): Off-lattice or on-lattice interpolation point.
+
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+
+        Returns
+        -------
+        (bool): True if every interpolation node with non-zero weight is inside the domain and fluid.
+        """
         eps = 1e-12
         floor_point = np.floor(point)
         lower = floor_point.astype(np.int64)
@@ -338,15 +375,20 @@ class Multiphase(LBMBase):
 
         Parameters
         ----------
-        indices (numpy.ndarray): Boundary node coordinates with shape (n, 2).
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, dim).
 
-        directions (numpy.ndarray): Characteristic directions with shape (n, 2).
+        directions (numpy.ndarray): Characteristic directions with shape (n, dim).
 
         solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
 
+        return_valid (bool, optional): If True, return a boolean mask for nodes where a fluid-only stencil was found.
+
+        max_intersections (int, optional): Maximum number of candidate mesh intersections to test for each node.
+
         Returns
         -------
-        points (numpy.ndarray): First fluid-side mesh intersection points.
+        points (numpy.ndarray): First fluid-side mesh intersection points. If return_valid is True, returns
+        (points, valid), where valid is a boolean mask for accepted intersections.
         """
         eps = 1e-12
         points = self._first_mesh_intersection(indices, directions)
@@ -438,6 +480,27 @@ class Multiphase(LBMBase):
         )
 
     def _build_geometric_3d_lattice_data(self, indices, normals, solid_mask):
+        """
+        Build lattice-node stencil data for the 3D geometric wetting scheme.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, 3).
+
+        normals (numpy.ndarray): Unit normals pointing from wall nodes toward fluid nodes.
+
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+
+        Returns
+        -------
+        active (numpy.ndarray): Boolean mask with True for nodes that have a valid normal stencil.
+
+        normal_2_indices (tuple): JAX index tuple for the second fluid node along the selected normal direction.
+
+        tangent_indices (tuple): JAX index tuples for up to two opposite tangent node pairs around the first normal node.
+
+        tangent_pair_valid (jax.numpy.ndarray): Boolean mask indicating which tangent pairs are valid for each active node.
+        """
         lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
         nonzero_direction_indices = np.flatnonzero(np.linalg.norm(lattice_directions, axis=1) > 0)
         nonzero_directions = lattice_directions[nonzero_direction_indices]
@@ -797,6 +860,19 @@ class Multiphase(LBMBase):
         else:
 
             def interpolate_density(rho, interpolation_data):
+                """
+                Interpolate density at precomputed geometric wetting sample points.
+
+                Parameters
+                ----------
+                rho (jax.numpy.ndarray): Density field for one component.
+
+                interpolation_data (tuple): Index arrays and weights generated by _build_interpolation_data.
+
+                Returns
+                -------
+                (jax.numpy.ndarray): Interpolated density values at the sample points.
+                """
                 if self.dim == 2:
                     x0, y0, x1, y1, w00, w10, w01, w11 = interpolation_data
                     return w00[:, None] * rho[x0, y0] + w10[:, None] * rho[x1, y0] + w01[:, None] * rho[x0, y1] + w11[:, None] * rho[x1, y1]
@@ -814,6 +890,21 @@ class Multiphase(LBMBase):
                 )
 
             def set_geometric_contact_angle(rho, component_data, fluid_mask):
+                """
+                Set wall density values for one component using precomputed geometric wetting data.
+
+                Parameters
+                ----------
+                rho (jax.numpy.ndarray): Density field for one component.
+
+                component_data (list): Boundary-wise geometric wetting data for one component.
+
+                fluid_mask (jax.numpy.ndarray): Boolean mask with True on fluid nodes.
+
+                Returns
+                -------
+                rho (jax.numpy.ndarray): Density field with wall values updated at wetted boundary nodes.
+                """
                 # Bound wall densities by the fluid density range so the wall can never introduce
                 # a density outside what exists in the fluid. Using the global field range instead
                 # would include the unphysical densities stored at solid nodes by bounce-back and
@@ -1394,10 +1485,7 @@ class Multiphase(LBMBase):
                 p_prev_tree = self.compute_pressure(rho_prev_tree, psi_prev_tree)
                 p_prev_total = self.compute_total_pressure(p_prev_tree, rho_prev_tree)
                 p_prev_total = downsample_field(p_prev_total, self.downsamplingFactor)
-                u_prev_tree = map(
-                    lambda u_prev: downsample_field(u_prev, self.downsamplingFactor),
-                    u_prev_tree,
-                )
+                u_prev_tree = map(lambda u_prev: downsample_field(u_prev, self.downsamplingFactor), u_prev_tree)
                 rho_total_prev = self.compute_total_density(rho_prev_tree)
                 u_total_prev = self.compute_total_velocity(rho_prev_tree, u_prev_tree)
 
