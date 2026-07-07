@@ -500,6 +500,11 @@ class Multiphase(LBMBase):
         tangent_indices (tuple): JAX index tuples for up to two opposite tangent node pairs around the first normal node.
 
         tangent_pair_valid (jax.numpy.ndarray): Boolean mask indicating which tangent pairs are valid for each active node.
+
+        Notes
+        -----
+        This helper constructs the older lattice-node 3D stencil. The active 3D geometric wetting path uses
+        _build_geometric_3d_characteristic_data to sample multiple off-lattice characteristic directions.
         """
         lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
         nonzero_direction_indices = np.flatnonzero(np.linalg.norm(lattice_directions, axis=1) > 0)
@@ -569,9 +574,55 @@ class Multiphase(LBMBase):
             jnp.array(tangent_pair_valid[:, active], dtype=jnp.bool_),
         )
 
+    def _build_geometric_3d_characteristic_data(self, indices, normals, theta, solid_mask):
+        """
+        Build cone-sampled interpolation data for 3D geometric wetting.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Boundary node coordinates with shape (n, 3).
+
+        normals (numpy.ndarray): Unit normals pointing from wall nodes toward fluid nodes.
+
+        theta (numpy.ndarray): Contact angle in radians for each boundary node.
+
+        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
+
+        Returns
+        -------
+        point_data (tuple): Multilinear interpolation data for characteristic directions sampled on the contact-angle
+        cone around the wall normal.
+
+        Notes
+        -----
+        Assumes theta is prescribed in radians. The 3D construction samples eight azimuthal directions on the cone
+        instead of selecting only two characteristic directions, then the wall density is selected from the extrema of
+        those samples in apply_contact_angle.
+        """
+        sample_count = 8
+        azimuths = np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False)
+        reference_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        reference_y = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        references = np.where((np.abs(normals[:, 0]) > 0.9)[:, None], reference_y, reference_x)
+        tangent_1 = np.cross(normals, references)
+        tangent_1_norm = np.linalg.norm(tangent_1, axis=1, keepdims=True)
+        tangent_1 = np.divide(tangent_1, tangent_1_norm, out=np.zeros_like(tangent_1), where=tangent_1_norm > 1e-12)
+        tangent_2 = np.cross(normals, tangent_1)
+
+        angle = np.pi / 2 - theta
+        cos_angle = np.cos(angle)
+        sin_angle = np.sin(angle)
+        point_data = []
+        for azimuth in azimuths:
+            tangent_direction = np.cos(azimuth) * tangent_1 + np.sin(azimuth) * tangent_2
+            directions = cos_angle[:, None] * normals + sin_angle[:, None] * tangent_direction
+            points = self._first_fluid_mesh_intersection(indices, directions, solid_mask)
+            point_data.append(self._build_interpolation_data(points))
+        return tuple(point_data)
+
     def _create_geometric_wetting_data(self):
         """
-        Precompute interpolation data for the geometric wetting scheme.
+        Precompute interpolation data for geometric wetting.
 
         Parameters
         ----------
@@ -586,15 +637,18 @@ class Multiphase(LBMBase):
 
         Notes
         -----
-        Assumes theta is prescribed in radians for each wetted boundary node. 2D and 3D implementations are based on
-        Fei et. al (2023) and Wang et. al (2013) respectively.
+        Assumes theta is prescribed in radians for each wetted boundary node. Boundary conditions without theta are
+        included in the solid mask but skipped for contact-angle interpolation. The 2D implementation keeps the
+        original two-characteristic construction. The 3D implementation samples multiple characteristic directions on
+        the contact-angle cone around each wall normal and stores interpolation data for every sample.
 
         References
         ----------
         1. Fei, Linlin, Feifei Qin, Jianlin Zhao, Dominique Derome, and Jan Carmeliet.
         “Lattice Boltzmann Modelling of Isothermal Two-Component Evaporation in Porous Media.”
         Journal of Fluid Mechanics 955 (January 2023): A18. doi: 10.1017/jfm.2022.1048.
-        2. Wang, Lei, Hai-bo Huang, and Xi-Yun Lu. “Scheme for Contact Angle and Its Hysteresis in a Multiphase Lattice Boltzmann Method.”
+        2. Wang, Lei, Hai-bo Huang, and Xi-Yun Lu. “Scheme for Contact Angle and Its Hysteresis in a Multiphase Lattice
+        Boltzmann Method.”
         Physical Review E 87, no. 1 (2013): 013301. doi:10.1103/PhysRevE.87.013301.
         """
         geometric_wetting_data = []
@@ -607,7 +661,7 @@ class Multiphase(LBMBase):
                 if not self._is_wetting_boundary_condition(bc):
                     continue
                 if bc.theta is None:
-                    raise ValueError("Geometric wetting requires theta to be defined for every wetted wall boundary condition.")
+                    continue
 
                 indices = np.array(bc.indices, dtype=np.int64).T
                 theta = np.asarray(bc.theta, dtype=np.float64).reshape(-1)
@@ -627,19 +681,10 @@ class Multiphase(LBMBase):
                 normals = normals[valid]
 
                 if self.dim == 3:
-                    (active, normal_2_indices, tangent_indices, tangent_pair_valid) = self._build_geometric_3d_lattice_data(
-                        indices, normals, solid_mask
-                    )
-                    if not np.any(active):
-                        continue
-                    indices = indices[active]
-                    theta = theta[active]
                     component_data.append({
                         "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
                         "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precisionPolicy.compute_dtype),
-                        "normal_2_indices": normal_2_indices,
-                        "tangent_indices": tangent_indices,
-                        "tangent_pair_valid": tangent_pair_valid,
+                        "points": self._build_geometric_3d_characteristic_data(indices, normals, theta, solid_mask),
                     })
                     continue
 
@@ -814,12 +859,12 @@ class Multiphase(LBMBase):
     @partial(jit, static_argnums=(0,))
     def apply_contact_angle(self, rho_tree):
         """
-        Apply the prescribed contact angle to density. The control parameters for this scheme are
-        self.theta_tree, self.phi_tree and self.delta_rho_tree. The max and min density fields are identified from initial configuration.
-        By default, any wall boundary condition can accept optional wettability parameters. By default, these parameters are None.
+        Apply prescribed contact angles to wall-node densities.
 
-        For "geometric" scheme, only contact angle (theta) should be specified. For "improved_virtual_density",
-        both theta and phi or delta_rho should be specified.
+        For the geometric scheme, only theta is used. The 2D path interpolates two characteristic samples and chooses
+        the appropriate extrema. The 3D path interpolates multiple samples on the contact-angle cone and chooses the
+        maximum density for theta <= pi / 2 or the minimum density for theta > pi / 2. For improved virtual density,
+        theta is used with phi and delta_rho according to the selected wettability branch.
 
         Parameters
         ----------
@@ -829,14 +874,15 @@ class Multiphase(LBMBase):
         -------
         (pytree of jax.numpy.ndarray) Density field with adjusted contact angle values at the boundary nodes.
 
-        Reference:
-        ---------
+        References
+        ----------
         1. Li, Q., Yu, Y. & Luo, K. H. "Implementation of contact angles in pseudopotential lattice Boltzmann simulations with
         curved boundaries." Phys. Rev. E 100, 053313 (2019).
-        2. [3D Implementation] Ding, Hang, and Peter D. M. Spelt. “Wetting Condition in Diffuse Interface Simulations of Contact Line Motion.”
-        Physical Review E 75, no. 4 (2007).
-        3. [2D Implementation] Fei, Linlin, Feifei Qin, Jianlin Zhao, Dominique Derome, and Jan Carmeliet. “Lattice Boltzmann Modelling of Isothermal Two-Component Evaporation in Porous Media.”
+        2. Fei, Linlin, Feifei Qin, Jianlin Zhao, Dominique Derome, and Jan Carmeliet. “Lattice Boltzmann Modelling of
+        Isothermal Two-Component Evaporation in Porous Media.”
         Journal of Fluid Mechanics 955 (January 2023): A18.
+        3. Wang, Lei, Hai-bo Huang, and Xi-Yun Lu. “Scheme for Contact Angle and Its Hysteresis in a Multiphase Lattice
+        Boltzmann Method.” Physical Review E 87, no. 1 (2013): 013301.
         """
         if self.wetting_formulation == "improved_virtual_density":
             rho_ave_tree = self.compute_average_density(rho_tree)
@@ -917,25 +963,13 @@ class Multiphase(LBMBase):
                         rho_2 = interpolate_density(rho, data["point_2"])
                         rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, jnp.maximum(rho_1, rho_2), jnp.minimum(rho_1, rho_2))
                     else:
-                        rho_normal_2 = rho[data["normal_2_indices"]]
-                        rho_tangent = [rho[point_indices] for point_indices in data["tangent_indices"]]
-                        tangent_delta_1 = rho_tangent[0] - rho_tangent[1]
-                        tangent_delta_2 = rho_tangent[2] - rho_tangent[3]
-                        tangent_pair_valid = data["tangent_pair_valid"][..., None]
-                        eta_squared = jnp.where(tangent_pair_valid[0], jnp.square(tangent_delta_1), 0.0) + jnp.where(
-                            tangent_pair_valid[1], jnp.square(tangent_delta_2), 0.0
-                        )
-                        eta = jnp.sqrt(eta_squared)
-                        rho_wall = rho_normal_2 + jnp.tan(jnp.pi / 2 - data["theta"]) * eta
-                        local_min = rho_normal_2
-                        local_max = rho_normal_2
-                        for pair_index in range(2):
-                            pair_valid = tangent_pair_valid[pair_index]
-                            pair_min = jnp.minimum(rho_tangent[2 * pair_index], rho_tangent[2 * pair_index + 1])
-                            pair_max = jnp.maximum(rho_tangent[2 * pair_index], rho_tangent[2 * pair_index + 1])
-                            local_min = jnp.where(pair_valid, jnp.minimum(local_min, pair_min), local_min)
-                            local_max = jnp.where(pair_valid, jnp.maximum(local_max, pair_max), local_max)
-                        rho_wall = jnp.clip(rho_wall, local_min, local_max)
+                        rho_samples = [interpolate_density(rho, point_data) for point_data in data["points"]]
+                        rho_sample_min = rho_samples[0]
+                        rho_sample_max = rho_samples[0]
+                        for rho_sample in rho_samples[1:]:
+                            rho_sample_min = jnp.minimum(rho_sample_min, rho_sample)
+                            rho_sample_max = jnp.maximum(rho_sample_max, rho_sample)
+                        rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, rho_sample_max, rho_sample_min)
                     rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
                 return rho
 
@@ -1705,7 +1739,11 @@ class MultiphaseBGK(Multiphase):
         fout_tree = map(lambda fin, fneq, omega: fin + omega * fneq, fin_tree, fneq_tree, self.omega)
 
         fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
-
+        if self.wetting_formulation == "geometric" and self.dim == 3:
+            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level
+            # mismatch to the rest population.
+            rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+            fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
 
 
@@ -1915,6 +1953,8 @@ class MultiphaseMRT(Multiphase):
         mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree)
         fout_tree = map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
+            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level
+            # mismatch to the rest population.
             rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         # fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
@@ -2937,4 +2977,9 @@ class MultiphaseCascade(Multiphase):
         Tout_tree = self.apply_force(Tout_tree, rho_tree, u_tree)
         Tout_tree = self.compute_central_moment_inverse(Tout_tree, u_tree)
         fout_tree = map(lambda T, Minv: jnp.dot(T, Minv), Tout_tree, self.M_inv)
+        if self.wetting_formulation == "geometric" and self.dim == 3:
+            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level
+            # mismatch to the rest population.
+            rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+            fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
