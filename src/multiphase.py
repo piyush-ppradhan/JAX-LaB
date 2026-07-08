@@ -1740,8 +1740,7 @@ class MultiphaseBGK(Multiphase):
 
         fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
-            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level
-            # mismatch to the rest population.
+            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
             rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
@@ -1953,8 +1952,7 @@ class MultiphaseMRT(Multiphase):
         mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree)
         fout_tree = map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
-            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level
-            # mismatch to the rest population.
+            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
             rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         # fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
@@ -2978,8 +2976,7 @@ class MultiphaseCascade(Multiphase):
         Tout_tree = self.compute_central_moment_inverse(Tout_tree, u_tree)
         fout_tree = map(lambda T, Minv: jnp.dot(T, Minv), Tout_tree, self.M_inv)
         if self.wetting_formulation == "geometric" and self.dim == 3:
-            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level
-            # mismatch to the rest population.
+            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
             rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)

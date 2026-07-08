@@ -80,12 +80,11 @@ and **VanderWaals**.
 - **Density ratio independent surface tension** control by directly modifying pressure tensor.
 - **Improved wetting scheme** to handle large range of contact angles **without large spurious current or thick layers near solid surface**.
 ### Multicomponent Flow Support
-JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any
-user modification.
+JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any user modification.
 
 ## Wetting model
 - Wetting behavior of fluids can be modeled using the [geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301) and the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313) which avoids the need to include separate fluid-solid interaction forces commonly seen in Shan-Chen method by directly updating the near-wall densities.
-- Wetting parameters can be passed by user while defining wall boundary conditions.
+- Wetting parameters can be passed by the user while defining the wall boundary conditions. By default, if no wetting parameters are specified, the boundary conditions are used as is without application of wetting behavior.
 
 ### Collision Models
 - **BGK**
@@ -139,26 +138,12 @@ user modification.
 
 ## Installation Guide
 
-To use JAX-LaB, you must first install JAX and other dependencies using the following commands:
-
-
-Please refer to https://github.com/google/jax for the latest installation documentation. The following table is taken from [JAX's Github page](https://github.com/google/jax).
-
-| Hardware   | Instructions                                                                                                    |
-|------------|-----------------------------------------------------------------------------------------------------------------|
-| CPU        | `pip install -U "jax[cpu]"`                                                                                       |
-| NVIDIA GPU on x86_64 | `pip install -U "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html`        |
-| Google TPU | `pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html`                 |
-| AMD GPU    | Use [Docker](https://hub.docker.com/r/rocm/jax) or [build from source](https://jax.readthedocs.io/en/latest/developer.html#additional-notes-for-building-a-rocm-jaxlib-for-amd-gpus). |
-| Apple GPU  | Follow [Apple's instructions](https://developer.apple.com/metal/jax/).                                          |
-
-**Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.
-
-
-Install dependencies:
+To use JAX-LaB, please install JAX by following the lastest installation instructions [here](https://github.com/google/jax). The other dependencies can be installed using pip:
 ```bash
 pip install pyvista numpy matplotlib Rtree trimesh jmp orbax-checkpoint termcolor h5py
 ```
+
+**Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.
 
 Run an example:
 ```bash
