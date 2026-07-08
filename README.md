@@ -21,6 +21,12 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
   Capillary rise in parallel plates (single component, multiphase simulation)
 </p> -->
 <p align="center">
+  <img src="assets/contact_angle_hysteresis.gif" alt="" width="600">
+</p>
+<p align="center">
+    Contact angle hysteresis observed for the case of droplet impinging on the inclined surface. Simulated using MRT collision model, Peng-Robinson EOS, geometric wetting.
+</p>
+<p align="center">
   <img src="assets/3D_evaporation_fontainebleau.gif" alt="" width="600">
 </p>
 <p align="center">
