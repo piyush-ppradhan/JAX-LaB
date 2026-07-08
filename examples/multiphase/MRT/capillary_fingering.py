@@ -137,6 +137,7 @@ class CapillaryFingering(MultiphaseMRT):
         # concatenate the indices of the left, right, and bottom walls
         walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
         # apply bounce back boundary condition to the walls
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(
             BounceBack(
                 tuple(walls.T), self.gridInfo, self.precisionPolicy, theta_1[tuple(walls.T)], phi_1[tuple(walls.T)], delta_rho_1[tuple(walls.T)]

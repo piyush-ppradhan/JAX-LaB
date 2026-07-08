@@ -33,20 +33,12 @@ class Droplet3D(MultiphaseMRT):
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
 
         rho = rho.reshape((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init(
-            (self.nx, self.ny, self.nz, 1),
-            self.precisionPolicy.compute_dtype,
-            init_val=rho,
-        )
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
         rho = self.precisionPolicy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init(
-            (self.nx, self.ny, self.nz, 3),
-            self.precisionPolicy.compute_dtype,
-            init_val=u,
-        )
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
         u = self.precisionPolicy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
