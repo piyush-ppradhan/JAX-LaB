@@ -54,6 +54,7 @@ class DropletOnWall3D(MultiphaseMRT):
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         walls = np.concatenate((self.boundingBoxIndices["front"], self.boundingBoxIndices["back"]))
         walls = tuple(walls.T)
         self.BCs[0].append(

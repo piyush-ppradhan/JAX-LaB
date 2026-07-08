@@ -45,6 +45,7 @@ class Channel2D(MultiphaseMRT):
         walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
         walls = tuple(walls.T)
         # apply bounce back boundary condition to the walls
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls], phi[walls], delta_rho[walls]))
 
     @partial(jit, static_argnums=(0,))

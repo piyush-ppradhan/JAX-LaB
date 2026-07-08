@@ -61,6 +61,7 @@ class PorousMedia(MultiphaseBGK):
         self.BCs[0].append(Regularized(tuple(outlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_outlet))
 
         # Wall boundary condition
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         ind = np.where(binary == 1.0)
         idx = np.zeros((len(ind[0]), 3), dtype=int)
         idx[:, 0] = ind[0]

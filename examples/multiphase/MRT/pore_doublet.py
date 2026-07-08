@@ -51,6 +51,7 @@ class PoreDoublet(MultiphaseMRT):
         poiseuille_profile = lambda x, x0, d, umax: np.maximum(0.0, 4.0 * umax / (d**2) * ((x - x0) * d - (x - x0) ** 2))
 
         # apply bounce back boundary condition to the walls
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_i[walls], phi_i[walls], delta_rho_i[walls]))
         self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_d[walls], phi_d[walls], delta_rho_d[walls]))
 
