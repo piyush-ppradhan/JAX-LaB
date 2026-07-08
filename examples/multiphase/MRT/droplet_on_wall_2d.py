@@ -65,6 +65,7 @@ class DropletOnWall2D(MultiphaseMRT):
 
 class DropletOnWall2DGeometric(DropletOnWall2D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta[tuple(ind.T)]))
 
 

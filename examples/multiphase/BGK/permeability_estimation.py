@@ -104,6 +104,7 @@ class PorousMedia(MultiphaseBGK):
 
 class PorousMediaGeometric(PorousMedia):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # apply inlet equilibrium boundary condition at the left
         inlet = self.boundingBoxIndices["left"]
         rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)

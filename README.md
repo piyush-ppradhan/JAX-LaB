@@ -106,7 +106,6 @@ JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any n
 ### Compute Capabilities
 - Distributed Multi-GPU support
 - Mixed-Precision support (store vs compute)
-- Out-of-core support (coming soon)
 
 ### Output
 
@@ -138,7 +137,7 @@ JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any n
 
 ## Installation Guide
 
-To use JAX-LaB, please install JAX by following the lastest installation instructions [here](https://github.com/google/jax). The other dependencies can be installed using pip:
+To use JAX-LaB, please install JAX by following the lastest installation instructions described [here](https://github.com/google/jax). The other dependencies can be installed using pip:
 ```bash
 pip install pyvista numpy matplotlib Rtree trimesh jmp orbax-checkpoint termcolor h5py
 ```

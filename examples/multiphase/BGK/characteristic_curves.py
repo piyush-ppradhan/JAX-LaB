@@ -202,6 +202,7 @@ class DropletOnWall3D(MultiphaseBGK):
 
 class DropletOnWall3DGeometric(DropletOnWall3D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(ind.T)]))
         self.BCs[1].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_a[tuple(ind.T)]))
 
@@ -447,6 +448,7 @@ class PorousMedia(MultiphaseBGK):
 
 class PorousMediaGeometric(PorousMedia):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         if simulation == "imbibition":
             inlet = self.boundingBoxIndices["left"]
             rho_inlet = (rho_w_g + drho) * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)

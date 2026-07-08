@@ -80,6 +80,7 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
 
 class DropletOnCurvedSurface2DGeometric(DropletOnCurvedSurface2D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         sphere_1 = (x - self.nx // 2) ** 2 + (y - self.ny // 2 + spacing // 2) ** 2 - R_grain**2
         sphere_2 = (x - self.nx // 2) ** 2 + (y - self.ny // 2 - spacing // 2) ** 2 - R_grain**2
         ind_1 = np.array(np.where(sphere_1 <= 0)).T

@@ -87,6 +87,7 @@ class Channel2D(MultiphaseMRT):
 
 class Channel2DGeometric(Channel2D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # concatenate the indices of the left, right, and bottom walls
         walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
         walls = tuple(walls.T)
@@ -189,6 +190,7 @@ class CocurrentFlow(MultiphaseMRT):
 
 class CocurrentFlowGeometric(CocurrentFlow):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # concatenate the indices of the left, right, and bottom walls
         walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
         walls = tuple(walls.T)

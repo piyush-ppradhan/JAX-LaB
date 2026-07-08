@@ -115,6 +115,7 @@ class DropletOnSurface2D(MultiphaseMRT):
 
 class DropletOnSurface2DGeometric(DropletOnSurface2D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
         walls = tuple(walls.T)
         self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls]))
@@ -172,6 +173,7 @@ class CapillaryRise2D(MultiphaseMRT):
 
 class CapillaryRise2DGeometric(CapillaryRise2D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         top_wall = np.array(
             [[x, y] for x in range(150, 451) for y in range(29)],
             dtype=np.int32,

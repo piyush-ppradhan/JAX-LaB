@@ -125,6 +125,7 @@ class DropletOnLiquid3D(MultiphaseMRT):
 
 class DropletOnLiquid3DGeometric(DropletOnLiquid3D):
     def set_boundary_conditions(self):
+        # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         walls = np.array(
             [[i, j, k] for i in range(self.nx) for j in [0, 1, 2, self.ny - 3, self.ny - 2, self.ny - 1] for k in range(self.nz)], dtype=int
         )
