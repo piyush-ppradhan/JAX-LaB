@@ -23,11 +23,11 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
 <!-- <p align="center">
   <img src="assets/contact_angle_hysteresis.gif" alt="" width="600">
 </p> -->
+<p align="center">
 <p float="left">
   <img src="assets/contact_angle_hysteresis.gif" alt="" width="370">
   <img src="assets/droplet_evap_hysteresis.gif" alt="" width="370">
 </p>
-<p align="center">
     Contact angle hysteresis: Left: droplet impinging on the inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
 </p>
 <p align="center">
