@@ -20,17 +20,21 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
 <p align="center" width="300">
   Capillary rise in parallel plates (single component, multiphase simulation)
 </p> -->
-<p align="center">
+<!-- <p align="center">
   <img src="assets/contact_angle_hysteresis.gif" alt="" width="600">
+</p> -->
+<p float="left">
+  <img src="assets/contact_angle_hysteresis.gif" alt="" width="370">
+  <img src="assets/droplet_evap_hysteresis.gif" alt="" width="370">
 </p>
 <p align="center">
-    Contact angle hysteresis observed for the case of droplet impinging on the inclined surface. Simulated using MRT collision model, Peng-Robinson EOS, geometric wetting.
+    Contact angle hysteresis: Left: droplet impinging on the inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
 </p>
 <p align="center">
   <img src="assets/3D_evaporation_fontainebleau.gif" alt="" width="600">
 </p>
 <p align="center">
-    Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated with the Cascaded (central-moment) collision model.
+    Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
 </p>
 <p align="center">
   <img src="assets/droplet_impact.gif" alt="" width="600">

@@ -205,7 +205,7 @@ if __name__ == "__main__":
     s_m = [1.0]
     s_pi = [1.0]
 
-    theta = 25.0 * np.pi / 180.0 * np.ones((nx, ny, nz, 1))
+    theta = 45.0 * np.pi / 180.0 * np.ones((nx, ny, nz, 1))
 
     os.system(f"rm -rf {output_dir}/")
     Path(output_dir).mkdir(exist_ok=True)
