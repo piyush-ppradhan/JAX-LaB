@@ -653,6 +653,7 @@ class Multiphase(LBMBase):
         """
         geometric_wetting_data = []
         geometric_fluid_mask = []
+        characteristics_time = 0.0
         for BC in self.BCs:
             solid_mask = self._create_component_solid_mask(BC)
             geometric_fluid_mask.append(jnp.array(~solid_mask[..., None], dtype=jnp.bool_))
@@ -681,10 +682,13 @@ class Multiphase(LBMBase):
                 normals = normals[valid]
 
                 if self.dim == 3:
+                    characteristics_start = time.perf_counter()
+                    points = self._build_geometric_3d_characteristic_data(indices, normals, theta, solid_mask)
+                    characteristics_time += time.perf_counter() - characteristics_start
                     component_data.append({
                         "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
                         "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precisionPolicy.compute_dtype),
-                        "points": self._build_geometric_3d_characteristic_data(indices, normals, theta, solid_mask),
+                        "points": points,
                     })
                     continue
 
@@ -692,6 +696,7 @@ class Multiphase(LBMBase):
                 # The density of nearest intersection to mesh is used for solid density.
                 # In most cases, intersection does not occur on a fluid point so the density is interpolated from neighboring fluid points.
                 # This ensures a local density value is used.
+                characteristics_start = time.perf_counter()
                 angle = np.pi / 2 - theta
                 cos_angle = np.cos(angle)
                 sin_angle = np.sin(angle)
@@ -706,6 +711,7 @@ class Multiphase(LBMBase):
 
                 points_1 = self._first_fluid_mesh_intersection(indices, direction_1, solid_mask)
                 points_2 = self._first_fluid_mesh_intersection(indices, direction_2, solid_mask)
+                characteristics_time += time.perf_counter() - characteristics_start
                 component_data.append({
                     "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
                     "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precisionPolicy.compute_dtype),
@@ -713,6 +719,8 @@ class Multiphase(LBMBase):
                     "point_2": self._build_interpolation_data(points_2),
                 })
             geometric_wetting_data.append(component_data)
+
+        print(f"Time taken to determine geometric wetting characteristics: {characteristics_time:.6f} seconds")
 
         return geometric_wetting_data, geometric_fluid_mask
 
