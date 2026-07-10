@@ -16,7 +16,8 @@ from jax import jit, vmap
 from jax.experimental.multihost_utils import process_allgather
 
 # Third-party libraries
-from jax.tree import map, reduce
+from jax.tree import map as tree_map
+from jax.tree import reduce
 from termcolor import colored
 
 from src.base import LBMBase
@@ -839,23 +840,23 @@ class Multiphase(LBMBase):
         """
         if cast_output:
             cast = lambda x: self.precisionPolicy.cast_to_compute(x)
-            rho_tree = map(cast, rho_tree)
-            u_tree = map(cast, u_tree)
+            rho_tree = tree_map(cast, rho_tree)
+            u_tree = tree_map(cast, u_tree)
 
         c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype)
-        cu_tree = map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
-        usqr_tree = map(lambda u: 1.5 * jnp.sum(jnp.square(u), axis=-1, keepdims=True), u_tree)
-        feq_tree = map(lambda rho, udote, udotu: rho * self.w * (1.0 + udote * (1.0 + 0.5 * udote) - udotu), rho_tree, cu_tree, usqr_tree)
+        cu_tree = tree_map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
+        usqr_tree = tree_map(lambda u: 1.5 * jnp.sum(jnp.square(u), axis=-1, keepdims=True), u_tree)
+        feq_tree = tree_map(lambda rho, udote, udotu: rho * self.w * (1.0 + udote * (1.0 + 0.5 * udote) - udotu), rho_tree, cu_tree, usqr_tree)
 
         if cast_output:
-            return map(lambda f_eq: self.precisionPolicy.cast_to_output(f_eq), feq_tree)
+            return tree_map(lambda f_eq: self.precisionPolicy.cast_to_output(f_eq), feq_tree)
         else:
             return feq_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_average_density(self, rho_tree):
-        rho_s_tree = map(lambda rho: self.streaming(jnp.repeat(rho, axis=-1, repeats=self.lattice.q)), rho_tree)
-        rho_ave_tree = map(
+        rho_s_tree = tree_map(lambda rho: self.streaming(jnp.repeat(rho, axis=-1, repeats=self.lattice.q)), rho_tree)
+        rho_ave_tree = tree_map(
             lambda rho_s, solid_mask: (
                 jnp.sum(self.G_ff * rho_s * (1 - solid_mask), axis=-1, keepdims=True) / jnp.sum(self.G_ff * (1 - solid_mask), axis=-1, keepdims=True)
             ),
@@ -910,7 +911,7 @@ class Multiphase(LBMBase):
                         rho = jnp.clip(rho, min=rho_min, max=rho_max)
                 return rho
 
-            return map(lambda rho, rho_ave, BC: set_contact_angle(rho, rho_ave, BC), rho_tree, rho_ave_tree, self.BCs)
+            return tree_map(lambda rho, rho_ave, BC: set_contact_angle(rho, rho_ave, BC), rho_tree, rho_ave_tree, self.BCs)
         else:
 
             def interpolate_density(rho, interpolation_data):
@@ -981,7 +982,7 @@ class Multiphase(LBMBase):
                     rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
                 return rho
 
-            return map(
+            return tree_map(
                 lambda rho, component_data, fluid_mask: set_geometric_contact_angle(rho, component_data, fluid_mask),
                 rho_tree,
                 self.geometric_wetting_data,
@@ -1134,9 +1135,9 @@ class Multiphase(LBMBase):
         rho_tree (pytree of jax.numpy.ndarray): Density field.
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
         """
-        rho_tree = map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
+        rho_tree = tree_map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
         c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
-        u_tree = map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)  # Component velocity
+        u_tree = tree_map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)  # Component velocity
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -1155,11 +1156,11 @@ class Multiphase(LBMBase):
         -------
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
         """
-        # rho_tree = map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
+        # rho_tree = tree_map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
         c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
-        u_tree = map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)
+        u_tree = tree_map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)
         F_tree = self.compute_force(rho_tree)
-        return map(lambda rho, u, F: u + 0.5 * F / rho, rho_tree, u_tree, F_tree)
+        return tree_map(lambda rho, u, F: u + 0.5 * F / rho, rho_tree, u_tree, F_tree)
 
     @partial(jit, static_argnums=(0,))
     def compute_total_density(self, rho_tree):
@@ -1191,7 +1192,7 @@ class Multiphase(LBMBase):
         -------
         (jax.numpy.ndarray): Total velocity field.
         """
-        n = reduce(operator.add, map(lambda rho, u: rho * u, rho_tree, u_tree))
+        n = reduce(operator.add, tree_map(lambda rho, u: rho * u, rho_tree, u_tree))
         d = reduce(operator.add, rho_tree)
         return n / d
 
@@ -1246,14 +1247,14 @@ class Multiphase(LBMBase):
         -------
         psi_tree (pytree of jax.numpy.ndarray): Pseudopotential field.
         """
-        rho_tree = map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
         p_tree = self.compute_pressure(rho_tree)
         # Shan-Chen potential using modified pressure
-        psi_tree = map(
+        psi_tree = tree_map(
             lambda k, p, rho, G: jnp.sqrt(2 * (k * p - self.lattice.cs2 * rho) / G), self.k, p_tree, rho_tree, self.g_kkprime.diagonal().tolist()
         )
         # Zhang-Chen potential
-        U_tree = map(lambda k, p, rho: k * p - self.lattice.cs2 * rho, self.k, p_tree, rho_tree)
+        U_tree = tree_map(lambda k, p, rho: k * p - self.lattice.cs2 * rho, self.k, p_tree, rho_tree)
         return psi_tree, U_tree
 
     # Compute the force using the effective mass (psi) and the interaction potential (phi)
@@ -1275,11 +1276,11 @@ class Multiphase(LBMBase):
         fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree, U_tree)
         # fluid_solid_force = self.compute_fluid_solid_force(rho_tree)
         if self.body_force is not None:
-            force_tree = map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
+            force_tree = tree_map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
         else:
             force_tree = fluid_fluid_force
         if self.wetting_formulation == "geometric":
-            force_tree = map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
+            force_tree = tree_map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
         return force_tree
 
     @partial(jit, static_argnums=(0,))
@@ -1303,23 +1304,25 @@ class Multiphase(LBMBase):
         (pytree of jax.numpy.ndarray): Fluid-fluid interaction forces.
         """
         c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
-        psi_s_tree = map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
-        U_s_tree = map(lambda U: self.streaming(jnp.repeat(U, axis=-1, repeats=self.q)), U_tree)
+        psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
+        U_s_tree = tree_map(lambda U: self.streaming(jnp.repeat(U, axis=-1, repeats=self.q)), U_tree)
 
         def ffk_1(Ai, g_kkprime):
             """
             Shan-Chen interaction force
             g_kkprime is a row of self.gkkprime, as it represents the interaction between kth component with all components
             """
-            return reduce(operator.add, map(lambda A, G, psi_s: jnp.dot((1 - A) * G * self.G_ff * psi_s, c), list(Ai), list(g_kkprime), psi_s_tree))
+            return reduce(
+                operator.add, tree_map(lambda A, G, psi_s: jnp.dot((1 - A) * G * self.G_ff * psi_s, c), list(Ai), list(g_kkprime), psi_s_tree)
+            )
 
         def ffk_2(Ai):
             """
             Zhang-Chen interaction force.
             """
-            return reduce(operator.add, map(lambda A, U_s: A * jnp.dot(self.G_ff * U_s, c), list(Ai), U_s_tree))
+            return reduce(operator.add, tree_map(lambda A, U_s: A * jnp.dot(self.G_ff * U_s, c), list(Ai), U_s_tree))
 
-        return map(
+        return tree_map(
             lambda psi, nt_1, nt_2: psi * nt_1 + nt_2,
             psi_tree,
             list(vmap(ffk_1, in_axes=(0, 0))(self.A, self.g_kkprime)),
@@ -1341,7 +1344,7 @@ class Multiphase(LBMBase):
     #     Pytree of jax.numpy.ndarray
     #         Pytree of fluid-solid interaction force.
     #     """
-    #     return map(
+    #     return tree_map(
     #         lambda g_ks, rho, solid_mask: -g_ks
     #         * rho
     #         * jnp.dot(self.G_fs * solid_mask, self.c.T),
@@ -1350,8 +1353,8 @@ class Multiphase(LBMBase):
     #         self.solid_mask_streamed
     #     )
     # psi_tree, _ = self.compute_potential(rho_tree)
-    # psi_s_tree = map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.lattice.q)), psi_tree)
-    # return map(
+    # psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.lattice.q)), psi_tree)
+    # return tree_map(
     #     lambda g_ks, psi, psi_s, solid_mask: -g_ks
     #     * psi
     #     * jnp.dot(self.G_fs * solid_mask * psi_s, self.c.T),
@@ -1382,9 +1385,9 @@ class Multiphase(LBMBase):
         """
         F_tree = self.compute_force(rho_tree)
 
-        u_temp_tree = map(lambda u, F, rho: u + F / rho, u_tree, F_tree, rho_tree)
+        u_temp_tree = tree_map(lambda u, F, rho: u + F / rho, u_tree, F_tree, rho_tree)
         feq_force_tree = self.equilibrium(rho_tree, u_temp_tree)
-        return map(lambda f_postcollision, feq_force, feq: f_postcollision + feq_force - feq, f_postcollision_tree, feq_force_tree, feq_tree)
+        return tree_map(lambda f_postcollision, feq_force, feq: f_postcollision + feq_force - feq, f_postcollision_tree, feq_force_tree, feq_tree)
 
     @partial(jit, static_argnums=(0, 4), inline=True)
     def apply_bc(self, fout_tree, fin_tree, timestep, implementation_step):
@@ -1424,7 +1427,7 @@ class Multiphase(LBMBase):
                 fout = _apply_bc_(fin, fout, bc)
             return fout
 
-        return map(lambda fout, fin, BCs: __apply_bc__(fout, fin, BCs), fout_tree, fin_tree, self.BCs)
+        return tree_map(lambda fout, fin, BCs: __apply_bc__(fout, fin, BCs), fout_tree, fin_tree, self.BCs)
 
     @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
     def step(self, f_poststreaming_tree, timestep, return_fpost=False):
@@ -1455,7 +1458,7 @@ class Multiphase(LBMBase):
         """
         f_postcollision_tree = self.collision(f_poststreaming_tree)
         f_postcollision_tree = self.apply_bc(f_postcollision_tree, f_poststreaming_tree, timestep, "PostCollision")
-        f_poststreaming_tree = map(lambda f_postcollision: self.streaming(f_postcollision), f_postcollision_tree)
+        f_poststreaming_tree = tree_map(lambda f_postcollision: self.streaming(f_postcollision), f_postcollision_tree)
         f_poststreaming_tree = self.apply_bc(f_poststreaming_tree, f_postcollision_tree, timestep, "PostStreaming")
 
         if return_fpost:
@@ -1519,7 +1522,7 @@ class Multiphase(LBMBase):
                 # Update the macroscopic variables and save the previous values (for error computation)
                 rho_prev_tree, _ = self.update_macroscopic(f_tree)
                 u_prev_tree = self.macroscopic_velocity(f_tree, rho_prev_tree)
-                rho_prev_tree = map(
+                rho_prev_tree = tree_map(
                     lambda rho_prev: downsample_field(rho_prev, self.downsamplingFactor),
                     rho_prev_tree,
                 )
@@ -1527,14 +1530,14 @@ class Multiphase(LBMBase):
                 p_prev_tree = self.compute_pressure(rho_prev_tree, psi_prev_tree)
                 p_prev_total = self.compute_total_pressure(p_prev_tree, rho_prev_tree)
                 p_prev_total = downsample_field(p_prev_total, self.downsamplingFactor)
-                u_prev_tree = map(lambda u_prev: downsample_field(u_prev, self.downsamplingFactor), u_prev_tree)
+                u_prev_tree = tree_map(lambda u_prev: downsample_field(u_prev, self.downsamplingFactor), u_prev_tree)
                 rho_total_prev = self.compute_total_density(rho_prev_tree)
                 u_total_prev = self.compute_total_velocity(rho_prev_tree, u_prev_tree)
 
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 p_prev_total = process_allgather(p_prev_total)
-                rho_prev_tree = map(lambda rho_prev: process_allgather(rho_prev), rho_prev_tree)
-                u_prev_tree = map(lambda u_prev: process_allgather(u_prev), u_prev_tree)
+                rho_prev_tree = tree_map(lambda rho_prev: process_allgather(rho_prev), rho_prev_tree)
+                u_prev_tree = tree_map(lambda u_prev: process_allgather(u_prev), u_prev_tree)
                 rho_total_prev = process_allgather(rho_total_prev)
                 u_total_prev = process_allgather(u_total_prev)
 
@@ -1560,19 +1563,19 @@ class Multiphase(LBMBase):
                 p_tree = self.compute_pressure(rho_tree, psi_tree)
                 p_total = self.compute_total_pressure(p_tree, rho_tree)
                 p_total = downsample_field(p_total, self.downsamplingFactor)
-                rho_tree = map(
+                rho_tree = tree_map(
                     lambda rho: downsample_field(rho, self.downsamplingFactor),
                     rho_tree,
                 )
-                u_tree = map(lambda u: downsample_field(u, self.downsamplingFactor), u_tree)
+                u_tree = tree_map(lambda u: downsample_field(u, self.downsamplingFactor), u_tree)
 
                 rho_total = self.compute_total_density(rho_tree)
                 u_total = self.compute_total_velocity(rho_tree, u_tree)
 
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 p_total = process_allgather(p_total)
-                rho_tree = map(lambda rho: process_allgather(rho), rho_tree)
-                u_tree = map(lambda u: process_allgather(u), u_tree)
+                rho_tree = tree_map(lambda rho: process_allgather(rho), rho_tree)
+                u_tree = tree_map(lambda u: process_allgather(u), u_tree)
                 rho_total = process_allgather(rho_total)
                 u_total = process_allgather(u_total)
 
@@ -1740,18 +1743,18 @@ class MultiphaseBGK(Multiphase):
         The collision step is where the main physics of the LBM is applied. In the BGK approximation,
         the distribution function is relaxed towards the equilibrium distribution function.
         """
-        fin_tree = map(lambda fin: self.precisionPolicy.cast_to_compute(fin), fin_tree)
+        fin_tree = tree_map(lambda fin: self.precisionPolicy.cast_to_compute(fin), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
-        fneq_tree = map(lambda feq, fin: feq - fin, feq_tree, fin_tree)
-        fout_tree = map(lambda fin, fneq, omega: fin + omega * fneq, fin_tree, fneq_tree, self.omega)
+        fneq_tree = tree_map(lambda feq, fin: feq - fin, feq_tree, fin_tree)
+        fout_tree = tree_map(lambda fin, fneq, omega: fin + omega * fneq, fin_tree, fneq_tree, self.omega)
 
         fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
-            rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
-            fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
-        return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
+            rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+            fout_tree = tree_map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
+        return tree_map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
 
 
 class MultiphaseMRT(Multiphase):
@@ -1764,19 +1767,19 @@ class MultiphaseMRT(Multiphase):
         self.s_j = kwargs.get("s_j")
         self.s_q = kwargs.get("s_q")
         self.s_v = kwargs.get("s_v")
-        self.M_inv = map(
+        self.M_inv = tree_map(
             lambda M: jnp.array(
                 np.linalg.inv(M).T,
                 dtype=self.precisionPolicy.compute_dtype,
             ),
             kwargs.get("M"),
         )
-        self.M = map(
+        self.M = tree_map(
             lambda M: jnp.array(M.T, dtype=self.precisionPolicy.compute_dtype),
             kwargs.get("M"),
         )
         if isinstance(self.lattice, LatticeD2Q9):
-            self.S = map(
+            self.S = tree_map(
                 lambda s_rho, s_e, s_eta, s_j, s_q, s_v: jnp.array(
                     np.diag([s_rho, s_e, s_eta, s_j, s_q, s_j, s_q, s_v, s_v]),
                     dtype=self.precisionPolicy.compute_dtype,
@@ -1791,7 +1794,7 @@ class MultiphaseMRT(Multiphase):
         elif isinstance(self.lattice, LatticeD3Q19):
             self.s_pi = kwargs.get("s_pi")
             self.s_m = kwargs.get("s_m")
-            self.S = map(
+            self.S = tree_map(
                 lambda s_rho, s_e, s_eta, s_j, s_q, s_v, s_pi, s_m: jnp.array(
                     np.diag([
                         s_rho,
@@ -1848,7 +1851,7 @@ class MultiphaseMRT(Multiphase):
 
     @partial(jit, static_argnums=(0,))
     def adjust_surface_tension(self, psi_tree):
-        psi_s_tree = map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
+        psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
         c = jnp.transpose(self.c)
         if isinstance(self.lattice, LatticeD2Q9):
             tm1 = lambda i, j, psi, psi_s: psi[..., 0] * jnp.dot(self.G_ff * (psi_s - psi), c[:, i] * c[:, j])
@@ -1868,7 +1871,7 @@ class MultiphaseMRT(Multiphase):
                 C = C.at[..., 8].set(-s_v * qxy)
                 return C
 
-            C_tree = map(
+            C_tree = tree_map(
                 lambda kappa, A, s_v, s_e, s_eta, psi, psi_s: compute_C(kappa, A, s_v, s_e, s_eta, psi, psi_s),
                 self.kappa,
                 list(self.A.diagonal()),
@@ -1902,7 +1905,7 @@ class MultiphaseMRT(Multiphase):
                 C = C.at[..., 15].set(-s_v * qxz)
                 return C
 
-            C_tree = map(
+            C_tree = tree_map(
                 lambda kappa, A, s_v, s_e, s_eta, psi, psi_s: compute_C(kappa, A, s_v, s_e, s_eta, psi, psi_s),
                 self.kappa,
                 list(self.A.diagonal()),
@@ -1937,11 +1940,11 @@ class MultiphaseMRT(Multiphase):
         """
         F_tree = self.compute_force(rho_tree)
 
-        delta_u_tree = map(lambda F, rho: F / rho, F_tree, rho_tree)
-        u_temp_tree = map(lambda u, delta_u: u + delta_u, u_tree, delta_u_tree)
+        delta_u_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
+        u_temp_tree = tree_map(lambda u, delta_u: u + delta_u, u_tree, delta_u_tree)
         feq_force_tree = self.equilibrium(rho_tree, u_temp_tree, cast_output=False)
-        meq_force_tree = map(lambda feq, M: jnp.dot(feq, M), feq_force_tree, self.M)
-        mout_tree = map(lambda m, meq_force, meq: m + meq_force - meq, m_tree, meq_force_tree, meq_tree)
+        meq_force_tree = tree_map(lambda feq, M: jnp.dot(feq, M), feq_force_tree, self.M)
+        mout_tree = tree_map(lambda m, meq_force, meq: m + meq_force - meq, m_tree, meq_force_tree, meq_tree)
         return mout_tree
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
@@ -1949,22 +1952,22 @@ class MultiphaseMRT(Multiphase):
         """
         MRT collision step for lattice.
         """
-        fin_tree = map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
+        fin_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
-        m_tree = map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
+        m_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
-        meq_tree = map(lambda feq, M: jnp.dot(feq, M), feq_tree, self.M)
+        meq_tree = tree_map(lambda feq, M: jnp.dot(feq, M), feq_tree, self.M)
         psi_tree, _ = self.compute_potential(rho_tree)
         C_tree = self.adjust_surface_tension(psi_tree)
-        mout_tree = map(lambda m, meq, S: m - jnp.dot(m - meq, S), m_tree, meq_tree, self.S)
+        mout_tree = tree_map(lambda m, meq, S: m - jnp.dot(m - meq, S), m_tree, meq_tree, self.S)
         mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree)
-        fout_tree = map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
+        fout_tree = tree_map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
-            rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
-            fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
+            rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+            fout_tree = tree_map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         # fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
-        return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
+        return tree_map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
 
 
 class MultiphaseCascade(Multiphase):
@@ -1988,20 +1991,20 @@ class MultiphaseCascade(Multiphase):
         self.s_2 = kwargs.get("s_2")
         self.s_3 = kwargs.get("s_3")
         self.s_4 = kwargs.get("s_4")
-        self.M_inv = map(
+        self.M_inv = tree_map(
             lambda M: jnp.array(
                 np.linalg.inv(M).T,
                 dtype=self.precisionPolicy.compute_dtype,
             ),
             kwargs.get("M"),
         )
-        self.M = map(
+        self.M = tree_map(
             lambda M: jnp.array(M.T, dtype=self.precisionPolicy.compute_dtype),
             kwargs.get("M"),
         )
 
         if isinstance(self.lattice, LatticeD2Q9):
-            self.S = map(
+            self.S = tree_map(
                 lambda s_0, s_1, s_b, s_2, s_3, s_4: jnp.array(
                     np.diag([s_0, s_1, s_1, s_b, s_2, s_2, s_3, s_3, s_4]),
                     dtype=self.precisionPolicy.compute_dtype,
@@ -2014,8 +2017,8 @@ class MultiphaseCascade(Multiphase):
                 self.s_4,
             )
         elif isinstance(self.lattice, LatticeD3Q19):
-            self.s_plus = map(lambda s_b, s_2: (s_b + 2 * s_2) / 3, self.s_b, self.s_2)
-            self.s_minus = map(lambda s_b, s_2: (s_b - s_2) / 3, self.s_b, self.s_2)
+            self.s_plus = tree_map(lambda s_b, s_2: (s_b + 2 * s_2) / 3, self.s_b, self.s_2)
+            self.s_minus = tree_map(lambda s_b, s_2: (s_b - s_2) / 3, self.s_b, self.s_2)
 
             def f(s_0, s_1, s_v, s_plus, s_minus, s_3, s_4):
                 S = np.diag([s_0, s_1, s_1, s_1, s_v, s_v, s_v, s_plus, s_plus, s_plus, s_3, s_3, s_3, s_3, s_3, s_3, s_4, s_4, s_4])
@@ -2027,7 +2030,7 @@ class MultiphaseCascade(Multiphase):
                 S[9, 8] = s_minus
                 return jnp.array(S, dtype=self.precisionPolicy.compute_dtype)
 
-            self.S = map(
+            self.S = tree_map(
                 lambda s_0, s_1, s_v, s_plus, s_minus, s_3, s_4: f(s_0, s_1, s_v, s_plus, s_minus, s_3, s_4),
                 self.s_0,
                 self.s_1,
@@ -2038,8 +2041,8 @@ class MultiphaseCascade(Multiphase):
                 self.s_4,
             )
         elif isinstance(self.lattice, LatticeD3Q27):
-            self.s_plus = map(lambda s_b, s_2: (s_b + 2 * s_2) / 3, self.s_b, self.s_2)
-            self.s_minus = map(lambda s_b, s_2: (s_b - s_2) / 3, self.s_b, self.s_2)
+            self.s_plus = tree_map(lambda s_b, s_2: (s_b + 2 * s_2) / 3, self.s_b, self.s_2)
+            self.s_minus = tree_map(lambda s_b, s_2: (s_b - s_2) / 3, self.s_b, self.s_2)
             self.s_3b = kwargs.get("s_3b")
             self.s_4b = kwargs.get("s_4b")
             self.s_5 = kwargs.get("s_5")
@@ -2083,7 +2086,7 @@ class MultiphaseCascade(Multiphase):
                 S[9, 8] = s_minus
                 return jnp.array(S, dtype=self.precisionPolicy.compute_dtype)
 
-            self.S = map(
+            self.S = tree_map(
                 lambda s_0, s_1, s_v, s_plus, s_minus, s_3, s_3b, s_4, s_4b, s_5, s_6: f(
                     s_0, s_1, s_v, s_plus, s_minus, s_3, s_3b, s_4, s_4b, s_5, s_6
                 ),
@@ -2167,7 +2170,7 @@ class MultiphaseCascade(Multiphase):
                 )
                 return T
 
-            return map(lambda m, u: shift(m, u), m_tree, u_tree)
+            return tree_map(lambda m, u: shift(m, u), m_tree, u_tree)
 
         elif isinstance(self.lattice, LatticeD3Q19):
 
@@ -2239,7 +2242,7 @@ class MultiphaseCascade(Multiphase):
                 )
                 return T
 
-            return map(lambda m, u: shift(m, u), m_tree, u_tree)
+            return tree_map(lambda m, u: shift(m, u), m_tree, u_tree)
 
         elif isinstance(self.lattice, LatticeD3Q27):
 
@@ -2453,7 +2456,7 @@ class MultiphaseCascade(Multiphase):
 
                 return T
 
-            return map(lambda m, u: shift(m, u), m_tree, u_tree)
+            return tree_map(lambda m, u: shift(m, u), m_tree, u_tree)
 
     @partial(jit, static_argnums=(0,))
     def compute_central_moment_inverse(self, T_tree, u_tree):
@@ -2502,7 +2505,7 @@ class MultiphaseCascade(Multiphase):
                 )
                 return m
 
-            return map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
+            return tree_map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
 
         elif isinstance(self.lattice, LatticeD3Q19):
 
@@ -2574,7 +2577,7 @@ class MultiphaseCascade(Multiphase):
                 )
                 return m
 
-            return map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
+            return tree_map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
 
         elif isinstance(self.lattice, LatticeD3Q27):
 
@@ -2787,7 +2790,7 @@ class MultiphaseCascade(Multiphase):
                 )
                 return m
 
-            return map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
+            return tree_map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
 
     @partial(jit, static_argnums=(0,))
     def compute_eq_central_moments(self, rho_tree):
@@ -2837,7 +2840,7 @@ class MultiphaseCascade(Multiphase):
 
                 return T_eq
 
-        return map(lambda rho: f(rho), rho_tree)
+        return tree_map(lambda rho: f(rho), rho_tree)
 
     @partial(jit, static_argnums=(0,))
     def compute_force_central_moments(self, F_tree, psi_tree):
@@ -2913,7 +2916,7 @@ class MultiphaseCascade(Multiphase):
 
                 return C
 
-        return map(lambda F, sigma, psi, s_b: f(F, sigma, psi, s_b), F_tree, self.sigma, psi_tree, self.s_b)
+        return tree_map(lambda F, sigma, psi, s_b: f(F, sigma, psi, s_b), F_tree, self.sigma, psi_tree, self.s_b)
 
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, Tdash_tree, rho_tree, u_tree):
@@ -2935,21 +2938,21 @@ class MultiphaseCascade(Multiphase):
         F_tree = self.compute_force(rho_tree)
         psi_tree, _ = self.compute_potential(rho_tree)
         C_tree = self.compute_force_central_moments(F_tree, psi_tree)
-        Tf_tree = map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
-        return map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
+        Tf_tree = tree_map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
+        return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
 
     # @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     # def collision(self, fin_tree):
     #     """
     #     Cascaded LBM collision step for lattice.
     #     """
-    #     fin_tree = map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
+    #     fin_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
     #     rho_tree, u_tree = self.update_macroscopic(fin_tree)
-    #     T_tree = map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
+    #     T_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
     #     N_tree = self.compute_shift_matrix(u_tree)
     #     Tdash_tree = self.compute_central_moment(T_tree, N_tree)
     #     Tdash_eq_tree = self.compute_eq_central_moments(rho_tree)
-    #     Tout_tree = map(
+    #     Tout_tree = tree_map(
     #         lambda Tdash, Tdash_eq, S: -jnp.dot(Tdash - Tdash_eq, S),
     #         Tdash_tree,
     #         Tdash_eq_tree,
@@ -2958,10 +2961,10 @@ class MultiphaseCascade(Multiphase):
     #     Tout_tree = self.apply_force(Tout_tree, Tdash_eq_tree, rho_tree, u_tree)
     #     Ninv_tree = self.compute_shift_matrix_inverse(u_tree)
     #     Tout_tree = self.compute_central_moment(Tout_tree, Ninv_tree)
-    #     fout_tree = map(
+    #     fout_tree = tree_map(
     #         lambda fin, T, Minv: fin + jnp.dot(T, Minv), fin_tree, Tout_tree, self.M_inv
     #     )
-    #     return map(
+    #     return tree_map(
     #         lambda fout: self.precisionPolicy.cast_to_output(fout),
     #         fout_tree,
     #     )
@@ -2971,20 +2974,20 @@ class MultiphaseCascade(Multiphase):
         """
         Cascaded LBM collision step for lattice.
         """
-        fin_tree = map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
+        fin_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
         rho_tree, _ = self.update_macroscopic(fin_tree)
         u_tree = self.macroscopic_velocity(fin_tree, rho_tree)
-        T_tree = map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
+        T_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         Tdash_tree = self.compute_central_moment(T_tree, u_tree)
         Tdash_eq_tree = self.compute_eq_central_moments(rho_tree)
-        Tout_tree = map(
+        Tout_tree = tree_map(
             lambda Tdash, Tdash_eq, S: jnp.dot(Tdash, jnp.eye(self.lattice.q) - S) + jnp.dot(Tdash_eq, S), Tdash_tree, Tdash_eq_tree, self.S
         )
         Tout_tree = self.apply_force(Tout_tree, rho_tree, u_tree)
         Tout_tree = self.compute_central_moment_inverse(Tout_tree, u_tree)
-        fout_tree = map(lambda T, Minv: jnp.dot(T, Minv), Tout_tree, self.M_inv)
+        fout_tree = tree_map(lambda T, Minv: jnp.dot(T, Minv), Tout_tree, self.M_inv)
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
-            rho_out_tree = map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
-            fout_tree = map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
-        return map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)
+            rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+            fout_tree = tree_map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
+        return tree_map(lambda fout: self.precisionPolicy.cast_to_output(fout), fout_tree)

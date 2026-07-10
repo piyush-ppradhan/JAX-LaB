@@ -5,12 +5,12 @@ This script performs a 2D simulation of Couette flow using the lattice Boltzmann
 import os
 import jax.numpy as jnp
 import numpy as np
-from src.utils import *
+from src.utils import save_fields_vtk
 from jax import config
 
 
 from src.models import BGKSim
-from src.boundary_conditions import *
+from src.boundary_conditions import BounceBack, EquilibriumBC, DoNothing
 from src.lattice import LatticeD2Q9
 
 # config.update('jax_disable_jit', True)

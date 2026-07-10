@@ -32,9 +32,10 @@ import numpy as np
 import matplotlib.pylab as plt
 from src.models import BGKSim, KBCSim
 from src.lattice import LatticeD3Q19, LatticeD3Q27
-from src.boundary_conditions import *
-from src.utils import *
+from src.boundary_conditions import DoNothing, BounceBack, EquilibriumBC
+from src.utils import save_fields_vtk, q_criterion
 from jax import config
+import jax.numpy as jnp
 import os
 
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'

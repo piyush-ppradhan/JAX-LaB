@@ -19,10 +19,10 @@ import numpy as np
 import jax.numpy as jnp
 from jax import config
 
-from src.utils import *
+from src.utils import save_fields_vtk
 from src.models import BGKSim, KBCSim
 from src.lattice import LatticeD3Q19, LatticeD3Q27
-from src.boundary_conditions import *
+from src.boundary_conditions import DoNothing, BounceBack, EquilibriumBC, BounceBackHalfway
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -51,7 +51,7 @@ class Car(KBCSim):
         time_start = time()
         stl_filename = "stl-files/DrivAer-Notchback.stl"
         car_length_lbm_unit = self.nx / 4
-        car_voxelized, pitch = voxelize_stl(stl_filename, car_length_lbm_unit)
+        car_voxelized, pitch = self.voxelize_stl(stl_filename, car_length_lbm_unit)
         car_matrix = car_voxelized.matrix
         print("Voxelization time for pitch={}: {} seconds".format(pitch, time() - time_start))
         print("Car matrix shape: ", car_matrix.shape)

@@ -14,7 +14,8 @@ from src.boundary_conditions import BounceBack
 
 from functools import partial
 from jax import jit, vmap, config
-from jax.tree import map, reduce
+from jax.tree import reduce
+from jax.tree import map as tree_map
 import jax.numpy as jnp
 
 # config.update("jax_default_matmul_precision", "float32")
@@ -50,15 +51,15 @@ class Channel2D(MultiphaseMRT):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        U_tree = map(lambda rho: jnp.zeros_like(rho), rho_tree)
+        U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return rho_tree, U_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_pressure(self, rho_tree, psi_tree):
         def f(g_kk):
-            return reduce(operator.add, map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
+            return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 
-        return map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
+        return tree_map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
@@ -134,15 +135,15 @@ class CocurrentFlow(MultiphaseMRT):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        U_tree = map(lambda rho: jnp.zeros_like(rho), rho_tree)
+        U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return rho_tree, U_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_pressure(self, rho_tree, psi_tree):
         def f(g_kk):
-            return reduce(operator.add, map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
+            return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 
-        return map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
+        return tree_map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)

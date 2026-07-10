@@ -409,7 +409,7 @@ class LBMBase(object):
         print("Time to create the local masks and normal arrays:", time.time() - start)
 
     @partial(jit, static_argnums=(0, 1, 2, 4))
-    def distributed_array_init(self, shape, type, init_val=0, sharding=None):
+    def distributed_array_init(self, shape, ttype, init_val=0, sharding=None):
         """
         Initialize a distributed array using JAX, with a specified shape, data type, and initial value.
         Optionally, provide a custom sharding strategy.
@@ -430,7 +430,7 @@ class LBMBase(object):
         """
         if sharding is None:
             sharding = self.sharding
-        x = jnp.full(shape=shape, fill_value=init_val, dtype=type)
+        x = jnp.full(shape=shape, fill_value=init_val, dtype=ttype)
         return jax.lax.with_sharding_constraint(x, sharding)
 
     @partial(jit, static_argnums=(0,))
@@ -450,11 +450,7 @@ class LBMBase(object):
         hw_x = self.nDevices
         hw_y = hw_z = 1
         if self.dim == 2:
-            grid_mask = self.distributed_array_init(
-                (self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.lattice.q),
-                jnp.bool_,
-                init_val=True,
-            )
+            grid_mask = self.distributed_array_init((self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.lattice.q), jnp.bool_, init_val=True)
             grid_mask = grid_mask.at[(slice(hw_x, -hw_x), slice(hw_y, -hw_y), slice(None))].set(False)
             if solid_halo_voxels is not None:
                 solid_halo_voxels = solid_halo_voxels.at[:, 0].add(hw_x)

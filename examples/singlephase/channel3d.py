@@ -14,9 +14,9 @@ In this example you'll be introduced to the following concepts:
 
 """
 
-from src.boundary_conditions import *
+from src.boundary_conditions import Regularized
 from jax import config
-from src.utils import *
+from src.utils import save_fields_vtk
 import numpy as np
 from src.lattice import LatticeD3Q27
 from src.models import KBCSim, AdvectionDiffusionBGK
@@ -616,5 +616,5 @@ if __name__ == "__main__":
     os.system("rm -rf ./*.vtk && rm -rf ./*.png")
 
     kwargs = {"lattice": lattice, "omega": omega, "nx": nx, "ny": ny, "nz": nz, "precision": precision, "io_rate": 500000, "print_info_rate": 100000}
-    sim = turbulentChannel(**kwargs)
+    sim = TurbulentChannel(**kwargs)
     sim.run(10000000)

@@ -10,8 +10,9 @@ import jax
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src.utils import *
-from src.boundary_conditions import *
+from src.utils import save_fields_vtk
+
+# from src.boundary_conditions import *
 from src.models import BGKSim, KBCSim, AdvectionDiffusionBGK
 from src.lattice import LatticeD2Q9
 

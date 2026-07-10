@@ -33,7 +33,7 @@ lint.select = [
 ]
 
 # unused-variable, shadowing a Python builtin module, Module imported but unused
-lint.ignore = ["F841", "A005", "F401", "E731"]
+lint.ignore = ["F841", "A005", "F401", "E731", "E501"]
 line-length = 150
 
 exclude = [

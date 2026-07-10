@@ -113,7 +113,8 @@ def save_image(timestep, fld, prefix=None):
 
     if len(fld.shape) > 3:
         raise ValueError("The input field should be 2D!")
-    elif len(fld.shape) == 3:
+
+    if len(fld.shape) == 3:
         fld = np.sqrt(fld[..., 0] ** 2 + fld[..., 1] ** 2)
 
     plt.clf()

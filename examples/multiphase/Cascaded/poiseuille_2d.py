@@ -18,7 +18,8 @@ import operator
 from functools import partial
 import jax.numpy as jnp
 from jax import vmap, jit, config
-from jax.tree import reduce, map
+from jax.tree import reduce
+from jax.tree import map as tree_map
 
 
 # config.update("jax_default_matmul_precision", "float32")
@@ -46,16 +47,16 @@ class Poiseuille2D(MultiphaseCascade):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        psi_tree = map(lambda rho: jnp.exp(-1 / rho), rho_tree)
-        U_tree = map(lambda rho: jnp.zeros_like(rho), rho_tree)
+        psi_tree = tree_map(lambda rho: jnp.exp(-1 / rho), rho_tree)
+        U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return psi_tree, U_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_pressure(self, rho_tree, psi_tree):
         def f(g_kk):
-            return reduce(operator.add, map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
+            return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 
-        return map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
+        return tree_map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho_tree"][0][0, ...])

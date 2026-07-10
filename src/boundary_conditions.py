@@ -412,15 +412,7 @@ class BounceBackMoving(BoundaryCondition):
     delta_rho (pytree of jax.numpy.ndarray; Default: None): Contact angle parameter delta_rho, applied for multiphase flows and only set for wall boundary conditions.
     """
 
-    def __init__(
-        self,
-        gridInfo,
-        precision_policy,
-        update_function=None,
-        theta=None,
-        phi=None,
-        delta_rho=None,
-    ):
+    def __init__(self, gridInfo, precision_policy, update_function=None, theta=None, phi=None, delta_rho=None):
         # We get the indices at time zero to pass to the parent class for initialization
         indices, _ = update_function(0)
         super().__init__(indices, gridInfo, precision_policy)
@@ -481,16 +473,7 @@ class BounceBackHalfway(BoundaryCondition):
     delta_rho (pytree of jax.numpy.ndarray; Default: None): Contact angle parameter delta_rho, applied for multiphase flows and only set for wall boundary conditions.
     """
 
-    def __init__(
-        self,
-        indices,
-        gridInfo,
-        precision_policy,
-        vel=None,
-        theta=None,
-        phi=None,
-        delta_rho=None,
-    ):
+    def __init__(self, indices, gridInfo, precision_policy, vel=None, theta=None, phi=None, delta_rho=None):
         super().__init__(indices, gridInfo, precision_policy)
         self.name = "BounceBackHalfway"
         self.implementationStep = "PostStreaming"
@@ -692,11 +675,11 @@ class ZouHe(BoundaryCondition):
     Physics of Fluids, 9(6), 1591-1598. doi:10.1063/1.869307
     """
 
-    def __init__(self, indices, gridInfo, precision_policy, type, prescribed):
+    def __init__(self, indices, gridInfo, precision_policy, ttype, prescribed):
         super().__init__(indices, gridInfo, precision_policy)
         self.name = "ZouHe"
         self.implementationStep = "PostStreaming"
-        self.type = type
+        self.type = ttype
         self.prescribed = prescribed
         self.needsExtraConfiguration = True
 
@@ -825,8 +808,8 @@ class Regularized(ZouHe):
     lattice Boltzmann method. Physical Review E, 77(5), 056703. doi:10.1103/PhysRevE.77.056703
     """
 
-    def __init__(self, indices, gridInfo, precision_policy, type, prescribed):
-        super().__init__(indices, gridInfo, precision_policy, type, prescribed)
+    def __init__(self, indices, gridInfo, precision_policy, ttype, prescribed):
+        super().__init__(indices, gridInfo, precision_policy, ttype, prescribed)
         self.name = "Regularized"
         # TODO for Hesam: check to understand why corner cases cause instability here.
         # self.needsExtraConfiguration = False

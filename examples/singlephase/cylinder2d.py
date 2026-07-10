@@ -28,8 +28,8 @@ from jax import config
 import numpy as np
 import jax.numpy as jnp
 
-from src.utils import *
-from src.boundary_conditions import *
+from src.utils import save_fields_vtk
+from src.boundary_conditions import InterpolatedBounceBackBouzidi, ExtrapolationOutflow, Regularized
 from src.models import BGKSim, KBCSim
 from src.lattice import LatticeD2Q9
 

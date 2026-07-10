@@ -25,8 +25,8 @@ from jax import config
 import numpy as np
 import jax.numpy as jnp
 
-from src.utils import *
-from src.boundary_conditions import *
+from src.utils import save_fields_vtk, save_BCs_vtk, save_image
+from src.boundary_conditions import BounceBack, BounceBackMoving, ExtrapolationOutflow, Regularized
 from src.models import BGKSim, KBCSim
 from src.lattice import LatticeD2Q9
 
@@ -52,7 +52,7 @@ class Cylinder(KBCSim):
         cyl = jnp.array(coord[cyl])
 
         # Define update rules for boundary conditions
-        def update_function(time: int):
+        def update_function(ttime: int):
             # Move the cylinder up and down sinusoidally with time
             # Define the scale for the sinusoidal motion
             scale = 10000
@@ -63,7 +63,7 @@ class Cylinder(KBCSim):
             # Calculate the new y-coordinates of the cylinder. The cylinder moves up and down,
             # its motion dictated by the sinusoidal function. We use `astype(int)` to ensure
             # the indices are integers, as they will be used for array indexing.
-            new_y_coords = cyl[:, 1] + jnp.array((jnp.sin(time / scale) * A).astype(int))
+            new_y_coords = cyl[:, 1] + jnp.array((jnp.sin(ttime / scale) * A).astype(int))
 
             # Define the indices of the grid points occupied by the cylinder
             indices = (cyl[:, 0], new_y_coords)
@@ -71,7 +71,7 @@ class Cylinder(KBCSim):
             # Calculate the velocity of the cylinder. The x-component is always 0 (the cylinder
             # doesn't move horizontally), and the y-component is the derivative of the sinusoidal
             # function governing the cylinder's motion, scaled by the amplitude and the scale factor.
-            velocity = jnp.array([0.0, jnp.cos(time / scale) * A / scale], dtype=self.precisionPolicy.compute_dtype)
+            velocity = jnp.array([0.0, jnp.cos(ttime / scale) * A / scale], dtype=self.precisionPolicy.compute_dtype)
 
             return indices, velocity
 

@@ -22,10 +22,10 @@ import numpy as np
 import jax.numpy as jnp
 import os
 
-from src.boundary_conditions import *
+from src.boundary_conditions import BounceBackHalfway, EquilibriumBC
 from src.models import BGKSim, KBCSim
 from src.lattice import LatticeD2Q9
-from src.utils import *
+from src.utils import save_fields_vtk, save_BCs_vtk, save_image
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'

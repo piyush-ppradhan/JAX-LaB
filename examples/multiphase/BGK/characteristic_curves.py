@@ -20,7 +20,7 @@ import os
 import numpy as np
 import jax.numpy as jnp
 from jax import jit, config
-from jax.tree import map
+from jax.tree import map as tree_map
 
 # config.update("jax_default_matmul_precision", "float32")
 
@@ -57,13 +57,13 @@ class Droplet3D(MultiphaseBGK):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        rho_tree = map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
-        U_tree = map(lambda rho: jnp.zeros_like(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return rho_tree, U_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_pressure(self, rho_tree, psi_tree=None):
-        p_tree = map(lambda rho: rho * self.lattice.cs2, rho_tree)
+        p_tree = tree_map(lambda rho: rho * self.lattice.cs2, rho_tree)
         return p_tree
 
     @partial(jit, static_argnums=(0,))
@@ -163,13 +163,13 @@ class DropletOnWall3D(MultiphaseBGK):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        rho_tree = map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
-        U_tree = map(lambda rho: jnp.zeros_like(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return rho_tree, U_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_pressure(self, rho_tree, psi_tree=None):
-        p_tree = map(lambda rho: rho * self.lattice.cs2, rho_tree)
+        p_tree = tree_map(lambda rho: rho * self.lattice.cs2, rho_tree)
         return p_tree
 
     @partial(jit, static_argnums=(0,))
@@ -256,13 +256,13 @@ class PorousMedia(MultiphaseBGK):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        rho_tree = map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
-        U_tree = map(lambda rho: jnp.zeros_like(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return rho_tree, U_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_pressure(self, rho_tree, psi_tree=None):
-        p_tree = map(lambda rho: rho * self.lattice.cs2, rho_tree)
+        p_tree = tree_map(lambda rho: rho * self.lattice.cs2, rho_tree)
         return p_tree
 
     @partial(jit, static_argnums=(0,))

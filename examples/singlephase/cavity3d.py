@@ -18,13 +18,14 @@ In this example you'll be introduced to the following concepts:
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 
 import numpy as np
-from src.utils import *
 from jax import config
 import json, codecs
+import os
 
+from src.utils import save_fields_vtk
 from src.models import BGKSim, KBCSim
 from src.lattice import LatticeD3Q19, LatticeD3Q27
-from src.boundary_conditions import *
+from src.boundary_conditions import Regularized
 
 
 config.update("jax_enable_x64", True)
