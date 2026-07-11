@@ -147,12 +147,23 @@ JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any n
 
 ## Installation Guide
 
-To use JAX-LaB, please install JAX by following the lastest installation instructions described [here](https://github.com/google/jax). The core dependencies can be installed using pip:
+JAX-LaB is distributed as the `jax-lab` package (import name `jax_lab`). The default install targets CPU:
 ```bash
-pip install numpy orbax-checkpoint termcolor
+pip install jax-lab
 ```
 
-### Optional dependencies
+### Accelerator support
+
+Hardware acceleration is selected through dependency extras, which delegate the compiled backend packages to [JAX's own extras](https://docs.jax.dev/en/latest/installation.html):
+```bash
+pip install "jax-lab[cuda13]"   # NVIDIA GPU (CUDA 13, bundled)
+pip install "jax-lab[cuda12]"   # NVIDIA GPU (CUDA 12, bundled)
+pip install "jax-lab[tpu]"      # Google TPU
+pip install "jax-lab[rocm]"     # AMD GPU (ROCm, local toolkit)
+```
+Use `cuda13-local`/`cuda12-local` instead if you manage the CUDA toolkit yourself.
+
+### Optional I/O and visualization dependencies
 
 The I/O and visualization utilities load their dependencies lazily (at call time, not at import time), so the core solver runs without them. The following packages are only needed if you call the corresponding functions:
 
@@ -163,17 +174,24 @@ The I/O and visualization utilities load their dependencies lazily (at call time
 | [matplotlib](https://matplotlib.org/) | `save_image`, `live_volume_randering` |
 | [trimesh](https://trimesh.org/) + Rtree | `voxelize_stl` |
 
-Calling one of these functions without its dependency installed raises an `ImportError` naming the missing package. To install all optional dependencies at once (recommended for running the examples, most of which write VTK or image output):
+Calling one of these functions without its dependency installed raises an `ImportError` naming the missing package. The `io` extra installs all of them at once (recommended for running the examples, most of which write VTK or image output):
 ```bash
-pip install pyvista matplotlib Rtree trimesh h5py
+pip install "jax-lab[io]"
+```
+Extras can be combined, e.g. `pip install "jax-lab[cuda13,io]"`.
+
+### Development install
+
+To work on JAX-LaB itself or run the bundled examples, install from source in editable mode:
+```bash
+git clone https://github.com/piyush-ppradhan/JAX-LaB
+cd JAX-LaB
+pip install -e ".[dev,io]"
 ```
 
 **Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.
 
 Run an example:
 ```bash
-git clone https://github.com/piyush-ppradhan/JAX-LaB
-cd JAX-LaB
-export PYTHONPATH=.
 python3 examples/singlephase/cavity2d.py
 ```
