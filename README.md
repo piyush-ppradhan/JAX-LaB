@@ -9,61 +9,61 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
 
 ## Showcase
 <!-- <p align="center">
-  <img src="assets/capillary_fingering.gif" alt="" width="600">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/capillary_fingering.gif" alt="" width="600">
 </p>
 <p align="center" width="300">
   Capillary fingering in a channel (multi-component simulation)
 </p>
 <p align="center">
-  <img src="assets/capillary_rise.gif" alt="" width="700">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/capillary_rise.gif" alt="" width="700">
 </p>
 <p align="center" width="300">
   Capillary rise in parallel plates (single component, multiphase simulation)
 </p> -->
 <!-- <p align="center">
-  <img src="assets/contact_angle_hysteresis.gif" alt="" width="600">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="600">
 </p> -->
 <p align="center">
-  <img src="assets/contact_angle_hysteresis.gif" alt="" width="370">
-  <img src="assets/droplet_evap_hysteresis.gif" alt="" width="370">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="370">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="" width="370">
 </p>
 <p align="center">
     Contact angle hysteresis: Left: droplet impinging on inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
 </p>
 <p align="center">
-  <img src="assets/3D_evaporation_fontainebleau.gif" alt="" width="600">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="" width="600">
 </p>
 <p align="center">
     Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
 </p>
 <p align="center">
-  <img src="assets/droplet_impact.gif" alt="" width="600">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_impact.gif" alt="" width="600">
 </p>
 <p align="center">
   On GPU in-situ rendering using <a href="https://github.com/loliverhennigh/PhantomGaze">PhantomGaze</a> library (no I/O). Droplet impact on dry surface using MRT collision model with ~16 million cells.
   (single component, multiphase simulation, density ratio: 350, fluid modeled using Peng-Robinson EOS).
 </p>
 <p align="center">
-  <img src="assets/drainage.gif" alt="" width="600">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="" width="600">
 </p>
 <p align="center">
   In-situ GPU rendering of drainage in a porous geometry. BGK collision model, 110 million cells.
 </p>
 <!--<p align="center">
-  <img src="assets/car.png" alt="" width="500">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/car.png" alt="" width="500">
 </p>
 <p align="center">
 <a href=https://www.epc.ed.tum.de/en/aer/research-groups/automotive/drivaer > DrivAer model </a> in a wind-tunnel using KBC Lattice Boltzmann Simulation with approx. 317 million cells
 </p>
 
 <p align="center">
-  <img src="assets/building.png" alt="" width="700">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/building.png" alt="" width="700">
 </p>
 <p align="center">
   Airflow in to, out of, and within a building (~400 million cells)
 </p>-->
 <p align="center">
-  <img src="assets/predicted.png" alt="" width="1000">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/predicted.png" alt="" width="1000">
 </p>
 <p align="center">
 Temporal evolution of the density field determined using neural network for the inverse multiphase flow control problem of forming a droplet at t = 900. The MLP output is used as the initial condition for LBM and the backpropagation step during training leverages the auto-differentiation capabilities of JAX-LaB (see <a href="https://doi.org/10.1029/2025MS005313">paper</a> for details).
