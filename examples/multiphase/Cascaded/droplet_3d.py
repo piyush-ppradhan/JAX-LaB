@@ -7,6 +7,7 @@ The collision matrix is based on:
 """
 
 import os
+import subprocess
 
 import numpy as np
 
@@ -211,6 +212,6 @@ if __name__ == "__main__":
         "restore_checkpoint": False,
     }
 
-    os.system("rm -rf output*/ *.vtk")
+    subprocess.run("rm -rf output*/ *.vtk", shell=True, check=True)
     sim = Droplet3D(**kwargs)
     sim.run(30000)

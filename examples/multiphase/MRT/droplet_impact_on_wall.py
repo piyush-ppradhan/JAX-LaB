@@ -9,6 +9,7 @@ Series A: Mathematical, Physical and Engineering Sciences 360, 437–451 (2002).
 """
 
 import os
+import subprocess
 
 import numpy as np
 
@@ -201,6 +202,6 @@ if __name__ == "__main__":
         "restore_checkpoint": False,
     }
 
-    os.system("rm -rf output*/ *.vtk droplet*")
+    subprocess.run("rm -rf output*/ *.vtk droplet*", shell=True, check=True)
     sim = DropletOnWall3D(**kwargs)
     sim.run(10000)

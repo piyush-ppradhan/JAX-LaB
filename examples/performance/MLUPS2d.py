@@ -2,7 +2,7 @@
 This script computes the MLUPS (Million Lattice Updates per Second) in 2D by simulating fluid flow inside a 2D cavity.
 """
 
-import os
+import subprocess
 import argparse
 import jax.numpy as jnp
 import numpy as np
@@ -67,6 +67,6 @@ if __name__ == "__main__":
         "compute_MLUPS": True,
     }
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
     sim = Cavity(**kwargs)
     sim.run(max_iter)

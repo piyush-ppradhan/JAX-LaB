@@ -4,7 +4,7 @@ The Taylor-Green vortex is a type of two-dimensional, incompressible fluid flow 
 The flow is characterized by a pair of counter-rotating vortices. In this script, the initial fields for the Taylor-Green vortex are set using a known function.
 """
 
-import os
+import subprocess
 import json
 import jax
 import numpy as np
@@ -114,7 +114,7 @@ if __name__ == "__main__":
 
             visc = vel_ref * nx / Re
             omega = 1.0 / (3.0 * visc + 0.5)
-            os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+            subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
             kwargs = {
                 "lattice": lattice,
                 "omega": omega,

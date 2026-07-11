@@ -11,7 +11,7 @@ This is a file format commonly used for 3D models. The model is then voxelized t
 3. Output: After each specified number of iterations, the script outputs the state of the simulation. This includes the error (difference between consecutive velocity fields), lift and drag coefficients, and visualization files in the VTK format.
 """
 
-import os
+import subprocess
 import jax
 import trimesh
 from time import time
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     visc = prescribed_vel * clength / Re
     omega = 1.0 / (3.0 * visc + 0.5)
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
     kwargs = {
         "lattice": lattice,

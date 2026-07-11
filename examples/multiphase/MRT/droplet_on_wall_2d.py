@@ -9,6 +9,7 @@ The collision matrix is based on:
 """
 
 import os
+import subprocess
 import numpy as np
 from jax import config
 
@@ -148,6 +149,6 @@ if __name__ == "__main__":
         "restore_checkpoint": False,
         "wetting_formulation": "geometric",  # Remove and use DropletOnWall2D for improved virtual density scheme
     }
-    os.system("rm -rf output*/")
+    subprocess.run("rm -rf output*/", shell=True, check=True)
     sim = DropletOnWall2DGeometric(**kwargs)
     sim.run(20000)

@@ -4,6 +4,7 @@ interface thickness.
 """
 
 import os
+import subprocess
 
 import numpy as np
 
@@ -268,7 +269,7 @@ if __name__ == "__main__":
     delta_rho = np.zeros((nx, ny, 1))
 
     # Estimate contact angle
-    os.system("rm -rf output* *.vtk")
+    subprocess.run("rm -rf output* *.vtk", shell=True, check=True)
     r = 50
     Disp = [0, 10, 20, 30]
     for disp in Disp:
@@ -308,7 +309,7 @@ if __name__ == "__main__":
 
     file = open("lucas_washburn.txt", "w")
     file.write("Time,Menicus Height,Position\n")
-    os.system("rm -rf output* *.vtk")
+    subprocess.run("rm -rf output* *.vtk", shell=True, check=True)
     kwargs = {
         "n_components": 1,
         "lattice": LatticeD2Q9(precision),

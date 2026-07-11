@@ -8,6 +8,7 @@ Series A: Mathematical, Physical and Engineering Sciences 360, 437–451 (2002).
 """
 
 import os
+import subprocess
 import numpy as np
 from jax import config
 
@@ -166,6 +167,6 @@ if __name__ == "__main__":
         "restore_checkpoint": False,
         "wetting_formulation": "geometric",
     }
-    os.system("rm -rf output*/")
+    subprocess.run("rm -rf output*/", shell=True, check=True)
     sim = DropletOnWall3DGeometric(**kwargs)
     sim.run(20000)

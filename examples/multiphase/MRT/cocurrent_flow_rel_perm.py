@@ -4,6 +4,7 @@ flows along the center (y in [H/2 - a/2, H/2 + a/2]). The wetting phase saturati
 """
 
 import os
+import subprocess
 import operator
 import numpy as np
 
@@ -242,7 +243,7 @@ if __name__ == "__main__":
     delta_rho_ = np.ones((nx, ny, 1))
 
     # 2D channel simulation to get flow rate
-    os.system("rm -rf Flow*")
+    subprocess.run("rm -rf Flow*", shell=True, check=True)
     # Simulate for a range of viscosity ratio and wetting conditions
     file = open("Flow_rate_data.csv", "w")
     file.write("Wetting_type,Viscosity Ratio,Flow Rate(LU)\n")
@@ -313,7 +314,7 @@ if __name__ == "__main__":
     delta_rho_w = np.zeros((nx, ny, 1))
     delta_rho_nw = np.zeros((nx, ny, 1))
 
-    os.system("rm -rf Relative* output*")
+    subprocess.run("rm -rf Relative* output*", shell=True, check=True)
     for i in range(3):
         visc_ratio = Visc_ratio[i]
 

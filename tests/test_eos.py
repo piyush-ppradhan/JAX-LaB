@@ -1,4 +1,7 @@
-"""Saturation-pressure regression tests for equations of state."""
+"""
+Saturation-pressure regression tests for equations of state.
+EOS Data used here is obtained using: https://github.com/sorush-khajepor/MaxwellConstruction
+"""
 
 import os
 from pathlib import Path

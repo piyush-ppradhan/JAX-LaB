@@ -20,7 +20,7 @@ In this example you'll be introduced to the following concepts:
 nohup python3 examples/CFD/cylinder2d.py > logfile.log &
 """
 
-import os
+import subprocess
 import json
 import jax
 from time import time
@@ -128,7 +128,7 @@ if __name__ == "__main__":
         visc = prescribed_vel * diam / Re
         omega = 1.0 / (3.0 * visc + 0.5)
 
-        os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+        subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
         kwargs = {
             "lattice": lattice,

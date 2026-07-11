@@ -18,7 +18,7 @@ In this example you'll be introduced to the following concepts:
 
 """
 
-import os
+import subprocess
 import jax
 from time import time
 from jax import config
@@ -131,7 +131,7 @@ if __name__ == "__main__":
     visc = prescribed_vel * diam / Re
     omega = 1.0 / (3.0 * visc + 0.5)
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
     kwargs = {
         "lattice": lattice,
         "omega": omega,

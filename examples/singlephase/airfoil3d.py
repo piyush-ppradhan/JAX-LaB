@@ -36,7 +36,7 @@ from src.boundary_conditions import DoNothing, BounceBack, EquilibriumBC
 from src.utils import save_fields_vtk, q_criterion
 from jax import config
 import jax.numpy as jnp
-import os
+import subprocess
 
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 import jax
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     visc = prescribed_vel * clength / Re
     omega = 1.0 / (3.0 * visc + 0.5)
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
     # Set the parameters for the simulation
     kwargs = {

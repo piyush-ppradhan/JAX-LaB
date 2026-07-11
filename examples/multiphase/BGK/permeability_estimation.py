@@ -5,6 +5,7 @@ check in the output_data function, similar to how pressure difference and error 
 """
 
 import os
+import subprocess
 import operator
 import numpy as np
 
@@ -29,7 +30,7 @@ urlretrieve(
     "https://www.digitalrocksportal.org/projects/372/origin_data/2165/",
     "374_03_09_256.mat",
 )
-os.system("mv 374_03_09_256.mat ./assets")
+subprocess.run(["mv", "374_03_09_256.mat", "./assets"], check=True)
 
 
 # config.update("jax_default_matmul_precision", "float32")

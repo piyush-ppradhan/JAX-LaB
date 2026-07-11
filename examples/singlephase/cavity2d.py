@@ -21,6 +21,7 @@ from jax import config
 import numpy as np
 import jax.numpy as jnp
 import os
+import subprocess
 
 from src.boundary_conditions import BounceBackHalfway, EquilibriumBC
 from src.models import BGKSim, KBCSim
@@ -84,7 +85,7 @@ if __name__ == "__main__":
     visc = prescribed_vel * clength / Re
     omega = 1.0 / (3.0 * visc + 0.5)
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
     kwargs = {
         "lattice": lattice,

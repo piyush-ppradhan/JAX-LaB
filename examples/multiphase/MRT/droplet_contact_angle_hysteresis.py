@@ -9,6 +9,7 @@ Series A: Mathematical, Physical and Engineering Sciences 360, 437-451 (2002).
 
 import csv
 import os
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -207,7 +208,7 @@ if __name__ == "__main__":
 
     theta = 45.0 * np.pi / 180.0 * np.ones((nx, ny, nz, 1))
 
-    os.system(f"rm -rf {output_dir}/")
+    subprocess.run(["rm", "-rf", output_dir], check=True)
     Path(output_dir).mkdir(exist_ok=True)
     contact_angle_path = Path(output_dir) / "contact_angles.csv"
     contact_angle_file = contact_angle_path.open("w", newline="", encoding="utf-8")

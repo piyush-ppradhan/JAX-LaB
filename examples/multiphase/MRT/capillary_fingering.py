@@ -8,6 +8,7 @@ The collision matrix is based on:
 """
 
 import os
+import subprocess
 import operator
 import numpy as np
 
@@ -344,7 +345,7 @@ if __name__ == "__main__":
     nx = 200
     ny = 200
 
-    os.system("rm -rf output*/ *.vtk surface_tension.txt")
+    subprocess.run("rm -rf output*/ *.vtk surface_tension.txt", shell=True, check=True)
     file = open("surface_tension.txt", "w")
     file.write("Radius,Pressure Difference\n")
     for r in [25, 30, 35, 40, 45]:
@@ -396,7 +397,7 @@ if __name__ == "__main__":
 
     delta_rho_1 = np.zeros((nx, ny, 1))
     delta_rho_2 = np.zeros((nx, ny, 1))
-    os.system("rm -rf output*/ *.vtk")
+    subprocess.run("rm -rf output*/ *.vtk", shell=True, check=True)
 
     # for fx in [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]:
     for fx in [2.8]:

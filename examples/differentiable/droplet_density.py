@@ -1,4 +1,5 @@
 import os
+import subprocess
 from functools import partial
 
 import equinox as eqx
@@ -208,6 +209,6 @@ if __name__ == "__main__":
     # Simulations with trained model
     kwargs.update({"io_rate": 1, "print_info_rate": 1})
 
-    os.system("rm -rf output_predicted/")
+    subprocess.run(["rm", "-rf", "output_predicted/"], check=True)
     sim_pred = AutodiffMultiphaseBGK(model, **kwargs)
     sim_pred.run(t_designated + 20)

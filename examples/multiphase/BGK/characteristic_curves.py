@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 
 from functools import partial
 import os
+import subprocess
 import numpy as np
 import jax.numpy as jnp
 from jax import jit, config
@@ -546,7 +547,7 @@ if __name__ == "__main__":
 
     A = np.zeros((2, 2))
 
-    os.system("rm -rf output*/")
+    subprocess.run("rm -rf output*/", shell=True, check=True)
     file = open("surface_tension.txt", "w")
     file.write("Radius, Pressure Difference\n")
     R = [25, 30, 35, 40]
@@ -641,8 +642,8 @@ if __name__ == "__main__":
 
     # Saturation curves
     drho = 0.0092
-    os.system("rm -rf output*")
-    os.system("rm characteristic_curve_imbibition.txt")
+    subprocess.run("rm -rf output*", shell=True, check=True)
+    subprocess.run(["rm", "-f", "characteristic_curve_imbibition.txt"], check=True)
     file = open("characteristic_curve_imbibition.txt", "w")
     file.write("Capillary Pressure,Saturation\n")
     simulation = "imbibition"
@@ -665,7 +666,7 @@ if __name__ == "__main__":
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
         "restore_checkpoint": False,
     }
-    os.system("rm -rf output*")
+    subprocess.run("rm -rf output*", shell=True, check=True)
     sim = PorousMedia(**kwargs)
     sim.run(250000)
     file.close()
@@ -674,7 +675,7 @@ if __name__ == "__main__":
     drho = 0.0092
     simulation = "drainage"
     sim = PorousMedia(**kwargs)
-    os.system("rm characteristic_curve_drainage.txt")
+    subprocess.run(["rm", "-f", "characteristic_curve_drainage.txt"], check=True)
     file = open("characteristic_curve_drainage.txt", "w")
     file.write("Capillary Pressure,Saturation\n")
     sim.run(250000)

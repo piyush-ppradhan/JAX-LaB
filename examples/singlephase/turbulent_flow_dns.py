@@ -5,7 +5,7 @@ This example performs DNS (Direct Numerical Simulation) of turbulent flow past t
 2. Re: 1,400,000
 """
 
-import os
+import subprocess
 import jax
 import numpy as np
 import jax.numpy as jnp
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     visc = prescribed_vel * clength / Re
     omega = 1.0 / (3.0 * visc + 0.5)
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
     kwargs = {
         "lattice": lattice,

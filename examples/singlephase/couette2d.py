@@ -2,7 +2,7 @@
 This script performs a 2D simulation of Couette flow using the lattice Boltzmann method (LBM).
 """
 
-import os
+import subprocess
 import jax.numpy as jnp
 import numpy as np
 from src.utils import save_fields_vtk
@@ -71,7 +71,7 @@ if __name__ == "__main__":
 
     omega = 1.0 / (3.0 * visc + 0.5)
     assert omega < 1.98, "omega must be less than 2.0"
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
     kwargs = {
         "lattice": lattice,

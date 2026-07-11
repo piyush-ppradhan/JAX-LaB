@@ -8,6 +8,7 @@ The collision matrix is based on:
 """
 
 import os
+import subprocess
 from jax import config
 import numpy as np
 
@@ -169,6 +170,6 @@ if __name__ == "__main__":
         "restore_checkpoint": False,
     }
 
-    os.system("rm -rf output*/ *.vtk")
+    subprocess.run("rm -rf output*/ *.vtk", shell=True, check=True)
     sim = DropletOnCurvedSurface2D(**kwargs)
     sim.run(200000)

@@ -12,6 +12,7 @@ London. Series A: Mathematical, Physical and Engineering Sciences 360, 437–451
 """
 
 import os
+import subprocess
 import numpy as np
 
 from src.lattice import LatticeD3Q19
@@ -497,7 +498,7 @@ if __name__ == "__main__":
             "restore_checkpoint": False,
         }
 
-        os.system(f"rm -rf output_{r}/ *.vtk")
+        subprocess.run(f"rm -rf output_{r}/ *.vtk", shell=True, check=True)
         sim = Droplet3D(**kwargs)
         sim.run(30000)
 
@@ -617,6 +618,6 @@ if __name__ == "__main__":
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
         "restore_checkpoint": False,
     }
-    os.system("rm -rf output*")
+    subprocess.run("rm -rf output*", shell=True, check=True)
     sim = PorousMedia(**kwargs)
     sim.run(30000)

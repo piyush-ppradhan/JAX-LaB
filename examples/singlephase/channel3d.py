@@ -21,7 +21,7 @@ import numpy as np
 from src.lattice import LatticeD3Q27
 from src.models import KBCSim, AdvectionDiffusionBGK
 import jax.numpy as jnp
-import os
+import subprocess
 import matplotlib.pyplot as plt
 
 # Use 8 CPU devices
@@ -613,7 +613,7 @@ if __name__ == "__main__":
     zz = np.minimum(zz, zz.max() - zz)
     yplus = zz * u_tau / visc
 
-    os.system("rm -rf ./*.vtk && rm -rf ./*.png")
+    subprocess.run("rm -rf ./*.vtk && rm -rf ./*.png", shell=True, check=True)
 
     kwargs = {"lattice": lattice, "omega": omega, "nx": nx, "ny": ny, "nz": nz, "precision": precision, "io_rate": 500000, "print_info_rate": 100000}
     sim = TurbulentChannel(**kwargs)

@@ -2,7 +2,6 @@
 This script computes the MLUPS (Million Lattice Updates per Second) in 3D by simulating fluid flow inside a 2D cavity.
 """
 
-import os
 import argparse
 
 import jax
