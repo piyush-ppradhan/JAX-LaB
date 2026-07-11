@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from jax import config, debug, jit, lax, nn, random
-from jax.tree import map, reduce
 
 from src.eos import VanderWaal
 from src.lattice import LatticeD2Q9

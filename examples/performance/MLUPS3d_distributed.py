@@ -14,10 +14,10 @@ import numpy as np
 
 from jax import config
 
-from src.boundary_conditions import *
+from src.boundary_conditions import EquilibriumBC, BounceBack
 from src.models import BGKSim
 from src.lattice import LatticeD3Q19
-from src.utils import *
+from src.utils import save_fields_vtk
 
 # config.update('jax_disable_jit', True)
 # Use 8 CPU devices

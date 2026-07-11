@@ -4,12 +4,37 @@
 JAX-LaB is a fully differentiable, accelerated multiphysics and multiphase 2D/3D Lattice Boltzmann Method (LBM) Python library written in [JAX](https://github.com/google/jax) and it provides a unified workflow for forward and
 inverse modeling of multiphase flows. JAX-LaB is an extension of [XLB](https://github.com/Autodesk/XLB) and adds support multiphase and multiphysics flows to the original library.
 
+## Accompanying Paper
+The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
+
 ## Showcase
-<p align="center">
-  <img src="assets/3D_evaporation.gif" alt="" width="600">
+<!-- <p align="center">
+  <img src="assets/capillary_fingering.gif" alt="" width="600">
+</p>
+<p align="center" width="300">
+  Capillary fingering in a channel (multi-component simulation)
 </p>
 <p align="center">
-    Time evolution of liquid distribution in a porous medium during evaporation. Two-component (air–water) system simulated with the Cascaded (central-moment) collision model.
+  <img src="assets/capillary_rise.gif" alt="" width="700">
+</p>
+<p align="center" width="300">
+  Capillary rise in parallel plates (single component, multiphase simulation)
+</p> -->
+<!-- <p align="center">
+  <img src="assets/contact_angle_hysteresis.gif" alt="" width="600">
+</p> -->
+<p align="center">
+<p float="left">
+  <img src="assets/contact_angle_hysteresis.gif" alt="" width="370">
+  <img src="assets/droplet_evap_hysteresis.gif" alt="" width="370">
+</p>
+    Contact angle hysteresis: Left: droplet impinging on inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
+</p>
+<p align="center">
+  <img src="assets/3D_evaporation_fontainebleau.gif" alt="" width="600">
+</p>
+<p align="center">
+    Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
 </p>
 <p align="center">
   <img src="assets/droplet_impact.gif" alt="" width="600">
@@ -24,13 +49,25 @@ inverse modeling of multiphase flows. JAX-LaB is an extension of [XLB](https://g
 <p align="center">
   In-situ GPU rendering of drainage in a porous geometry. BGK collision model, 110 million cells.
 </p>
+<!--<p align="center">
+  <img src="assets/car.png" alt="" width="500">
+</p>
+<p align="center">
+<a href=https://www.epc.ed.tum.de/en/aer/research-groups/automotive/drivaer > DrivAer model </a> in a wind-tunnel using KBC Lattice Boltzmann Simulation with approx. 317 million cells
+</p>
+
+<p align="center">
+  <img src="assets/building.png" alt="" width="700">
+</p>
+<p align="center">
+  Airflow in to, out of, and within a building (~400 million cells)
+</p>-->
 <p align="center">
   <img src="assets/predicted.png" alt="" width="1000">
 </p>
 <p align="center">
 Temporal evolution of the density field determined using neural network for the inverse multiphase flow control problem of forming a droplet at t = 900. The MLP output is used as the initial condition for LBM and the backpropagation step during training leverages the auto-differentiation capabilities of JAX-LaB (see <a href="https://doi.org/10.1029/2025MS005313">paper</a> for details).
 </p>
-
 <br>
 
 ## Key Features
@@ -53,12 +90,11 @@ and **VanderWaals**.
 - **Density ratio independent surface tension** control by directly modifying pressure tensor.
 - **Improved wetting scheme** to handle large range of contact angles **without large spurious current or thick layers near solid surface**.
 ### Multicomponent Flow Support
-JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any
-user modification.
+JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any user modification.
 
 ## Wetting model
-- Wetting behavior of fluids is modeled using the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313) which avoids the need to include separate fluid-solid interaction forces commonly seen in Shan-Chen method by directly updating the near-wall densities
-- Wetting parameters can be passed by user while defining wall boundary conditions.
+- Wetting behavior of fluids can be modeled using the [geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301) and the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313) which avoids the need to include separate fluid-solid interaction forces commonly seen in Shan-Chen method by directly updating the near-wall densities.
+- Wetting parameters can be passed by the user while defining the wall boundary conditions. By default, if no wetting parameters are specified, the boundary conditions are used as is without application of wetting behavior.
 
 ### Collision Models
 - **BGK**
@@ -80,7 +116,6 @@ user modification.
 ### Compute Capabilities
 - Distributed Multi-GPU support
 - Mixed-Precision support (store vs compute)
-- Out-of-core support (coming soon)
 
 ### Output
 
@@ -102,38 +137,22 @@ user modification.
 - **Do Nothing BC:** In this boundary condition, the fluid populations are allowed to pass through the boundary without any reflection or modification.
 
 - **Zouhe BC:** This boundary condition is used to impose a prescribed velocity or pressure profile at the boundary.
-- **Regularized BC:** This boundary condition is used to impose a prescribed velocity or pressure profile at the boundary. This BC is more stable than Zouhe BC, but computationally more expensive.
+- **Regularized BC:** This boundary condition is used to impose a prescribed velocity or pressure profile at the boundary. This BC is more stable than ZouHe BC, but computationally more expensive.
 - **Extrapolation Outflow BC:** A type of outflow boundary condition that uses extrapolation to avoid strong wave reflections.
 
 - **Interpolated Bounceback BC:** Interpolated bounce-back boundary condition due to Bouzidi for a lattice Boltzmann method simulation.
 
 - **Convective Outflow BC**: Convective outflow boundary condition, useful for porous media flows.
 
-## Accompanying Paper
-Accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
 
 ## Installation Guide
 
-To use JAX-LaB, you must first install JAX and other dependencies using the following commands:
-
-
-Please refer to https://github.com/google/jax for the latest installation documentation. The following table is taken from [JAX's Github page](https://github.com/google/jax).
-
-| Hardware   | Instructions                                                                                                    |
-|------------|-----------------------------------------------------------------------------------------------------------------|
-| CPU        | `pip install -U "jax[cpu]"`                                                                                       |
-| NVIDIA GPU on x86_64 | `pip install -U "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html`        |
-| Google TPU | `pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html`                 |
-| AMD GPU    | Use [Docker](https://hub.docker.com/r/rocm/jax) or [build from source](https://jax.readthedocs.io/en/latest/developer.html#additional-notes-for-building-a-rocm-jaxlib-for-amd-gpus). |
-| Apple GPU  | Follow [Apple's instructions](https://developer.apple.com/metal/jax/).                                          |
+To use JAX-LaB, please install JAX by following the lastest installation instructions described [here](https://github.com/google/jax). The other dependencies can be installed using pip:
+```bash
+pip install pyvista numpy matplotlib Rtree trimesh jmp orbax-checkpoint termcolor h5py
+```
 
 **Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.
-
-
-Install dependencies:
-```bash
-pip install pyvista numpy matplotlib Rtree trimesh jmp orbax-checkpoint termcolor
-```
 
 Run an example:
 ```bash
@@ -141,3 +160,4 @@ git clone https://github.com/piyush-ppradhan/JAX-LaB
 cd JAX-LaB
 export PYTHONPATH=.
 python3 examples/singlephase/cavity2d.py
+```

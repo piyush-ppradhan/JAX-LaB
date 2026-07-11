@@ -9,8 +9,8 @@ import numpy as np
 from jax import config
 from time import time
 
-from src.utils import *
-from src.boundary_conditions import *
+from src.utils import save_fields_vtk
+from src.boundary_conditions import BounceBack, EquilibriumBC
 from src.lattice import LatticeD2Q9
 from src.models import BGKSim
 
@@ -35,15 +35,7 @@ class Cavity(BGKSim):
         rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
         vel_wall = np.zeros(moving_wall.shape, dtype=self.precisionPolicy.compute_dtype)
         vel_wall[:, 0] = u_wall
-        self.BCs.append(
-            EquilibriumBC(
-                tuple(moving_wall.T),
-                self.gridInfo,
-                self.precisionPolicy,
-                rho_wall,
-                vel_wall,
-            )
-        )
+        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall))
 
 
 if __name__ == "__main__":

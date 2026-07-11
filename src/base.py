@@ -13,10 +13,11 @@ import numpy as np
 import orbax.checkpoint as orb
 
 # JAX-related imports
-from jax import jit, lax, vmap
+from jax import jit, lax, vmap, shard_map
 from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
-from jax.experimental.shard_map import shard_map
+
+# from jax.experimental.shard_map import shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from termcolor import colored
 
@@ -143,7 +144,7 @@ class LBMBase(object):
                     mesh=self.mesh,
                     in_specs=P("x", None, None),
                     out_specs=P("x", None, None),
-                    check_rep=False,
+                    check_vma=False,
                 )
             )
 
@@ -159,7 +160,7 @@ class LBMBase(object):
                     mesh=self.mesh,
                     in_specs=P("x", None, None, None),
                     out_specs=P("x", None, None, None),
-                    check_rep=False,
+                    check_vma=False,
                 )
             )
 
@@ -925,7 +926,7 @@ class LBMBase(object):
                 # restore_args = orb.checkpoint_utils.construct_restore_args(state, shardings)
                 try:
                     # f = self.mngr.restore(latest_step, restore_kwargs={'restore_args': restore_args})['f']
-                    f = self.mngr.restore(latest_step, args=orb.args.StandardSave(state))["f"]
+                    f = self.mngr.restore(latest_step, args=orb.args.StandardRestore(state))["f"]
                     print(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")

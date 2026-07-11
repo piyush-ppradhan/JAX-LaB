@@ -1500,7 +1500,10 @@ class Multiphase(LBMBase):
                 #     f_tree, shardings
                 # )
                 try:
-                    f_tree = self.mngr.restore(latest_step, args=orb.args.StandardRestore(state))
+                    restored_state = self.mngr.restore(
+                        latest_step, args=orb.args.StandardRestore(state)
+                    )
+                    f_tree = [restored_state[c_name(i)] for i in range(self.n_components)]
                     print(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")
