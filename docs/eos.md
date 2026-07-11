@@ -1,11 +1,11 @@
-::: src.eos.EOS
+::: jax_lab.eos.EOS
 
-::: src.eos.VanderWaal
+::: jax_lab.eos.VanderWaal
 
-::: src.eos.Redlich_Kwong
+::: jax_lab.eos.Redlich_Kwong
 
-::: src.eos.Redlich_Kwong_Soave
+::: jax_lab.eos.Redlich_Kwong_Soave
 
-::: src.eos.Peng_Robinson
+::: jax_lab.eos.Peng_Robinson
 
-::: src.eos.Carnahan_Starling
+::: jax_lab.eos.Carnahan_Starling

@@ -13,11 +13,11 @@ import subprocess
 
 import numpy as np
 
-from src.boundary_conditions import BounceBackHalfway
-from src.lattice import LatticeD3Q19
-from src.multiphase import MultiphaseMRT
-from src.eos import Peng_Robinson
-from src.utils import save_fields_vtk
+from jax_lab.boundary_conditions import BounceBackHalfway
+from jax_lab.lattice import LatticeD3Q19
+from jax_lab.multiphase import MultiphaseMRT
+from jax_lab.eos import Peng_Robinson
+from jax_lab.utils import save_fields_vtk
 
 import matplotlib.pyplot as plt
 import phantomgaze as pg
@@ -109,7 +109,7 @@ class DropletOnLiquid3D(MultiphaseMRT):
             "uz": u[..., 2],
         }
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(
         #     timestep,
         #     fields,

@@ -12,11 +12,11 @@ import subprocess
 import numpy as np
 from jax import config
 
-from src.lattice import LatticeD3Q19
-from src.multiphase import MultiphaseMRT
-from src.eos import Peng_Robinson
-from src.boundary_conditions import BounceBack
-from src.utils import save_fields_vtk
+from jax_lab.lattice import LatticeD3Q19
+from jax_lab.multiphase import MultiphaseMRT
+from jax_lab.eos import Peng_Robinson
+from jax_lab.boundary_conditions import BounceBack
+from jax_lab.utils import save_fields_vtk
 
 
 # config.update("jax_default_matmul_precision", "float32")
@@ -51,7 +51,7 @@ class DropletOnWall3D(MultiphaseMRT):
         fluid_mask[ind] = False
         rho_scalar = rho[..., 0]
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)

@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from src.lattice import Lattice, LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
+from jax_lab.lattice import Lattice, LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 
 
 LATTICE_CASES = (

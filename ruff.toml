@@ -1,7 +1,7 @@
 # Adopted from tinygrad's ruff.toml thanks @geohot
 indent-width = 4
 preview = true
-target-version = "py38"
+target-version = "py312"
 
 lint.select = [
   "F",  # Pyflakes

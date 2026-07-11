@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from src.eos import Carnahan_Starling, Peng_Robinson, Redlich_Kwong, Redlich_Kwong_Soave, VanderWaal
+from jax_lab.eos import Carnahan_Starling, Peng_Robinson, Redlich_Kwong, Redlich_Kwong_Soave, VanderWaal
 
 
 EOS_DATA_DIRECTORY = Path(__file__).parent / "eos_data"

@@ -1,9 +1,9 @@
-::: src.models.BGKSim
+::: jax_lab.models.BGKSim
 
-::: src.models.KBCSim
+::: jax_lab.models.KBCSim
 
-::: src.models.AdvectionDiffusionBGK
+::: jax_lab.models.AdvectionDiffusionBGK
 
-::: src.models.MRTSim
+::: jax_lab.models.MRTSim
 
-::: src.models.CLBMSim
+::: jax_lab.models.CLBMSim

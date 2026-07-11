@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax-lab"
+version = "0.1.0"
+description = "A JAX-based differentiable Lattice Boltzmann library for single and multiphase flow simulations on CPUs, GPUs and TPUs"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Piyush Pradhan", email = "pradhanpiyush687@gmail.com" },
+]
+keywords = ["lattice-boltzmann", "jax", "cfd", "multiphase", "differentiable", "gpu"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+  "jax>=0.9",
+  "numpy",
+  "orbax-checkpoint",
+  "termcolor",
+]
+
+[project.optional-dependencies]
+# I/O, visualization and geometry utilities (imported lazily in jax_lab.utils)
+io = ["pyvista", "matplotlib", "Rtree", "trimesh", "h5py"]
+# Accelerator backends; the jax extra manages the compiled runtime packages
+cuda13 = ["jax[cuda13]>=0.9"]
+cuda12 = ["jax[cuda12]>=0.9"]
+cuda13-local = ["jax[cuda13-local]>=0.9"]
+cuda12-local = ["jax[cuda12-local]>=0.9"]
+tpu = ["jax[tpu]>=0.9"]
+rocm = ["jax[rocm7-local]>=0.9"]
+# Development and documentation tooling
+dev = ["build", "twine", "ruff", "pytest"]
+docs = ["mkdocs", "mkdocs-material", "mkdocstrings[python]", "mkdocs-autolinks-plugin", "pymdown-extensions"]
+
+[project.urls]
+Repository = "https://github.com/piyush-ppradhan/JAX-LaB"
+Paper = "https://doi.org/10.1029/2025MS005313"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

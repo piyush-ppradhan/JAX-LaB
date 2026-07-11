@@ -2,8 +2,8 @@ import jax.numpy as jnp
 from jax import jit
 import numpy as np
 from functools import partial
-from src.base import LBMBase
-from src.lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
+from .base import LBMBase
+from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 
 """
 Collision operators are defined in this file for different models.

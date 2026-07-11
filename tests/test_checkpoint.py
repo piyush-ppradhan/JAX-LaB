@@ -12,9 +12,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from src.lattice import LatticeD2Q9, LatticeD3Q19
-from src.models import BGKSim
-from src.multiphase import MultiphaseBGK
+from jax_lab.lattice import LatticeD2Q9, LatticeD3Q19
+from jax_lab.models import BGKSim
+from jax_lab.multiphase import MultiphaseBGK
 
 
 PRECISION_CASES = (

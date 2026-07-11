@@ -8,7 +8,7 @@ repo_url: https://github.com/piyush-ppradhan/JAX-LaB
 edit_uri: edit/multiphase/docs/
 
 watch:
-- ./src/
+- ./src/jax_lab/
 
 theme:
   name: material
@@ -56,6 +56,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             separate_signature: true
             show_root_heading: true

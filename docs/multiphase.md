@@ -1,7 +1,7 @@
-::: src.multiphase.Multiphase
+::: jax_lab.multiphase.Multiphase
 
-::: src.multiphase.MultiphaseBGK
+::: jax_lab.multiphase.MultiphaseBGK
 
-::: src.multiphase.MultiphaseMRT
+::: jax_lab.multiphase.MultiphaseMRT
 
-::: src.multiphase.MultiphaseCascade
+::: jax_lab.multiphase.MultiphaseCascade

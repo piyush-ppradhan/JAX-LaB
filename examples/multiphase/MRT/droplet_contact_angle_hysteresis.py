@@ -14,11 +14,11 @@ from pathlib import Path
 
 import numpy as np
 
-from src.boundary_conditions import BounceBack
-from src.eos import Peng_Robinson
-from src.lattice import LatticeD3Q19
-from src.multiphase import MultiphaseMRT
-from src.utils import save_fields_hdf5_xdmf
+from jax_lab.boundary_conditions import BounceBack
+from jax_lab.eos import Peng_Robinson
+from jax_lab.lattice import LatticeD3Q19
+from jax_lab.multiphase import MultiphaseMRT
+from jax_lab.utils import save_fields_hdf5_xdmf
 
 
 class DropletContactAngleHysteresis3D(MultiphaseMRT):

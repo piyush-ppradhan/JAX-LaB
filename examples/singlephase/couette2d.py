@@ -5,13 +5,13 @@ This script performs a 2D simulation of Couette flow using the lattice Boltzmann
 import subprocess
 import jax.numpy as jnp
 import numpy as np
-from src.utils import save_fields_vtk
+from jax_lab.utils import save_fields_vtk
 from jax import config
 
 
-from src.models import BGKSim
-from src.boundary_conditions import BounceBack, EquilibriumBC, DoNothing
-from src.lattice import LatticeD2Q9
+from jax_lab.models import BGKSim
+from jax_lab.boundary_conditions import BounceBack, EquilibriumBC, DoNothing
+from jax_lab.lattice import LatticeD2Q9
 
 # config.update('jax_disable_jit', True)
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
@@ -52,7 +52,7 @@ class Couette(BGKSim):
         # save_image(timestep, u)
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
 

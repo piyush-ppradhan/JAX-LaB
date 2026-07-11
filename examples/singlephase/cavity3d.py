@@ -22,10 +22,10 @@ from jax import config
 import json, codecs
 import subprocess
 
-from src.utils import save_fields_vtk
-from src.models import BGKSim, KBCSim
-from src.lattice import LatticeD3Q19, LatticeD3Q27
-from src.boundary_conditions import Regularized
+from jax_lab.utils import save_fields_vtk
+from jax_lab.models import BGKSim, KBCSim
+from jax_lab.lattice import LatticeD3Q19, LatticeD3Q27
+from jax_lab.boundary_conditions import Regularized
 
 
 config.update("jax_enable_x64", True)
@@ -98,7 +98,7 @@ class Cavity(KBCSim):
             "u_z": u[..., 2],
         }
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
         # save_fields_vtk(timestep, fields)
 

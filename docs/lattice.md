@@ -1,7 +1,7 @@
-::: src.lattice.Lattice
+::: jax_lab.lattice.Lattice
 
-::: src.lattice.LatticeD2Q9
+::: jax_lab.lattice.LatticeD2Q9
 
-::: src.lattice.LatticeD3Q19
+::: jax_lab.lattice.LatticeD3Q19
 
-::: src.lattice.LatticeD3Q27
+::: jax_lab.lattice.LatticeD3Q27

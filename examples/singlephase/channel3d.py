@@ -14,12 +14,12 @@ In this example you'll be introduced to the following concepts:
 
 """
 
-from src.boundary_conditions import Regularized
+from jax_lab.boundary_conditions import Regularized
 from jax import config
-from src.utils import save_fields_vtk
+from jax_lab.utils import save_fields_vtk
 import numpy as np
-from src.lattice import LatticeD3Q27
-from src.models import KBCSim, AdvectionDiffusionBGK
+from jax_lab.lattice import LatticeD3Q27
+from jax_lab.models import KBCSim, AdvectionDiffusionBGK
 import jax.numpy as jnp
 import subprocess
 import matplotlib.pyplot as plt
@@ -584,7 +584,7 @@ class TurbulentChannel(KBCSim):
         plt.savefig(fname, format="pdf")
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
 

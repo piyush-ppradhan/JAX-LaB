@@ -10,10 +10,10 @@ import os
 import operator
 import numpy as np
 
-from src.lattice import LatticeD2Q9
-from src.utils import save_fields_vtk
-from src.multiphase import MultiphaseMRT
-from src.boundary_conditions import BounceBack, EquilibriumBC
+from jax_lab.lattice import LatticeD2Q9
+from jax_lab.utils import save_fields_vtk
+from jax_lab.multiphase import MultiphaseMRT
+from jax_lab.boundary_conditions import BounceBack, EquilibriumBC
 
 from functools import partial
 from jax import jit, vmap, config
@@ -127,7 +127,7 @@ class PoreDoublet(MultiphaseMRT):
             "uy": u[..., 1],
         }
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, "output_pore_doublet", "data")
         save_fields_vtk(timestep, fields, "output_pore_doublet", "data")
 

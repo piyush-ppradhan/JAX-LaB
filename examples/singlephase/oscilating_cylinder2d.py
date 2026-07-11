@@ -25,10 +25,10 @@ from jax import config
 import numpy as np
 import jax.numpy as jnp
 
-from src.utils import save_fields_vtk, save_BCs_vtk, save_image
-from src.boundary_conditions import BounceBack, BounceBackMoving, ExtrapolationOutflow, Regularized
-from src.models import BGKSim, KBCSim
-from src.lattice import LatticeD2Q9
+from jax_lab.utils import save_fields_vtk, save_BCs_vtk, save_image
+from jax_lab.boundary_conditions import BounceBack, BounceBackMoving, ExtrapolationOutflow, Regularized
+from jax_lab.models import BGKSim, KBCSim
+from jax_lab.lattice import LatticeD2Q9
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -110,7 +110,7 @@ class Cylinder(KBCSim):
         # u magnitude
         fields = {"rho": rho[..., 0], "u": np.linalg.norm(u, axis=2)}
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
         save_BCs_vtk(timestep, self.BCs, self.gridInfo)

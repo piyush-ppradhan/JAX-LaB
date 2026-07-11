@@ -15,11 +15,11 @@ import os
 import subprocess
 import numpy as np
 
-from src.lattice import LatticeD3Q19
-from src.eos import Peng_Robinson
-from src.multiphase import MultiphaseMRT
-from src.boundary_conditions import BounceBack
-from src.utils import save_fields_vtk
+from jax_lab.lattice import LatticeD3Q19
+from jax_lab.eos import Peng_Robinson
+from jax_lab.multiphase import MultiphaseMRT
+from jax_lab.boundary_conditions import BounceBack
+from jax_lab.utils import save_fields_vtk
 
 import h5py
 
@@ -114,7 +114,7 @@ class Droplet3D(MultiphaseMRT):
         print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
 
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
 
@@ -203,7 +203,7 @@ class DropletOnWall3D(MultiphaseMRT):
         print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
 
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
 
@@ -366,7 +366,7 @@ class PorousMedia(MultiphaseMRT):
             "flag": self.solid_mask_streamed[0][1:-1, 1:-1, 1:-1, 0],
         }
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)

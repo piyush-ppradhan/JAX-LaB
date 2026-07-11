@@ -20,18 +20,18 @@ from jax.tree import map as tree_map
 from jax.tree import reduce
 from termcolor import colored
 
-from src.base import LBMBase
+from .base import LBMBase
 
 # User-defined libraries
-from src.boundary_conditions import (
+from .boundary_conditions import (
     BounceBack,
     BounceBackHalfway,
     BounceBackMoving,
     InterpolatedBounceBackBouzidi,
     InterpolatedBounceBackDifferentiable,
 )
-from src.lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
-from src.utils import downsample_field
+from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
+from .utils import downsample_field
 
 # This significantly reduces the performance. Use if necessary
 # jax.config.update("jax_debug_nans", True)

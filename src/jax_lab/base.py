@@ -21,8 +21,8 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from termcolor import colored
 
 # Local/Custom Libraries
-from src.precision_policy import PrecisionPolicy
-from src.utils import downsample_field
+from .precision_policy import PrecisionPolicy
+from .utils import downsample_field
 
 # jax.config.update("jax_spmd_mode", "allow_all") # Only needed for JAX versions <= 0.6.0
 # Disables annoying TF warnings

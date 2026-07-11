@@ -12,11 +12,11 @@ import subprocess
 from jax import config
 import numpy as np
 
-from src.boundary_conditions import BounceBack
-from src.lattice import LatticeD2Q9
-from src.eos import VanderWaal
-from src.utils import save_fields_vtk
-from src.multiphase import MultiphaseMRT
+from jax_lab.boundary_conditions import BounceBack
+from jax_lab.lattice import LatticeD2Q9
+from jax_lab.eos import VanderWaal
+from jax_lab.utils import save_fields_vtk
+from jax_lab.multiphase import MultiphaseMRT
 
 # config.update("jax_default_matmul_precision", "float32")
 
@@ -74,7 +74,7 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
         pressure_difference = p[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         print(f"Pressure difference: {pressure_difference}")
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         save_fields_vtk(timestep, fields, "output", "data")
 

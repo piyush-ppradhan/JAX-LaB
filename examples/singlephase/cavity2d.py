@@ -23,10 +23,10 @@ import jax.numpy as jnp
 import os
 import subprocess
 
-from src.boundary_conditions import BounceBackHalfway, EquilibriumBC
-from src.models import BGKSim, KBCSim
-from src.lattice import LatticeD2Q9
-from src.utils import save_fields_vtk, save_BCs_vtk, save_image
+from jax_lab.boundary_conditions import BounceBackHalfway, EquilibriumBC
+from jax_lab.models import BGKSim, KBCSim
+from jax_lab.lattice import LatticeD2Q9
+from jax_lab.utils import save_fields_vtk, save_BCs_vtk, save_image
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -62,7 +62,7 @@ class Cavity(KBCSim):
         save_image(timestep, u)
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
         save_BCs_vtk(timestep, self.BCs, self.gridInfo)

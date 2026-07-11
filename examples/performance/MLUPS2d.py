@@ -9,10 +9,10 @@ import numpy as np
 from jax import config
 from time import time
 
-from src.utils import save_fields_vtk
-from src.boundary_conditions import BounceBack, EquilibriumBC
-from src.lattice import LatticeD2Q9
-from src.models import BGKSim
+from jax_lab.utils import save_fields_vtk
+from jax_lab.boundary_conditions import BounceBack, EquilibriumBC
+from jax_lab.lattice import LatticeD2Q9
+from jax_lab.models import BGKSim
 
 
 class Cavity(BGKSim):

@@ -6,10 +6,10 @@ The spherepack geometry used here is taken from Digital Rocks Portal and has por
 1. https://digitalporousmedia.org/published-datasets/tapis/projects/drp.project.published/drp.project.published.DRP-372/374_05_03/374_05_03_256/
 """
 
-from src.lattice import LatticeD3Q19
-from src.multiphase import MultiphaseBGK
-from src.boundary_conditions import BounceBack, EquilibriumBC
-from src.utils import save_fields_vtk
+from jax_lab.lattice import LatticeD3Q19
+from jax_lab.multiphase import MultiphaseBGK
+from jax_lab.boundary_conditions import BounceBack, EquilibriumBC
+from jax_lab.utils import save_fields_vtk
 
 import h5py
 import phantomgaze as pg
@@ -114,7 +114,7 @@ class Droplet3D(MultiphaseBGK):
         print(f"rho_l: {rho_l_pred}, rho_g: {rho_g_pred}")
 
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
         if timestep == 20000:
@@ -195,7 +195,7 @@ class DropletOnWall3D(MultiphaseBGK):
             "flag": self.solid_mask_streamed[0][..., 0],
         }
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)
@@ -359,7 +359,7 @@ class PorousMedia(MultiphaseBGK):
             "flag": self.solid_mask_streamed[0][:, 1:-1, 1:-1, 0],
         }
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, f"output_{simulation}", "data", static_fields=static_fields)

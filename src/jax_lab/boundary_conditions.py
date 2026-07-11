@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax import device_count, jit
 
-from src.lattice import LatticeD2Q9, LatticeD3Q19
+from .lattice import LatticeD2Q9, LatticeD3Q19
 
 
 class BoundaryCondition(object):

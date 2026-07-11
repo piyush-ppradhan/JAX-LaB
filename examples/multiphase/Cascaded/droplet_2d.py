@@ -11,9 +11,9 @@ import subprocess
 
 import numpy as np
 
-from src.lattice import LatticeD2Q9
-from src.utils import save_fields_vtk
-from src.multiphase import MultiphaseCascade
+from jax_lab.lattice import LatticeD2Q9
+from jax_lab.utils import save_fields_vtk
+from jax_lab.multiphase import MultiphaseCascade
 
 import operator
 from functools import partial

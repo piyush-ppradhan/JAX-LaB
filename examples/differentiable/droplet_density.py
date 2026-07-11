@@ -8,10 +8,10 @@ import numpy as np
 import optax
 from jax import config, debug, jit, lax, nn, random
 
-from src.eos import VanderWaal
-from src.lattice import LatticeD2Q9
-from src.multiphase import MultiphaseBGK
-from src.utils import save_fields_vtk
+from jax_lab.eos import VanderWaal
+from jax_lab.lattice import LatticeD2Q9
+from jax_lab.multiphase import MultiphaseBGK
+from jax_lab.utils import save_fields_vtk
 
 np.random.seed(42)
 
@@ -73,7 +73,7 @@ class GroundTruthBGK(MultiphaseBGK):
         u = np.array(kwargs["u_tree"][0])
         fields = {"rho": rho[0, ..., 0], "ux": u[0, ..., 0], "uy": u[0, ..., 1]}
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output_actual", "data")
         save_fields_vtk(kwargs["timestep"], fields, "output_actual", "data")
 
@@ -104,7 +104,7 @@ class AutodiffMultiphaseBGK(MultiphaseBGK):
         u = np.array(kwargs["u_tree"][0])
         fields = {"rho": rho[0, ..., 0], "ux": u[0, ..., 0], "uy": u[0, ..., 1]}
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output_predicted", "data")
         save_fields_vtk(kwargs["timestep"], fields, "output_predicted", "data")
 

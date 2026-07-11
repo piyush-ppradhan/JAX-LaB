@@ -1,18 +1,18 @@
-::: src.boundary_conditions.BoundaryCondition
+::: jax_lab.boundary_conditions.BoundaryCondition
 
-::: src.boundary_conditions.BounceBack
+::: jax_lab.boundary_conditions.BounceBack
 
-::: src.boundary_conditions.BounceBackMoving
+::: jax_lab.boundary_conditions.BounceBackMoving
 
-::: src.boundary_conditions.BounceBackHalfway
+::: jax_lab.boundary_conditions.BounceBackHalfway
 
-::: src.boundary_conditions.EquilibriumBC
+::: jax_lab.boundary_conditions.EquilibriumBC
 
-::: src.boundary_conditions.DoNothing
+::: jax_lab.boundary_conditions.DoNothing
 
-::: src.boundary_conditions.ZouHe
+::: jax_lab.boundary_conditions.ZouHe
 
-::: src.boundary_conditions.Regularized
+::: jax_lab.boundary_conditions.Regularized
 
-::: src.boundary_conditions.ExtrapolationOutflow
+::: jax_lab.boundary_conditions.ExtrapolationOutflow
 

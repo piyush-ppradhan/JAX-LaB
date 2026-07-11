@@ -2,10 +2,10 @@
 Implementation of thermal LBM for arbitrary collision model
 """
 
-from src.base import LBMBase
-from src.lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
-from src.multiphase import Multiphase
-from src.utils import downsample_field
+from .base import LBMBase
+from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
+from .multiphase import Multiphase
+from .utils import downsample_field
 
 
 from functools import partial

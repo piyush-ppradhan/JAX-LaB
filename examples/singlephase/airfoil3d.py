@@ -30,10 +30,10 @@ import numpy as np
 
 # from IPython import display
 import matplotlib.pylab as plt
-from src.models import BGKSim, KBCSim
-from src.lattice import LatticeD3Q19, LatticeD3Q27
-from src.boundary_conditions import DoNothing, BounceBack, EquilibriumBC
-from src.utils import save_fields_vtk, q_criterion
+from jax_lab.models import BGKSim, KBCSim
+from jax_lab.lattice import LatticeD3Q19, LatticeD3Q27
+from jax_lab.boundary_conditions import DoNothing, BounceBack, EquilibriumBC
+from jax_lab.utils import save_fields_vtk, q_criterion
 from jax import config
 import jax.numpy as jnp
 import subprocess
@@ -154,7 +154,7 @@ class Airfoil(KBCSim):
         screen_buffer = pg.render.volume(boundary_volume, camera=camera, colormap=boundary_colormap, screen_buffer=screen_buffer)
 
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # fields = {"q": np.array(q), "vorticity_magnitude": np.array(norm_mu)}
         # static_fields = {"flag": np.array(self.visualization_bc)}
         # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output", "airfoil", static_fields=static_fields)

@@ -10,11 +10,11 @@ import jax
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src.utils import save_fields_vtk
+from jax_lab.utils import save_fields_vtk
 
-# from src.boundary_conditions import *
-from src.models import BGKSim, KBCSim, AdvectionDiffusionBGK
-from src.lattice import LatticeD2Q9
+# from jax_lab.boundary_conditions import *
+from jax_lab.models import BGKSim, KBCSim, AdvectionDiffusionBGK
+from jax_lab.lattice import LatticeD2Q9
 
 
 # Use 8 CPU devices
@@ -83,7 +83,7 @@ class TaylorGreenVortex(KBCSim):
             ErrL2ResList.append(vel_err_L2)
             ErrL2ResListRho.append(rho_err_L2)
         # HDF5/XDMF output option:
-        # from src.utils import save_fields_hdf5_xdmf
+        # from jax_lab.utils import save_fields_hdf5_xdmf
         # fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
         # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         # save_image(timestep, u)
