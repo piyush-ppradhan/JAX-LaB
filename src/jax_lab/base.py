@@ -25,8 +25,9 @@ from .precision_policy import PrecisionPolicy
 from .utils import downsample_field
 
 # jax.config.update("jax_spmd_mode", "allow_all") # Only needed for JAX versions <= 0.6.0
+
 # Disables annoying TF warnings
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+# os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 
 class LBMBase(object):
