@@ -1,21 +1,41 @@
+import importlib
 import os
 import re
 from functools import partial
 from time import time
 
-import h5py
 import jax.numpy as jnp
-import matplotlib.pylab as plt
 import numpy as np
-import pyvista as pv
-import trimesh
 from jax import jit
 from jax.image import resize
-from matplotlib import cm
 from pathlib import Path
 from termcolor import colored
 
-import __main__
+
+def _import_optional(module_name, feature):
+    """
+    Imports an optional dependency lazily, raising a helpful error if missing.
+
+    Heavy I/O and visualization dependencies (h5py, matplotlib, pyvista,
+    trimesh) are imported at call time instead of module import time so that
+    the core solver can run without them installed. After the first import,
+    subsequent calls only perform a cached module lookup.
+
+    Parameters
+    ----------
+    module_name (str): The module to import, e.g. "pyvista" or "matplotlib.pylab".
+
+    feature (str): Name of the calling feature, used in the error message.
+
+    Returns
+    -------
+    module: The imported module.
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as e:
+        package = module_name.split(".")[0]
+        raise ImportError(f"{feature} requires the optional dependency '{package}'. Install it with: pip install {package}") from e
 
 
 def read_raw_volume(path, shape, dtype="u1", endian="<", order="C", use_memmap=False):
@@ -105,6 +125,10 @@ def save_image(timestep, fld, prefix=None):
     This function saves the field as an image in the PNG format. The filename is based on the name of the main script file, the provided prefix, and the timestep number.
     If the field is 3D, the magnitude of the field is calculated and saved. The image is saved with the 'nipy_spectral' colormap and the origin set to 'lower'.
     """
+    plt = _import_optional("matplotlib.pylab", "save_image")
+    cm = _import_optional("matplotlib.cm", "save_image")
+    import __main__
+
     fname = os.path.basename(__main__.__file__)
     fname = os.path.splitext(fname)[0]
     if prefix is not None:
@@ -190,6 +214,7 @@ def save_fields_hdf5_xdmf(
       {multi_timestep_file}
       {multi_timestep_file with .xdmf suffix}
     """
+    h5py = _import_optional("h5py", "save_fields_hdf5_xdmf")
     start = time()
 
     if not isinstance(fields, dict) or len(fields) == 0:
@@ -822,6 +847,7 @@ def save_fields_vtk(timestep, fields, output_dir=".", prefix="fields"):
     will be saved as 'fields_0000010.vtk'in the specified directory.
 
     """
+    pv = _import_optional("pyvista", "save_fields_vtk")
     # Assert that all fields have the same dimensions except for the last dimension assuming fields is a dictionary
     for key, value in fields.items():
         if key == list(fields.keys())[0]:
@@ -873,6 +899,8 @@ def live_volume_randering(timestep, field):
     The colormap is updated every 0.1 seconds to reflect changes to the field.
 
     """
+    pv = _import_optional("pyvista", "live_volume_randering")
+    plt = _import_optional("matplotlib.pylab", "live_volume_randering")
     # Create a uniform grid (Note that the field must be 3D) otherwise raise error
     if field.ndim != 3:
         raise ValueError("The input field must be 3D!")
@@ -920,6 +948,7 @@ def save_BCs_vtk(timestep, BCs, gridInfo, output_dir="."):
     and the filename. For example, if the timestep number is 10, the VTK file
     will be saved as 'BCs_0000010.vtk'in the specified directory.
     """
+    pv = _import_optional("pyvista", "save_BCs_vtk")
 
     # Create a uniform grid
     if gridInfo["nz"] == 0:
@@ -1015,6 +1044,7 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, 
     provided, it is applied to the mesh before voxelization. The pitch of the voxel grid is calculated based on the
     maximum extent of the mesh and the provided lattice Boltzmann unit length, unless a pitch is provided directly.
     """
+    trimesh = _import_optional("trimesh", "voxelize_stl")
     if length_lbm_unit is None and pitch is None:
         raise ValueError("Either 'length_lbm_unit' or 'pitch' must be provided!")
     mesh = trimesh.load_mesh(stl_filename, process=False)

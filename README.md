@@ -147,9 +147,25 @@ JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any n
 
 ## Installation Guide
 
-To use JAX-LaB, please install JAX by following the lastest installation instructions described [here](https://github.com/google/jax). The other dependencies can be installed using pip:
+To use JAX-LaB, please install JAX by following the lastest installation instructions described [here](https://github.com/google/jax). The core dependencies can be installed using pip:
 ```bash
-pip install pyvista numpy matplotlib Rtree trimesh orbax-checkpoint termcolor h5py
+pip install numpy orbax-checkpoint termcolor
+```
+
+### Optional dependencies
+
+The I/O and visualization utilities load their dependencies lazily (at call time, not at import time), so the core solver runs without them. The following packages are only needed if you call the corresponding functions:
+
+| Package | Required by |
+|---|---|
+| [PyVista](https://docs.pyvista.org/) | `save_fields_vtk`, `save_BCs_vtk`, `live_volume_randering` |
+| [h5py](https://docs.h5py.org/) | `save_fields_hdf5_xdmf` |
+| [matplotlib](https://matplotlib.org/) | `save_image`, `live_volume_randering` |
+| [trimesh](https://trimesh.org/) + Rtree | `voxelize_stl` |
+
+Calling one of these functions without its dependency installed raises an `ImportError` naming the missing package. To install all optional dependencies at once (recommended for running the examples, most of which write VTK or image output):
+```bash
+pip install pyvista matplotlib Rtree trimesh h5py
 ```
 
 **Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.
