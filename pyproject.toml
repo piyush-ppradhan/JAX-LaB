@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "jax-lab"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A JAX-based differentiable Lattice Boltzmann library for single and multiphase flow simulations on CPUs, GPUs and TPUs"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -48,6 +48,12 @@ Paper = "https://doi.org/10.1029/2025MS005313"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools_scm]
+# Versions come from git tags (v0.1.0 -> 0.1.0). Untagged commits produce
+# PEP 440 dev versions without a local segment so they remain uploadable
+# to TestPyPI (PyPI/TestPyPI reject local version segments like +g<hash>).
+local_scheme = "no-local-version"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

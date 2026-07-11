@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # setuptools-scm needs the full history and tags to derive the version
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/jax-lab
+    permissions:
+      # Required for PyPI trusted publishing (OIDC)
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  test-install:
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install from TestPyPI and smoke test
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # TestPyPI only hosts jax-lab; dependencies come from real PyPI.
+          # Retry to allow for index propagation delay after upload.
+          for i in $(seq 1 10); do
+            pip install \
+              --index-url https://test.pypi.org/simple/ \
+              --extra-index-url https://pypi.org/simple/ \
+              "jax-lab==${VERSION}" && break
+            echo "Attempt ${i} failed, retrying in 30s..."
+            sleep 30
+          done
+          python -c "
+          import jax_lab
+          print('installed version:', jax_lab.__version__)
+          from jax_lab import BGKSim, LatticeD2Q9, Multiphase, PrecisionPolicy
+          lattice = LatticeD2Q9('f32/f32')
+          print('smoke test OK')
+          "
+
+  publish-pypi:
+    needs: test-install
+    runs-on: ubuntu-latest
+    # Configure this environment with required reviewers in the repo settings
+    # so the final PyPI publish waits for manual approval.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/jax-lab
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
