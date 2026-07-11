@@ -149,7 +149,7 @@ JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any n
 
 To use JAX-LaB, please install JAX by following the lastest installation instructions described [here](https://github.com/google/jax). The other dependencies can be installed using pip:
 ```bash
-pip install pyvista numpy matplotlib Rtree trimesh jmp orbax-checkpoint termcolor h5py
+pip install pyvista numpy matplotlib Rtree trimesh orbax-checkpoint termcolor h5py
 ```
 
 **Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.

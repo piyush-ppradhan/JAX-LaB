@@ -8,7 +8,6 @@ from functools import partial
 # Third-Party Libraries
 import jax
 import jax.numpy as jnp
-import jmp
 import numpy as np
 import orbax.checkpoint as orb
 
@@ -22,6 +21,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from termcolor import colored
 
 # Local/Custom Libraries
+from src.precision_policy import PrecisionPolicy
 from src.utils import downsample_field
 
 # jax.config.update("jax_spmd_mode", "allow_all") # Only needed for JAX versions <= 0.6.0
@@ -55,12 +55,7 @@ class LBMBase(object):
         self.nz = kwargs.get("nz")
 
         self.precision = kwargs.get("precision")
-        computedType, storedType = self.set_precisions(self.precision)
-        self.precisionPolicy = jmp.Policy(
-            compute_dtype=computedType,
-            param_dtype=computedType,
-            output_dtype=storedType,
-        )
+        self.precisionPolicy = PrecisionPolicy.from_string(self.precision)
 
         self.lattice = kwargs.get("lattice")
         self.checkpointRate = kwargs.get("checkpoint_rate", 0)
@@ -544,31 +539,6 @@ class LBMBase(object):
             }
 
             return bounding_box
-
-    def set_precisions(self, precision):
-        """
-        This function sets the precision of the computations. The precision is defined by a pair of values,
-        representing the precision of the computation and the precision of the storage, respectively.
-
-        Parameters
-        ----------
-        precision (str): A string representing the desired precision. The string should be in the format
-        "computation/storage", where "computation" and "storage" are either "f64", "f32", or "f16",
-        representing 64-bit, 32-bit, or 16-bit floating point numbers, respectively.
-
-        Returns
-        -------
-        tuple: A pair of jax.numpy data types representing the computation and storage precisions, respectively.
-        If the input string does not match any of the predefined options, the function defaults to (jnp.float32, jnp.float32).
-        """
-        return {
-            "f64/f64": (jnp.float64, jnp.float64),
-            "f32/f32": (jnp.float32, jnp.float32),
-            "f32/f16": (jnp.float32, jnp.float16),
-            "f16/f16": (jnp.float16, jnp.float16),
-            "f64/f32": (jnp.float64, jnp.float32),
-            "f64/f16": (jnp.float64, jnp.float16),
-        }.get(precision, (jnp.float32, jnp.float32))
 
     def initialize_macroscopic_fields(self):
         """
