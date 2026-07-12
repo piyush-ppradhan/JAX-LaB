@@ -855,9 +855,9 @@ def save_fields_vtk(timestep, fields, output_dir=".", prefix="fields"):
         else:
             assert value.shape == dimensions, "All fields must have the same dimensions!"
 
-    if not os.path.exists("./" + output_dir):
+    if not os.path.exists(output_dir):
         print(colored("Directory does not exist, creating the directory " + output_dir, "yellow"))
-        os.makedirs(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
     output_filename = os.path.join(output_dir, prefix + "_" + f"{timestep:07d}.vtk")
 

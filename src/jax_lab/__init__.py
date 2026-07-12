@@ -1,9 +1,6 @@
 """
 JAX-LaB: a JAX-based differentiable Lattice Boltzmann library for single and
 multiphase flow simulations on CPUs, GPUs and TPUs.
-
-The thermal module (WIP) is not re-exported here because its class names
-overlap with the single-phase models; use jax_lab.thermal directly.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -26,8 +23,12 @@ from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .models import AdvectionDiffusionBGK, BGKSim, CLBMSim, KBCSim, MRTSim
 from .multiphase import Multiphase, MultiphaseBGK, MultiphaseCascade, MultiphaseMRT
 from .precision_policy import Precision, PrecisionPolicy
+from .thermal import DirichletTemperature, NeumannTemperature, Thermal
 
 __all__ = [
+    "DirichletTemperature",
+    "NeumannTemperature",
+    "Thermal",
     "__version__",
     "EOS",
     "Carnahan_Starling",

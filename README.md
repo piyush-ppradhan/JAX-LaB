@@ -87,14 +87,13 @@ Temporal evolution of the density field determined using neural network for the 
 - Support for **high density ratio flows** (tested for density ratios > 10<sup>8</sup>) using improved forcing scheme.
 - Incorporates **Equation of State (EOS)** to model multiphase flows. Currently implemented EOS include **Carnahan-Starling**, **Peng-Robinson**, **Redlich-Kwong**, **Redlich-Kwong-Soave**
 and **VanderWaals**.
-- **Density ratio independent surface tension** control by directly modifying pressure tensor.
-- **Improved wetting scheme** to handle large range of contact angles **without large spurious current or thick layers near solid surface**.
+- **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model only).
 ### Multicomponent Flow Support
 JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any user modification.
 
 ## Wetting model
-- Wetting behavior of fluids can be modeled using the [geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301) and the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313) which avoids the need to include separate fluid-solid interaction forces commonly seen in Shan-Chen method by directly updating the near-wall densities.
-- Wetting parameters can be passed by the user while defining the wall boundary conditions. By default, if no wetting parameters are specified, the boundary conditions are used as is without application of wetting behavior.
+- Wetting behavior of fluids can be modeled using the [geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301) and the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313).
+
 
 ### Collision Models
 - **BGK**
@@ -120,7 +119,7 @@ JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any n
 ### Output
 
 - Binary and ASCII VTK output (based on [PyVista](https://docs.pyvista.org/) library)
-- HDF5 output (based on [h5py](https://docs.h5py.org/)) to maximize I/O speed and minimize storage requirement
+- HDF5/XDMF output (based on [h5py](https://docs.h5py.org/)) to maximize I/O speed and minimize storage requirement
 - In-situ rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze) library
 - [Orbax](https://github.com/google/orbax)-based distributed asynchronous checkpointing
 - Image Output

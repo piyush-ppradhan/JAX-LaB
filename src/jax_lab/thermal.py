@@ -1,278 +1,560 @@
 """
-Implementation of thermal LBM for arbitrary collision model
+Hybrid thermal LBM solver: the fluid is evolved with the lattice Boltzmann
+method while the temperature field is evolved with a finite difference solver
+on the same mesh, using lattice-based isotropic difference stencils and a
+fourth order Runge-Kutta time integration. Throughout, dx = dt = 1 (lattice
+units).
+
+References
+----------
+1. Fei, L., Derome, D. & Carmeliet, J. Pore-scale study on the effect of
+   heterogeneity on evaporation in porous media. Journal of Fluid Mechanics
+   983, A6 (2024).
+2. Kruger, T., et al. (2017). The lattice Boltzmann method. Springer
+   International Publishing (isotropic lattice difference stencils).
 """
 
-from .base import LBMBase
-from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
-from .multiphase import Multiphase
-from .utils import downsample_field
-
-
+import time
 from functools import partial
+
 import jax
-from jax import jit
-from jax.experimental.multihost_utils import process_allgather
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as orb
+from jax import jit
+from jax.experimental.multihost_utils import process_allgather
 from termcolor import colored
-import time
+
+from .utils import downsample_field
 
 
-class Thermal(LBMBase):
+class ThermalBoundaryCondition(object):
     """
-    Single phase thermal LBM implementation. The base solver is based on LBMBase class with some modified functions to solve the energy equation.
+    Base class for thermal (temperature field) boundary conditions.
 
-    Changes with respect to LBMBase:
+    Unlike the LBM boundary conditions in boundary_conditions.py which act on
+    distribution functions, thermal boundary conditions act directly on the
+    temperature field of the finite difference solver.
 
-    1. User defines the boundary condition in self.set_thermal_boundary_conditions() by appending to the self.thermal_BCs list which is initially empty.
-    2. An additional "fluid_solver" parameter is defined, which takes either a single phase LBM fluid solver.
+    Parameters
+    ----------
+    indices (tuple of numpy.ndarray): Tuple of index arrays selecting the boundary
+    nodes, one array per spatial axis (e.g. tuple(wall_indices.T)).
+    """
 
-    The current approach is based on:
-    1. Fei, Linlin, and Kai Hong Luo. “Cascaded Lattice Boltzmann Method for Incompressible Thermal Flows with Heat Sources and General
-    Thermal Boundary Conditions.” Computers & Fluids 165 (March 2018): 89-95. https://doi.org/10.1016/j.compfluid.2018.01.020.
+    def __init__(self, indices):
+        self.indices = tuple(np.asarray(idx) for idx in indices)
+        self.name = None
+
+    def apply(self, T, timestep):
+        """
+        Apply the boundary condition to the temperature field.
+
+        Parameters
+        ----------
+        T (jax.numpy.ndarray): Temperature field of shape (nx, ny, 1) in 2D or
+        (nx, ny, nz, 1) in 3D.
+
+        timestep (int): Current timestep, available for time dependent conditions.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Temperature field with the boundary condition applied.
+        """
+        raise NotImplementedError
+
+
+class DirichletTemperature(ThermalBoundaryCondition):
+    """
+    Dirichlet (prescribed temperature) boundary condition: T = T_w at the
+    boundary nodes.
+
+    Parameters
+    ----------
+    indices (tuple of numpy.ndarray): Index arrays of the boundary nodes.
+
+    prescribed (float or numpy.ndarray): Prescribed wall temperature. Either a
+    scalar applied to all nodes or an array of shape (n, 1) with one value per
+    boundary node.
+    """
+
+    def __init__(self, indices, prescribed):
+        super().__init__(indices)
+        self.name = "DirichletTemperature"
+        self.prescribed = prescribed
+
+    def apply(self, T, timestep):
+        return T.at[self.indices].set(self.prescribed)
+
+
+class NeumannTemperature(ThermalBoundaryCondition):
+    """
+    Neumann (prescribed normal temperature gradient) boundary condition,
+    imposed with a first order one-sided difference over unit spacing:
+    T_wall = T_interior + q, where q = dT/dn is the prescribed gradient along
+    the outward normal (q = 0 gives an adiabatic wall).
+
+    Assumes the interior neighbor of every boundary node lies one node along
+    the negated outward normal. Corner nodes shared with a Dirichlet boundary
+    should be listed in the Dirichlet condition as well, appended after this
+    one, so the Dirichlet value takes precedence.
+
+    Parameters
+    ----------
+    indices (tuple of numpy.ndarray): Index arrays of the boundary nodes.
+
+    normal (sequence of int): Outward unit normal of the boundary, e.g. (0, 1)
+    for the top wall in 2D or (0, 0, -1) for the bottom wall in 3D.
+
+    prescribed (float or numpy.ndarray): Prescribed outward normal gradient.
+    Either a scalar or an array of shape (n, 1). Defaults to 0 (adiabatic).
+    """
+
+    def __init__(self, indices, normal, prescribed=0.0):
+        super().__init__(indices)
+        self.name = "NeumannTemperature"
+        self.prescribed = prescribed
+        self.neighbor_indices = tuple(np.asarray(idx) - int(n) for idx, n in zip(self.indices, normal))
+
+    def apply(self, T, timestep):
+        return T.at[self.indices].set(T[self.neighbor_indices] + self.prescribed)
+
+
+class Thermal(object):
+    """
+    Single phase hybrid thermal LBM solver. The fluid is advanced by the
+    wrapped LBM fluid_solver while the temperature field is advanced by a
+    finite difference solver on the same mesh.
+
+    The temperature equation solved is:
+    \\frac{\\partial T}{\\partial t} = -\\mathbf{u} \\cdot \\nabla T +
+    \\frac{1}{\\rho c_v}(\\nabla \\cdot (K \\nabla T) + S_T)
+    where S_T is a user defined source term (see source()).
+
+    Spatial derivatives are evaluated with the isotropic lattice difference
+    stencils in grad_x and laplacian_x and time integration uses the fourth
+    order Runge-Kutta scheme with dt = 1.
+
+    Parameters
+    ----------
+    fluid_solver (LBMBase): Configured fluid solver instance (e.g. BGKSim or
+    MRTSim). Grid, lattice, precision and I/O settings are shared with it.
+
+    specific_heat (float or numpy.ndarray): Specific heat c_v. Either a scalar
+    or an array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+
+    thermal_conductivity (float or numpy.ndarray): Thermal conductivity K with
+    the same shape options as specific_heat.
+
+    checkpoint_dir (str, optional): Directory for temperature checkpoints.
+    Defaults to "./temperature_checkpoints".
+
+    apply_buoyancy (bool, optional): If True, adds a density variation based
+    buoyancy force to the fluid solver. Defaults to False.
+
+    gravity (sequence of float, optional): Gravitational acceleration vector,
+    required when apply_buoyancy is True.
     """
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self.fluid_solver = kwargs.get("fluid_solver")
+        if self.fluid_solver is None:
+            raise ValueError("A configured fluid solver must be provided via the 'fluid_solver' keyword.")
+
+        # Share grid, lattice, precision and run control settings with the fluid solver
+        self.lattice = self.fluid_solver.lattice
+        self.precisionPolicy = self.fluid_solver.precisionPolicy
+        self.nx = self.fluid_solver.nx
+        self.ny = self.fluid_solver.ny
+        self.nz = self.fluid_solver.nz
+        self.dim = self.fluid_solver.dim
+        self.streaming = self.fluid_solver.streaming
+        self.ioRate = self.fluid_solver.ioRate
+        self.printInfoRate = self.fluid_solver.printInfoRate
+        self.downsamplingFactor = self.fluid_solver.downsamplingFactor
+        self.returnFpost = self.fluid_solver.returnFpost
+        self.computeMLUPS = self.fluid_solver.computeMLUPS
+        self.restore_checkpoint = self.fluid_solver.restore_checkpoint
+        self.checkpointRate = self.fluid_solver.checkpointRate
+        self.checkpointDir = kwargs.get("checkpoint_dir", "./temperature_checkpoints")
+        self.nDevices = jax.device_count()
+        self.backend = jax.default_backend()
+
+        if self.checkpointRate > 0:
+            mngr_options = orb.CheckpointManagerOptions(save_interval_steps=self.checkpointRate, max_to_keep=1)
+            self.mngr = orb.CheckpointManager(self.checkpointDir, options=mngr_options)
+        else:
+            self.mngr = None
+
+        self.c_v = kwargs.get("specific_heat")
+        self.K = kwargs.get("thermal_conductivity")
+        # K is constant in time, so its gradient is precomputed once
+        self.grad_K = self.grad_x(self.K)
+
+        self.apply_buoyancy = kwargs.get("apply_buoyancy", False)
+        if self.apply_buoyancy:
+            gravity = kwargs.get("gravity")
+            if gravity is None:
+                raise ValueError("gravity must be provided when apply_buoyancy is True.")
+            self.gravity = jnp.array(np.array(gravity, dtype=np.float64), dtype=self.precisionPolicy.compute_dtype)
+            # The fluid collision only invokes apply_force when a force is present
+            if self.fluid_solver.force is None:
+                self.fluid_solver.force = jnp.zeros(self.dim, dtype=self.precisionPolicy.compute_dtype)
+            self.fluid_solver.apply_force = self.apply_force_thermal
+
+        self.set_thermal_boundary_conditions()
+
+    @property
+    def c_v(self):
+        return self._c_v
+
+    @c_v.setter
+    def c_v(self, value):
+        self._c_v = self._to_field("specific_heat", value)
+
+    @property
+    def K(self):
+        return self._K
+
+    @K.setter
+    def K(self, value):
+        self._K = self._to_field("thermal_conductivity", value)
+
+    def _to_field(self, name, value):
+        """
+        Convert a scalar or numpy array parameter to a full field JAX array.
+
+        Parameters
+        ----------
+        name (str): Parameter name used in error messages.
+
+        value (float, int or numpy.ndarray): Scalar applied uniformly or an array
+        of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Field of shape (nx, ny, 1) or (nx, ny, nz, 1).
+        """
+        if value is None:
+            raise ValueError(f"{name} must be provided.")
+        shape = (self.nx, self.ny, 1) if self.dim == 2 else (self.nx, self.ny, self.nz, 1)
+        if isinstance(value, np.ndarray):
+            if value.shape != shape:
+                raise ValueError(f"The shape of {name} array must match the dimensions: (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D")
+            return jnp.array(value, dtype=self.precisionPolicy.compute_dtype)
+        elif isinstance(value, (int, float)):
+            return float(value) * jnp.ones(shape, dtype=self.precisionPolicy.compute_dtype)
+        else:
+            raise ValueError(f"Invalid type for {name}. It must be float or numpy.ndarray.")
 
     def set_thermal_boundary_conditions(self):
         """
-        This function sets the boundary conditions for thermal simulation only.
+        This function sets the boundary conditions for the temperature field.
 
-        It is intended to be overwritten by the user to specify the boundary conditions according to
-        the specific problem being solved.
+        It is intended to be overwritten by the user to specify the boundary
+        conditions according to the specific problem being solved, by appending
+        ThermalBoundaryCondition instances (DirichletTemperature,
+        NeumannTemperature) to self.thermal_BCs. Conditions are applied in
+        list order, so later entries win on shared nodes (e.g. corners).
 
-        By default, it does nothing. When overwritten, it could set periodic boundaries, no-slip
-        boundaries, inflow/outflow boundaries, etc.
-        """
-        return
-
-    def _create_boundary_data(self):
-        """
-        Create boundary data for the Lattice Boltzmann simulation by setting boundary conditions,
-        creating grid mask, and preparing local masks and normal arrays.
+        By default no thermal boundary condition is applied, which corresponds
+        to a fully periodic temperature field.
         """
         self.thermal_BCs = []
-        self.set_thermal_boundary_conditions()
-        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
-        # stream into a boundary voxel.
-        solid_halo_list = [np.array(bc.indices).T for bc in self.thermal_BCs if bc.isSolid]
-        solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
 
-        # Create the grid mask on each process
-        start = time.time()
-        grid_mask = self.create_grid_mask(solid_halo_voxels)
-        print("Time to create the grid mask for thermal lattice:", time.time() - start)
-
-        start = time.time()
-        for bc in self.thermal_BCs:
-            assert bc.implementationStep in ["PostStreaming", "PostCollision"]
-            bc.create_local_mask_and_normal_arrays(grid_mask)
-        print("Time to create the local masks and normal arrays for thermal lattice:", time.time() - start)
-
-    @partial(jit, static_argnums=(0,))
-    def compute_temperature(self, g):
+    @partial(jit, static_argnums=(0,), inline=True)
+    def apply_bc(self, T, timestep):
         """
-        Compute the temperature field from temperature distributions.
+        This function applies the boundary conditions to the temperature field.
+
+        It iterates over all thermal boundary conditions and applies them in
+        list order.
 
         Parameters
         ----------
-        g: jax.numpy.ndarray
-            Temperature distribution.
-        """
-        return jnp.sum(g, axis=-1, keepdims=True)
+        T (jax.numpy.ndarray): Temperature field.
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1, 2))
-    def thermal_collision(self, gin, u):
-        """
-        This function performs the collision step in the Lattice Boltzmann Method.
-
-        It is intended to be overwritten by the user to specify the collision operator according to
-        the specific LBM model being used.
-
-        By default, it does nothing. When overwritten, it could implement the BGK collision operator,
-        the MRT collision operator, etc.
-
-        Parameters
-        ----------
-        gin: jax.numpy.ndarray
-            The pre-collision distribution functions.
-        u: jax.numpy.ndarray
-            The velocity field.
+        timestep (int): Current timestep of the simulation.
 
         Returns
         -------
-        gin: jax.numpy.ndarray
-            The post-collision distribution functions.
-        """
-        pass
-
-    @partial(jit, static_argnums=(0, 4), inline=True)
-    def apply_bc(self, gout, gin, timestep, implementation_step):
-        """
-        This function applies the boundary conditions to the distribution functions for thermal LBM.
-
-        It iterates over all boundary conditions (BCs) and checks if the implementation step of the
-        boundary condition matches the provided implementation step. If it does, it applies the
-        boundary condition to the post-streaming distribution functions (fout).
-
-        Parameters
-        ----------
-        gout: jax.numpy.ndarray
-            The post-collision distribution functions.
-        gin: jax.numpy.ndarray
-            The post-streaming distribution functions.
-        implementation_step: str
-            The implementation step at which the boundary conditions should be applied.
-
-        Returns
-        -------
-        jax.numpy.ndarray
-            The output distribution functions after applying the boundary conditions.
+        jax.numpy.ndarray: Temperature field after applying boundary conditions.
         """
         for bc in self.thermal_BCs:
-            gout = bc.prepare_populations(gout, gin, implementation_step)
-            if bc.implementationStep == implementation_step:
-                if bc.isDynamic:
-                    gout = bc.apply(gout, gin, timestep)
-                else:
-                    gout = gout.at[bc.indices].set(bc.apply(gout, gin))
+            T = bc.apply(T, timestep)
 
-        return gout
+        return T
 
-    @partial(jit, static_argnums=(0,))
-    def initialize_macroscopic_fields(self):
+    def initialize_temperature_field(self):
         """
-        This function initializes the temperature distribution using prescribed temperature field and fluid velocities.
-        The default temperature and density is 1.
+        This function initializes the temperature field to its default value of 1.
 
-        Note: This function is a placeholder and should be overridden in a subclass or in an instance of the class
-        to provide specific initial conditions.
+        Note: This function is a placeholder and should be overridden in a
+        subclass or in an instance of the class to provide specific initial
+        conditions.
 
         Returns
         -------
-            None: The default temperature. This indicates that the actual values should be set elsewhere.
+        None: The default temperature. This indicates that the actual value should be set elsewhere.
         """
-        print("WARNING: Default initial conditions assumed: density = 1, fluid velocity = 0")
-        print("To set explicit initial temperature, density and velocity, use self.initialize_macroscopic_fields.")
+        print("WARNING: Default initial condition assumed: temperature = 1")
+        print("         To set an explicit initial temperature, use self.initialize_temperature_field.")
         return None
+
+    @partial(jit, static_argnums=(0, 1, 2, 4))
+    def distributed_array_init(self, shape, ttype, init_val=0, sharding=None):
+        """
+        Initialize a distributed array using JAX, with a specified shape, data type, and initial value.
+        Optionally, provide a custom sharding strategy.
+
+        Parameters
+        ----------
+        shape (tuple): The shape of the array to be created.
+
+        ttype (dtype): The data type of the array to be created.
+
+        init_val (scalar, optional): The initial value to fill the array with. Defaults to 0.
+
+        sharding (Sharding, optional): The sharding strategy to use. Defaults to the fluid solver sharding.
+
+        Returns
+        -------
+        jax.numpy.ndarray: A JAX array with the specified shape, data type, initial value, and sharding strategy.
+        """
+        if sharding is None:
+            sharding = self.fluid_solver.sharding
+        x = jnp.full(shape=shape, fill_value=init_val, dtype=ttype)
+        return jax.lax.with_sharding_constraint(x, sharding)
 
     def assign_fields_sharded(self):
         """
-        This function is used to initialize the simulation by assigning the macroscopic fields and populations.
+        This function initializes the temperature field of the simulation.
 
-        The function first initializes the macroscopic fields, which are the density (rho0) and velocity (u0).
-        Depending on the dimension of the simulation (2D or 3D), it then sets the shape of the array that will hold the
-        distribution functions (f).
-
-        The fluid solver's initialize_macroscopic_field is utilized to intialize density and velocity field. If they are not defined, the simulation does not run.
-
-        Parameters
-        ----------
-        None
+        It calls initialize_temperature_field, which can return a scalar or an
+        array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D. If it
+        returns None, a uniform temperature of 1 is assumed.
 
         Returns
         -------
-        g: a distributed JAX array of shape (nx, ny, nz, q) or (nx, ny, q) holding the temperature distribution functions for the simulation.
+        T: a distributed JAX array of shape (nx, ny, 1) or (nx, ny, nz, 1) holding the temperature field.
         """
-        T0 = self.initialize_macroscopic_fields()
-        rho0, u0 = self.fluid_solver.initialize_macroscopic_fields()
+        T0 = self.initialize_temperature_field()
 
-        if rho0 is None or u0 is None:
-            colored("Error", color="red")
-            raise ValueError("initialize_macroscopic_field is not defined for the fluid solver.")
-
-        if self.dim == 2:
-            shape = (self.nx, self.ny, self.lattice.q)
-        if self.dim == 3:
-            shape = (self.nx, self.ny, self.nz, self.lattice.q)
-
+        shape = (self.nx, self.ny, 1) if self.dim == 2 else (self.nx, self.ny, self.nz, 1)
         if T0 is None:
-            colored("Warning: initialize_macroscopic_field not defined, using Temperature = 1 as default.", "yellow")
-            g = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=self.w)
-        else:
-            g = self.initialize_populations(T0, u0)
+            T0 = 1.0
+        if isinstance(T0, np.ndarray):
+            T0 = jnp.array(T0, dtype=self.precisionPolicy.output_dtype)
 
-        return g
+        T = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=T0)
+
+        return T
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def apply_force_thermal(self, f_postcollision, feq, rho, u):
+        """
+        Modified version of the single phase apply_force function that adds a
+        density variation based buoyancy force to any user defined fluid force,
+        using the exact-difference method due to Kupershtokh.
+
+        Note: the buoyancy force is computed from the local density deviation
+        relative to the mean density, not from the temperature field, since the
+        fluid collision does not have access to the temperature.
+
+        Parameters
+        ----------
+        f_postcollision (jax.numpy.ndarray): Post-collision distribution functions.
+
+        feq (jax.numpy.ndarray): Equilibrium distribution functions.
+
+        rho (jax.numpy.ndarray): Density field.
+
+        u (jax.numpy.ndarray): Velocity field.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Post-collision distribution functions with the force applied.
+        """
+        rho_average = rho.mean()
+        buoyancy = jnp.repeat(rho - rho_average, repeats=self.dim, axis=-1) * self.gravity
+        delta_u = buoyancy + self.fluid_solver.force
+        feq_force = self.fluid_solver.equilibrium(rho, u + delta_u, cast_output=False)
+        f_postcollision = f_postcollision + feq_force - feq
+        return f_postcollision
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def grad_x(self, field):
+        """
+        Compute the gradient of a scalar field using the isotropic lattice
+        difference stencil:
+        \\nabla \\phi(x) = \\frac{1}{c_s^2} \\sum_i w_i \\mathbf{c}_i \\phi(x + \\mathbf{c}_i)
+
+        The neighbor values are obtained with the streaming operation, which
+        shifts along -c_i, hence the sign flip in the final contraction.
+
+        Note: streaming wraps periodically at the domain edges. On non-periodic
+        boundaries the affected nodes must be corrected by the thermal boundary
+        conditions.
+
+        Parameters
+        ----------
+        field (jax.numpy.ndarray): Scalar field of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Gradient of the field, of shape (nx, ny, 2) in 2D or (nx, ny, nz, 3) in 3D.
+        """
+        field_streamed = self.streaming(jnp.repeat(field, repeats=self.lattice.q, axis=-1))
+        c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype).T
+        return -self.lattice.inv_cs2 * jnp.dot(self.lattice.w * field_streamed, c)
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def laplacian_x(self, field):
+        """
+        Compute the laplacian of a scalar field using the isotropic lattice
+        difference stencil:
+        \\nabla^2 \\phi(x) = \\frac{2}{c_s^2} \\sum_i w_i [\\phi(x + \\mathbf{c}_i) - \\phi(x)]
+
+        Note: streaming wraps periodically at the domain edges. On non-periodic
+        boundaries the affected nodes must be corrected by the thermal boundary
+        conditions.
+
+        Parameters
+        ----------
+        field (jax.numpy.ndarray): Scalar field of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Laplacian of the field, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+        """
+        field_streamed = self.streaming(jnp.repeat(field, repeats=self.lattice.q, axis=-1))
+        return 2.0 * self.lattice.inv_cs2 * jnp.sum(self.lattice.w * (field_streamed - field), axis=-1, keepdims=True)
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def source(self, T):
+        """
+        Source term S_T of the thermal equation.
+
+        It is intended to be overwritten by the user to specify a volumetric
+        heat source according to the specific problem being solved. By default
+        it returns zero everywhere.
+
+        Parameters
+        ----------
+        T (jax.numpy.ndarray): Temperature field.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Source term at each lattice node, same shape as T.
+        """
+        return jnp.zeros_like(T)
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def RHS(self, T, rho, u):
+        """
+        Right hand side of the thermal equation:
+        -\\mathbf{u} \\cdot \\nabla T + \\frac{1}{\\rho c_v}(K \\nabla^2 T + \\nabla K \\cdot \\nabla T + S_T)
+
+        The advective term is not scaled by 1/(rho c_v); only the diffusive and
+        source terms are, consistent with the temperature form of the energy
+        equation (see reference 1 in the module docstring).
+
+        Parameters
+        ----------
+        T (jax.numpy.ndarray): Temperature field.
+
+        rho (jax.numpy.ndarray): Density field.
+
+        u (jax.numpy.ndarray): Velocity field.
+
+        Returns
+        -------
+        jax.numpy.ndarray: RHS of the thermal equation, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+        """
+        grad_T = self.grad_x(T)
+        lap_T = self.laplacian_x(T)
+
+        advection = jnp.sum(u * grad_T, axis=-1, keepdims=True)
+        diffusion = self.K * lap_T + jnp.sum(self.grad_K * grad_T, axis=-1, keepdims=True)
+
+        return -advection + (diffusion + self.source(T)) / (rho * self.c_v)
 
     @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
-    def step(self, g_poststreaming, u, timestep, return_gpost=False):
+    def step(self, T_prev, f_poststreaming, timestep, return_fpost=False):
         """
-        This function performs a single step of the thermal LBM simulation.
+        This function performs a single step of the hybrid thermal LBM simulation.
 
-        It first performs the collision step, which is the relaxation of the distribution functions
-        towards their equilibrium values. It then applies the respective boundary conditions to the
-        post-collision distribution functions.
-
-        The function then performs the streaming step, which is the propagation of the distribution
-        functions in the lattice. It then applies the respective boundary conditions to the post-streaming
-        distribution functions.
+        It first advances the fluid solver by one LBM step, then advances the
+        temperature field with the fourth order Runge-Kutta scheme (dt = 1)
+        using the updated macroscopic density and velocity, and finally applies
+        the thermal boundary conditions.
 
         Parameters
         ----------
-        g_poststreaming: jax.numpy.ndarray
-            The post-streaming distribution functions.
-        u: jax.numpy.ndarray
-            The velocity field.
-        timestep: int
-            The current timestep of the simulation.
-        return_gpost: bool, optional
-            If True, the function also returns the post-collision distribution functions.
+        T_prev (jax.numpy.ndarray): The temperature field from the previous timestep.
+
+        f_poststreaming (jax.numpy.ndarray): The post-streaming distribution functions.
+
+        timestep (int): The current timestep of the simulation.
+
+        return_fpost (bool, optional): If True, the function also returns the post-collision distribution functions.
 
         Returns
         -------
-        f_poststreaming: jax.numpy.ndarray
-            The post-streaming distribution functions after the simulation step.
-        f_postcollision: jax.numpy.ndarray or None
-            The post-collision distribution functions after the simulation step, or None if
-            return_gpost is False.
-        """
-        g_postcollision = self.thermal_collision(g_poststreaming, u)
-        g_postcollision = self.apply_bc(g_postcollision, g_poststreaming, timestep, "PostCollision")
-        g_poststreaming = self.streaming(g_postcollision)
-        g_poststreaming = self.apply_bc(g_poststreaming, g_postcollision, timestep, "PostStreaming")
+        T (jax.numpy.ndarray): The temperature field after the simulation step.
 
-        if return_gpost:
-            return g_poststreaming, g_postcollision
-        else:
-            return g_poststreaming, None
+        f_poststreaming (jax.numpy.ndarray): The post-streaming distribution functions after the simulation step.
+
+        f_postcollision (jax.numpy.ndarray or None): The post-collision distribution functions after the simulation
+        step, or None if return_fpost is False.
+        """
+        f_poststreaming, f_postcollision = self.fluid_solver.step(f_poststreaming, timestep, return_fpost=return_fpost)
+        rho, u = self.fluid_solver.update_macroscopic(self.precisionPolicy.cast_to_compute(f_poststreaming))
+
+        T = self.precisionPolicy.cast_to_compute(T_prev)
+        k1 = self.RHS(T, rho, u)
+        k2 = self.RHS(T + 0.5 * k1, rho, u)
+        k3 = self.RHS(T + 0.5 * k2, rho, u)
+        k4 = self.RHS(T + k3, rho, u)
+        T = T + (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+
+        T = self.apply_bc(T, timestep)
+
+        return self.precisionPolicy.cast_to_output(T), f_poststreaming, f_postcollision
 
     def run(self, t_max):
         """
-        This function runs the LBM simulation for a specified number of time steps.
+        This function runs the hybrid thermal LBM simulation for a specified number of time steps.
 
-        It first initializes the distribution functions and then enters a loop where it performs the
-        simulation steps (collision, streaming, and boundary conditions) for each time step.
+        It first initializes the temperature field and the fluid distribution
+        functions and then enters a loop where it performs the coupled
+        simulation steps (fluid collision, streaming and boundary conditions,
+        followed by the Runge-Kutta temperature update) for each time step.
 
-        The function can also print the progress of the simulation, save the simulation data, and
-        compute the performance of the simulation in million lattice updates per second (MLUPS).
+        The function can also print the progress of the simulation, save the
+        simulation data, and compute the performance of the simulation in
+        million lattice updates per second (MLUPS).
 
         Parameters
         ----------
-        t_max: int
-            The total number of time steps to run the simulation.
+        t_max (int): The total number of time steps to run the simulation.
+
         Returns
         -------
-        g: jax.numpy.ndarray
-            The distribution functions for temperature after the simulation.
+        f (jax.numpy.ndarray): The distribution functions after the simulation.
+
+        T (jax.numpy.ndarray): The temperature field after the simulation.
         """
-        g = self.assign_fields_sharded()
+        T = self.assign_fields_sharded()
         f = self.fluid_solver.assign_fields_sharded()
         start_step = 0
         if self.restore_checkpoint:
+            assert self.mngr is not None, "Checkpoint manager does not exist."
             latest_step = self.mngr.latest_step()
             if latest_step is not None:  # existing checkpoint present
-                # Assert that the checkpoint manager is not None
-                assert self.mngr is not None, "Checkpoint manager does not exist."
-                state = {"g": g}
-                # shardings = map(lambda x: x.sharding, state)
-                # restore_args = orb.checkpoint_utils.construct_restore_args(state, shardings)
                 try:
-                    # f = self.mngr.restore(latest_step, restore_kwargs={'restore_args': restore_args})['f']
-                    g = self.mngr.restore(latest_step, args=orb.args.StandardSave(state))["g"]
-                    f = self.mngr.restore(latest_step, args=orb.args.StandardSave(state))["f"]
+                    T = self.mngr.restore(latest_step, args=orb.args.StandardRestore({"T": T}))["T"]
+                    f = self.fluid_solver.mngr.restore(latest_step, args=orb.args.StandardRestore({"f": f}))["f"]
                     print(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")
@@ -280,6 +562,7 @@ class Thermal(LBMBase):
                 start_step = latest_step + 1
                 if not (t_max > start_step):
                     raise ValueError(f"Simulation already exceeded maximum allowable steps (t_max = {t_max}). Consider increasing t_max.")
+
         if self.computeMLUPS:
             start = time.time()
         # Loop over all time steps
@@ -289,21 +572,18 @@ class Thermal(LBMBase):
             checkpoint_flag = self.checkpointRate > 0 and timestep % self.checkpointRate == 0
 
             if io_flag:
-                # Update the macroscopic variables and save the previous values (for error computation)
+                # Save the previous values of the macroscopic fields (for error computation)
                 rho_prev, u_prev = self.fluid_solver.update_macroscopic(f)
-                rho_prev = downsample_field(rho_prev, self.fluid_solver.downsamplingFactor)
-                u_prev = downsample_field(u_prev, self.fluid_solver.downsamplingFactor)
-                T_prev = self.compute_temperature(g)
-                T_prev = downsample_field(g, self.downsamplingFactor)
+                rho_prev = downsample_field(rho_prev, self.downsamplingFactor)
+                u_prev = downsample_field(u_prev, self.downsamplingFactor)
+                T_prev = downsample_field(T, self.downsamplingFactor)
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho_prev = process_allgather(rho_prev)
                 u_prev = process_allgather(u_prev)
                 T_prev = process_allgather(T_prev)
 
-            # Perform one time-step (collision, streaming, and boundary conditions)
-            f, fstar = self.fluid_solver.step(f, timestep, return_fpost=self.fluid_solver.returnFpost)
-            rho, u = self.fluid_solver.update_macroscopic(f)
-            g, gstar = self.step(g, u, timestep, return_gpost=self.returnFpost)
+            # Perform one time-step (fluid step followed by the temperature update)
+            T, f, fstar = self.step(T, f, timestep, return_fpost=self.returnFpost)
 
             # Print the progress of the simulation
             if print_iter_flag:
@@ -318,66 +598,50 @@ class Thermal(LBMBase):
             if io_flag:
                 # Save the simulation data
                 print(f"Saving data at timestep {timestep}/{t_max}")
-                # rho, u = self.update_macroscopic(f)
-                rho = downsample_field(rho, self.fluid_solver.downsamplingFactor)
-                u = downsample_field(u, self.fluid_solver.downsamplingFactor)
-                T = self.compute_temperature(g)
-                T = downsample_field(T, self.downsamplingFactor)
+                rho, u = self.fluid_solver.update_macroscopic(f)
+                rho = downsample_field(rho, self.downsamplingFactor)
+                u = downsample_field(u, self.downsamplingFactor)
+                T_out = downsample_field(T, self.downsamplingFactor)
 
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho = process_allgather(rho)
                 u = process_allgather(u)
-                T = process_allgather(T)
+                T_out = process_allgather(T_out)
 
                 # Save the data
-                self.handle_io_timestep(timestep, f, fstar, g, gstar, T, rho, u, T_prev, rho_prev, u_prev)
+                self.handle_io_timestep(timestep, f, fstar, T_out, rho, u, T_prev, rho_prev, u_prev)
 
             if checkpoint_flag:
                 # Save the checkpoint
                 print(f"Saving checkpoint at timestep {timestep}/{t_max}")
-                state = {"f": f}
-                # self.mngr.save(timestep, state)
-                self.mngr.save(timestep, args=orb.args.StandardSave(state))
+                self.mngr.save(timestep, args=orb.args.StandardSave({"T": T}))
+                if self.fluid_solver.mngr is not None:
+                    self.fluid_solver.mngr.save(timestep, args=orb.args.StandardSave({"f": f}))
 
             # Start the timer for the MLUPS computation after the first timestep (to remove compilation overhead)
             if self.computeMLUPS and timestep == 1:
                 jax.block_until_ready(f)
-                jax.block_until_ready(g)
+                jax.block_until_ready(T)
                 start = time.time()
 
         if self.computeMLUPS:
             # Compute and print the performance of the simulation in MLUPS
-            jax.block_until_ready(g)
+            jax.block_until_ready(T)
             jax.block_until_ready(f)
             end = time.time()
-            if self.dim == 2:
-                print(
-                    colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny}", "green")
-                    if self.dim == 2
-                    else colored(f"{self.nx} x {self.ny} x {self.nz}", "green")
-                )
-                print(
-                    colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny}", "green")
-                    if self.dim == 2
-                    else colored(f"{self.nx * self.ny * self.nz}", "green")
-                )
-                print(colored("MLUPS: ", "blue") + colored(f"{2 * self.nx * self.ny * t_max / (end - start) / 1e6}", "red"))
+            n_voxels = self.nx * self.ny if self.dim == 2 else self.nx * self.ny * self.nz
+            domain = f"{self.nx} x {self.ny}" if self.dim == 2 else f"{self.nx} x {self.ny} x {self.nz}"
+            print(colored("Domain: ", "blue") + colored(domain, "green"))
+            print(colored("Number of voxels: ", "blue") + colored(f"{n_voxels}", "green"))
+            print(colored("MLUPS: ", "blue") + colored(f"{n_voxels * t_max / (end - start) / 1e6}", "red"))
 
-            elif self.dim == 3:
-                print(colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny} x {self.nz}", "green"))
-                print(colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny * self.nz}", "green"))
-                print(
-                    colored("MLUPS: ", "blue")
-                    + colored(
-                        f"{2 * self.nx * self.ny * self.nz * t_max / (end - start) / 1e6}",
-                        "red",
-                    )
-                )
         if self.mngr is not None:
             self.mngr.wait_until_finished()
-        return f
+        if self.fluid_solver.mngr is not None:
+            self.fluid_solver.mngr.wait_until_finished()
+        return f, T
 
-    def handle_io_timestep(self, timestep, f, fstar, g, gstar, T, rho, u, T_prev, rho_prev, u_prev):
+    def handle_io_timestep(self, timestep, f, fstar, T, rho, u, T_prev, rho_prev, u_prev):
         """
         This function handles the input/output (I/O) operations at each time step of the simulation.
 
@@ -386,22 +650,23 @@ class Thermal(LBMBase):
 
         Parameters
         ----------
-        timestep: int
-            The current time step of the simulation.
-        f: jax.numpy.ndarray
-            The post-streaming distribution functions at the current time step.
-        fstar: jax.numpy.ndarray
-            The post-collision distribution functions at the current time step.
-        g: jax.numpy.ndarray
-            The post-streaming distribution functions for temperature at the current time step.
-        gstar: jax.numpy.ndarray
-            The post-collision distribution functions for temperature at the current time step.
-        rho: jax.numpy.ndarray
-            The density field at the current time step.
-        u: jax.numpy.ndarray
-            The velocity field at the current time step.
-        T: jax.numpy.ndarray
-            The temperature field at the current time step.
+        timestep (int): The current time step of the simulation.
+
+        f (jax.numpy.ndarray): The post-streaming distribution functions at the current time step.
+
+        fstar (jax.numpy.ndarray): The post-collision distribution functions at the current time step.
+
+        T (jax.numpy.ndarray): The temperature field at the current time step.
+
+        rho (jax.numpy.ndarray): The density field at the current time step.
+
+        u (jax.numpy.ndarray): The velocity field at the current time step.
+
+        T_prev (jax.numpy.ndarray): The temperature field at the previous I/O time step.
+
+        rho_prev (jax.numpy.ndarray): The density field at the previous I/O time step.
+
+        u_prev (jax.numpy.ndarray): The velocity field at the previous I/O time step.
         """
         kwargs = {
             "timestep": timestep,
@@ -413,110 +678,16 @@ class Thermal(LBMBase):
             "T_prev": T_prev,
             "f_poststreaming": f,
             "f_postcollision": fstar,
-            "g_poststreaming": g,
-            "g_postcollision": gstar,
         }
         self.output_data(**kwargs)
 
-
-class BGKSim(Thermal):
-    """
-    BGK simulation class.
-
-    This class implements the Bhatnagar-Gross-Krook (BGK) approximation for the collision step in the Lattice Boltzmann Method.
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def thermal_collision(self, g, u):
+    def output_data(self, **kwargs):
         """
-        BGK collision step for lattice.
-
-        The collision step is where the main physics of the LBM is applied. In the BGK approximation,
-        the distribution function is relaxed towards the equilibrium distribution function.
-        """
-        g = self.precisionPolicy.cast_to_compute(g)
-        temperature = self.compute_temperature(g)
-        geq = self.equilibrium(temperature, u, cast_output=False)
-        gneq = g - geq
-        gout = g - self.omega * gneq
-        # if self.force is not None:
-        #     fout = self.apply_force(fout, feq, rho, u)
-        return self.precisionPolicy.cast_to_output(gout)
-
-
-class MRTSim(Thermal):
-    """
-    Multi-relaxation time model.
-    """
-
-    def __init__(self, **kwargs):
-        kwargs.update({"omega": 1.0})
-        super().__init__(**kwargs)
-        self.s_rho = kwargs.get("s_rho")
-        self.s_e = kwargs.get("s_e")
-        self.s_eta = kwargs.get("s_eta")
-        self.s_j = kwargs.get("s_j")
-        self.s_q = kwargs.get("s_q")
-        self.s_v = kwargs.get("s_v")
-        self.M_inv = jnp.array(
-            np.transpose(np.linalg.inv(kwargs.get("M"))),
-            dtype=self.precisionPolicy.compute_dtype,
-        )
-        self.M = jnp.array(np.transpose(kwargs.get("M")), dtype=self.precisionPolicy.compute_dtype)
-        if isinstance(self.lattice, LatticeD2Q9):
-            self.S = jnp.array(
-                np.diag([self.s_rho, self.s_e, self.s_eta, self.s_j, self.s_q, self.s_j, self.s_q, self.s_v, self.s_v]),
-                dtype=self.precisionPolicy.compute_dtype,
-            )
-        elif isinstance(self.lattice, LatticeD3Q19):
-            self.s_pi = kwargs.get("s_pi")
-            self.s_m = kwargs.get("s_m")
-            self.S = jnp.array(
-                np.diag([
-                    self.s_rho,
-                    self.s_e,
-                    self.s_eta,
-                    self.s_j,
-                    self.s_q,
-                    self.s_j,
-                    self.s_q,
-                    self.s_j,
-                    self.s_q,
-                    self.s_v,
-                    self.s_pi,
-                    self.s_v,
-                    self.s_pi,
-                    self.s_v,
-                    self.s_v,
-                    self.s_v,
-                    self.s_m,
-                    self.s_m,
-                    self.s_m,
-                ]),
-                dtype=self.precisionPolicy.compute_dtype,
-            )
-
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def thermal_collision(self, g, u):
-        """
-        MRT collision step for lattice.
+        This function is intended to be overwritten by the user to customize
+        the I/O operations of the simulation. By default it does nothing.
 
         Parameters
         ----------
-        g: jax.numpy.ndarray
-            Temperature distribution.
-        u: jax.numpy.ndarray
-            Velocity field.
+        **kwargs: The simulation data at the current I/O timestep, see handle_io_timestep.
         """
-        g = self.precisionPolicy.cast_to_compute(g)
-        m = jnp.dot(g, self.M)
-        rho, u = self.update_macroscopic(g)
-        geq = self.equilibrium(rho, u)
-        meq = jnp.dot(geq, self.M)
-        mout = -jnp.dot(m - meq, self.S)
-        if self.force is not None:
-            mout = self.apply_force(mout, meq, rho, u)
-        return self.precisionPolicy.cast_to_output(g + jnp.dot(mout, self.M_inv))
+        pass

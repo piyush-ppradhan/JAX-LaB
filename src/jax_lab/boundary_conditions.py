@@ -1528,3 +1528,67 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         beta = self.w_NEQ * jnp.repeat(self.prescribed - rho_incorrect, axis=-1, repeats=self.lattice.q) / jnp.sum(self.w_NEQ)
         fbd = fbd.at[bindex, self.imissing].set(fbd[bindex, self.imissing] + beta[bindex, self.imissing])
         return fbd
+
+
+class ThermalBoundaryCondition(object):
+    """
+    Thermal boundary conditions base class definition. Thermal part of the code utilizes finite difference method (FDM) instead of LBM, hence separate treatment of thermal BCs.
+    The boundary condition can handle both time dependent and independent source using is_dynamic flag. By default, is_dynamic is set as False.
+
+
+    Parameters
+    ----------
+    indices: (array-like): Indices of the boundary nodes.
+    nx (int): The number of nodes in the x direction.
+    ny (int): The number of nodes in the y direction.
+    nz (int): The number of nodes in the z direction.
+    dim (int): The number of dimensions in the simulation (2 or 3).
+    precision_policy (precisionPolicy): The precision policy used in the simulation.
+    isDynamic (bool): Specify if the boundary condition value is time-dependent. By default it is set as False.
+    """
+
+    def __init__(self, indices, fluid_solver, is_dynamic=False, value=None):
+        self.indices = indices
+        self.nx = fluid_solver.gridInfo["nx"]
+        self.ny = fluid_solver.gridInfo["ny"]
+        self.nz = fluid_solver.gridInfo["nz"]
+        self.dim = fluid_solver
+        self.precisionPolicy = fluid_solver.precision_policy
+        self.isDynamic = is_dynamic
+        if not self.isDynamic:
+            self.value = jnp.array(value, dtype=self.precisionPolicy.compute_dtype)
+        else:
+            self.value = None
+
+    @partial(jit, static_argnums=(0,))
+    def update(self, timestep):
+        pass
+
+    @partial(jit, static_argnums=(0,))
+    def apply(self, T, timestep):
+        pass
+
+
+class ThermalDirichlet(ThermalBoundaryCondition):
+    """
+    Dirichlet boundary condition for thermal equation.
+    """
+
+    def __init__(self, indices, fluid_solver, temperature):
+        super().__init__(indices, fluid_solver, is_dynamic=False, value=temperature)
+
+    @partial(jit, static_argnums=(0,))
+    def apply(self, T, timestep):
+        if self.isDynamic:
+            self.value = self.update(timestep)
+        T = T.at[self.indices].set(self.value)
+        return T
+
+
+class ThermalNeumann(ThermalBoundaryCondition):
+    """
+    Neumann boundary condition for thermal equation.
+    """
+
+    def __init__(self, indices, fluid_solver, flux):
+        super().__init__(indices, fluid_solver, is_dynamic=False, value=flux)
