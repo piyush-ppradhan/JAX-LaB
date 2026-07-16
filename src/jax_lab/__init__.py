@@ -22,12 +22,14 @@ from .eos import (
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .models import AdvectionDiffusionBGK, BGKSim, CLBMSim, KBCSim, MRTSim
 from .multiphase import Multiphase, MultiphaseBGK, MultiphaseCascade, MultiphaseMRT
+from .boundary_conditions import DirichletTemperature, NeumannTemperature
 from .precision_policy import Precision, PrecisionPolicy
-from .thermal import DirichletTemperature, NeumannTemperature, Thermal
+from .thermal import MultiphaseThermal, Thermal
 
 __all__ = [
     "DirichletTemperature",
     "NeumannTemperature",
+    "MultiphaseThermal",
     "Thermal",
     "__version__",
     "EOS",

@@ -1592,3 +1592,96 @@ class ThermalNeumann(ThermalBoundaryCondition):
 
     def __init__(self, indices, fluid_solver, flux):
         super().__init__(indices, fluid_solver, is_dynamic=False, value=flux)
+
+
+class ThermalBoundaryCondition(object):
+    """
+    Base class for thermal (temperature field) boundary conditions used by the
+    hybrid thermal solver in thermal.py.
+
+    Unlike the LBM boundary conditions above which act on distribution
+    functions, thermal boundary conditions act directly on the temperature
+    field of the finite difference solver.
+
+    Parameters
+    ----------
+    indices (tuple of numpy.ndarray): Tuple of index arrays selecting the boundary
+    nodes, one array per spatial axis (e.g. tuple(wall_indices.T)).
+    """
+
+    def __init__(self, indices):
+        self.indices = tuple(np.asarray(idx) for idx in indices)
+        self.name = None
+
+    def apply(self, T, timestep):
+        """
+        Apply the boundary condition to the temperature field.
+
+        Parameters
+        ----------
+        T (jax.numpy.ndarray): Temperature field of shape (nx, ny, 1) in 2D or
+        (nx, ny, nz, 1) in 3D.
+
+        timestep (int): Current timestep, available for time dependent conditions.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Temperature field with the boundary condition applied.
+        """
+        raise NotImplementedError
+
+
+class DirichletTemperature(ThermalBoundaryCondition):
+    """
+    Dirichlet (prescribed temperature) boundary condition: T = T_w at the
+    boundary nodes.
+
+    Parameters
+    ----------
+    indices (tuple of numpy.ndarray): Index arrays of the boundary nodes.
+
+    prescribed (float or numpy.ndarray): Prescribed wall temperature. Either a
+    scalar applied to all nodes or an array of shape (n, 1) with one value per
+    boundary node.
+    """
+
+    def __init__(self, indices, prescribed):
+        super().__init__(indices)
+        self.name = "DirichletTemperature"
+        self.prescribed = prescribed
+
+    def apply(self, T, timestep):
+        return T.at[self.indices].set(self.prescribed)
+
+
+class NeumannTemperature(ThermalBoundaryCondition):
+    """
+    Neumann (prescribed normal temperature gradient) boundary condition,
+    imposed with a first order one-sided difference over unit spacing:
+    T_wall = T_interior + q, where q = dT/dn is the prescribed gradient along
+    the outward normal (q = 0 gives an adiabatic wall).
+
+    Assumes the interior neighbor of every boundary node lies one node along
+    the negated outward normal. Corner nodes shared with a Dirichlet boundary
+    should be listed in the Dirichlet condition as well, appended after this
+    one, so the Dirichlet value takes precedence.
+
+    Parameters
+    ----------
+    indices (tuple of numpy.ndarray): Index arrays of the boundary nodes.
+
+    normal (sequence of int): Outward unit normal of the boundary, e.g. (0, 1)
+    for the top wall in 2D or (0, 0, -1) for the bottom wall in 3D.
+
+    prescribed (float or numpy.ndarray): Prescribed outward normal gradient.
+    Either a scalar or an array of shape (n, 1). Defaults to 0 (adiabatic).
+    """
+
+    def __init__(self, indices, normal, prescribed=0.0):
+        super().__init__(indices)
+        self.name = "NeumannTemperature"
+        self.prescribed = prescribed
+        self.neighbor_indices = tuple(np.asarray(idx) - int(n) for idx, n in zip(self.indices, normal))
+
+    def apply(self, T, timestep):
+        return T.at[self.indices].set(T[self.neighbor_indices] + self.prescribed)

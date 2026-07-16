@@ -38,6 +38,22 @@ PRECISION_CASES = (
 )
 
 
+@pytest.mark.parametrize("eos_class, _, a, b, extra_parameters, __", EOS_CASES)
+def test_thermal_pressure_derivative_matches_finite_difference(eos_class, _, a, b, extra_parameters, __):
+    """Compare the analytic thermal EOS derivative with a centered difference."""
+    eos = eos_class(a=[a], b=[b], R=[1.0], temperature_field_type="thermal", **extra_parameters)
+    density = [jnp.asarray([0.25, 0.75], dtype=jnp.float64)]
+    temperature = jnp.asarray([0.7, 0.8], dtype=jnp.float64)
+    delta_temperature = 1.0e-6
+
+    analytic = eos.dp_eos_dT(density, temperature)[0]
+    pressure_plus = eos.EOS_thermal(density, temperature + delta_temperature)[0]
+    pressure_minus = eos.EOS_thermal(density, temperature - delta_temperature)[0]
+    centered_difference = (pressure_plus - pressure_minus) / (2.0 * delta_temperature)
+
+    np.testing.assert_allclose(analytic, centered_difference, rtol=2e-8, atol=2e-9)
+
+
 @pytest.mark.parametrize("dtype, rtol, atol", PRECISION_CASES)
 @pytest.mark.parametrize("eos_class, data_file, a, b, extra_parameters, benchmark_atol", EOS_CASES)
 def test_saturation_pressure_at_vapor_and_liquid_densities(eos_class, data_file, a, b, extra_parameters, benchmark_atol, dtype, rtol, atol):

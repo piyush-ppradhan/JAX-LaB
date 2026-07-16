@@ -1,18 +1,14 @@
 """
-Hybrid thermal LBM solver: the fluid is evolved with the lattice Boltzmann
-method while the temperature field is evolved with a finite difference solver
-on the same mesh, using lattice-based isotropic difference stencils and a
-fourth order Runge-Kutta time integration. Throughout, dx = dt = 1 (lattice
-units).
+Hybrid thermal LBM solver: the fluid is evolved with the lattice Boltzmann method while the temperature field is evolved with a finite difference solver
+on the same mesh, using lattice-based isotropic difference stencils and a fourth order Runge-Kutta time integration. Throughout, dx = dt = 1 (lattice units).
 
 References
 ----------
-1. Fei, L., Derome, D. & Carmeliet, J. Pore-scale study on the effect of
-   heterogeneity on evaporation in porous media. Journal of Fluid Mechanics
-   983, A6 (2024).
-2. Kruger, T., et al. (2017). The lattice Boltzmann method. Springer
-   International Publishing (isotropic lattice difference stencils).
+1. Fei, L., Yang, J., Chen, Y., Mo, H. & Luo, K. H. Mesoscopic simulation of three-dimensional pool boiling based on a phase-change cascaded lattice Boltzmann method.
+Physics of Fluids 32, 103312 (2020).
 """
+
+import operator
 
 import time
 from functools import partial
@@ -22,102 +18,12 @@ import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as orb
 from jax import jit
+from jax.tree import map as tree_map
+from jax.tree import reduce
 from jax.experimental.multihost_utils import process_allgather
 from termcolor import colored
 
 from .utils import downsample_field
-
-
-class ThermalBoundaryCondition(object):
-    """
-    Base class for thermal (temperature field) boundary conditions.
-
-    Unlike the LBM boundary conditions in boundary_conditions.py which act on
-    distribution functions, thermal boundary conditions act directly on the
-    temperature field of the finite difference solver.
-
-    Parameters
-    ----------
-    indices (tuple of numpy.ndarray): Tuple of index arrays selecting the boundary
-    nodes, one array per spatial axis (e.g. tuple(wall_indices.T)).
-    """
-
-    def __init__(self, indices):
-        self.indices = tuple(np.asarray(idx) for idx in indices)
-        self.name = None
-
-    def apply(self, T, timestep):
-        """
-        Apply the boundary condition to the temperature field.
-
-        Parameters
-        ----------
-        T (jax.numpy.ndarray): Temperature field of shape (nx, ny, 1) in 2D or
-        (nx, ny, nz, 1) in 3D.
-
-        timestep (int): Current timestep, available for time dependent conditions.
-
-        Returns
-        -------
-        jax.numpy.ndarray: Temperature field with the boundary condition applied.
-        """
-        raise NotImplementedError
-
-
-class DirichletTemperature(ThermalBoundaryCondition):
-    """
-    Dirichlet (prescribed temperature) boundary condition: T = T_w at the
-    boundary nodes.
-
-    Parameters
-    ----------
-    indices (tuple of numpy.ndarray): Index arrays of the boundary nodes.
-
-    prescribed (float or numpy.ndarray): Prescribed wall temperature. Either a
-    scalar applied to all nodes or an array of shape (n, 1) with one value per
-    boundary node.
-    """
-
-    def __init__(self, indices, prescribed):
-        super().__init__(indices)
-        self.name = "DirichletTemperature"
-        self.prescribed = prescribed
-
-    def apply(self, T, timestep):
-        return T.at[self.indices].set(self.prescribed)
-
-
-class NeumannTemperature(ThermalBoundaryCondition):
-    """
-    Neumann (prescribed normal temperature gradient) boundary condition,
-    imposed with a first order one-sided difference over unit spacing:
-    T_wall = T_interior + q, where q = dT/dn is the prescribed gradient along
-    the outward normal (q = 0 gives an adiabatic wall).
-
-    Assumes the interior neighbor of every boundary node lies one node along
-    the negated outward normal. Corner nodes shared with a Dirichlet boundary
-    should be listed in the Dirichlet condition as well, appended after this
-    one, so the Dirichlet value takes precedence.
-
-    Parameters
-    ----------
-    indices (tuple of numpy.ndarray): Index arrays of the boundary nodes.
-
-    normal (sequence of int): Outward unit normal of the boundary, e.g. (0, 1)
-    for the top wall in 2D or (0, 0, -1) for the bottom wall in 3D.
-
-    prescribed (float or numpy.ndarray): Prescribed outward normal gradient.
-    Either a scalar or an array of shape (n, 1). Defaults to 0 (adiabatic).
-    """
-
-    def __init__(self, indices, normal, prescribed=0.0):
-        super().__init__(indices)
-        self.name = "NeumannTemperature"
-        self.prescribed = prescribed
-        self.neighbor_indices = tuple(np.asarray(idx) - int(n) for idx, n in zip(self.indices, normal))
-
-    def apply(self, T, timestep):
-        return T.at[self.indices].set(T[self.neighbor_indices] + self.prescribed)
 
 
 class Thermal(object):
@@ -127,33 +33,30 @@ class Thermal(object):
     finite difference solver on the same mesh.
 
     The temperature equation solved is:
-    \\frac{\\partial T}{\\partial t} = -\\mathbf{u} \\cdot \\nabla T +
-    \\frac{1}{\\rho c_v}(\\nabla \\cdot (K \\nabla T) + S_T)
+    \\frac{\\partial T}{\\partial t} = -\\mathbf{u} \\cdot \\nabla T + \\frac{1}{\\rho c_v}(\\nabla \\cdot (K \\nabla T) + S_T)
     where S_T is a user defined source term (see source()).
 
-    Spatial derivatives are evaluated with the isotropic lattice difference
-    stencils in grad_x and laplacian_x and time integration uses the fourth
-    order Runge-Kutta scheme with dt = 1.
+    Spatial derivatives are evaluated with the isotropic lattice difference stencils in grad_x and laplacian_x and time integration
+    uses the fourth order Runge-Kutta scheme with dt = 1.
 
     Parameters
     ----------
-    fluid_solver (LBMBase): Configured fluid solver instance (e.g. BGKSim or
-    MRTSim). Grid, lattice, precision and I/O settings are shared with it.
+    fluid_solver (LBMBase): Configured fluid solver instance (e.g. BGKSim or MRTSim). Grid, lattice, precision and I/O settings are shared with it.
 
-    specific_heat (float or numpy.ndarray): Specific heat c_v. Either a scalar
-    or an array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+    specific_heat (float or numpy.ndarray): Specific heat c_v. Either a scalar or an array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
 
-    thermal_conductivity (float or numpy.ndarray): Thermal conductivity K with
-    the same shape options as specific_heat.
+    thermal_conductivity (float or numpy.ndarray): Thermal conductivity K with the same shape options as specific_heat.
 
-    checkpoint_dir (str, optional): Directory for temperature checkpoints.
-    Defaults to "./temperature_checkpoints".
+    checkpoint_dir (str, optional): Directory for temperature checkpoints. Defaults to "./temperature_checkpoints".
 
-    apply_buoyancy (bool, optional): If True, adds a density variation based
-    buoyancy force to the fluid solver. Defaults to False.
+    apply_buoyancy (bool, optional): If True, adds a density variation based buoyancy force to the fluid solver. Defaults to False.
 
-    gravity (sequence of float, optional): Gravitational acceleration vector,
-    required when apply_buoyancy is True.
+    gravity (sequence of float, optional): Gravitational acceleration vector, required when apply_buoyancy is True.
+
+    rk_substeps (int, optional): Number of Runge-Kutta substeps per LBM step. Defaults to 1.
+    The explicit RK4 diffusion update is stable only if K / (rho c_v) |lambda_max| dt < 2.785,
+    where |lambda_max| is the largest eigenvalue of the lattice laplacian stencil (16/3 for
+    both D2Q9 and D3Q19). Increase rk_substeps when the thermal diffusivity exceeds this limit.
     """
 
     def __init__(self, **kwargs):
@@ -185,6 +88,10 @@ class Thermal(object):
             self.mngr = orb.CheckpointManager(self.checkpointDir, options=mngr_options)
         else:
             self.mngr = None
+
+        self.rkSubsteps = int(kwargs.get("rk_substeps", 1))
+        if self.rkSubsteps < 1:
+            raise ValueError("rk_substeps must be a positive integer.")
 
         self.c_v = kwargs.get("specific_heat")
         self.K = kwargs.get("thermal_conductivity")
@@ -261,6 +168,7 @@ class Thermal(object):
         to a fully periodic temperature field.
         """
         self.thermal_BCs = []
+        return
 
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_bc(self, T, timestep):
@@ -411,13 +319,11 @@ class Thermal(object):
     @partial(jit, static_argnums=(0,), inline=True)
     def laplacian_x(self, field):
         """
-        Compute the laplacian of a scalar field using the isotropic lattice
-        difference stencil:
+        Compute the laplacian of a scalar field using the isotropic lattice difference stencil:
         \\nabla^2 \\phi(x) = \\frac{2}{c_s^2} \\sum_i w_i [\\phi(x + \\mathbf{c}_i) - \\phi(x)]
 
-        Note: streaming wraps periodically at the domain edges. On non-periodic
-        boundaries the affected nodes must be corrected by the thermal boundary
-        conditions.
+        Note: streaming wraps periodically at the domain edges. On non-periodic boundaries the
+        affected nodes must be corrected by the thermal boundary conditions.
 
         Parameters
         ----------
@@ -455,10 +361,6 @@ class Thermal(object):
         Right hand side of the thermal equation:
         -\\mathbf{u} \\cdot \\nabla T + \\frac{1}{\\rho c_v}(K \\nabla^2 T + \\nabla K \\cdot \\nabla T + S_T)
 
-        The advective term is not scaled by 1/(rho c_v); only the diffusive and
-        source terms are, consistent with the temperature form of the energy
-        equation (see reference 1 in the module docstring).
-
         Parameters
         ----------
         T (jax.numpy.ndarray): Temperature field.
@@ -479,15 +381,66 @@ class Thermal(object):
 
         return -advection + (diffusion + self.source(T)) / (rho * self.c_v)
 
+    @partial(jit, static_argnums=(0,), inline=True)
+    def _advance_temperature(self, T, timestep, *fields):
+        """
+        Advance the temperature field by one time unit using rkSubsteps fourth
+        order Runge-Kutta substeps of size dt = 1 / rkSubsteps, holding the
+        macroscopic fields frozen.
+
+        Parameters
+        ----------
+        T (jax.numpy.ndarray): Temperature field.
+
+        timestep (int): Current timestep used by the thermal boundary conditions.
+
+        *fields: Macroscopic fields forwarded to RHS (rho, u for single phase;
+        rho_tree, u_tree for multiphase).
+
+        Returns
+        -------
+        jax.numpy.ndarray: Temperature field advanced by one time unit.
+        """
+        dt = 1.0 / self.rkSubsteps
+        for _ in range(self.rkSubsteps):
+            T = self.apply_bc(T, timestep)
+            k1 = self.RHS(T, *fields)
+            T_stage = self.apply_bc(T + 0.5 * dt * k1, timestep)
+            k2 = self.RHS(T_stage, *fields)
+            T_stage = self.apply_bc(T + 0.5 * dt * k2, timestep)
+            k3 = self.RHS(T_stage, *fields)
+            T_stage = self.apply_bc(T + dt * k3, timestep)
+            k4 = self.RHS(T_stage, *fields)
+            T = T + dt * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+        return self.apply_bc(T, timestep)
+
+    def update_macroscopic_output(self, f, T):
+        """
+        Compute the macroscopic density and velocity used for I/O. Overridden
+        by MultiphaseThermal to include the force correction and pytrees.
+
+        Parameters
+        ----------
+        f (jax.numpy.ndarray): Post-streaming distribution functions.
+
+        T (jax.numpy.ndarray): Temperature field.
+
+        Returns
+        -------
+        rho (jax.numpy.ndarray): Density field.
+
+        u (jax.numpy.ndarray): Velocity field.
+        """
+        return self.fluid_solver.update_macroscopic(f)
+
     @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
     def step(self, T_prev, f_poststreaming, timestep, return_fpost=False):
         """
         This function performs a single step of the hybrid thermal LBM simulation.
 
-        It first advances the fluid solver by one LBM step, then advances the
-        temperature field with the fourth order Runge-Kutta scheme (dt = 1)
-        using the updated macroscopic density and velocity, and finally applies
-        the thermal boundary conditions.
+        It evaluates the macroscopic fields and temperature right hand side at
+        the current time level, then advances the fluid and temperature fields
+        together by one time step.
 
         Parameters
         ----------
@@ -508,15 +461,13 @@ class Thermal(object):
         f_postcollision (jax.numpy.ndarray or None): The post-collision distribution functions after the simulation
         step, or None if return_fpost is False.
         """
-        f_poststreaming, f_postcollision = self.fluid_solver.step(f_poststreaming, timestep, return_fpost=return_fpost)
-        rho, u = self.fluid_solver.update_macroscopic(self.precisionPolicy.cast_to_compute(f_poststreaming))
-
         T = self.precisionPolicy.cast_to_compute(T_prev)
-        k1 = self.RHS(T, rho, u)
-        k2 = self.RHS(T + 0.5 * k1, rho, u)
-        k3 = self.RHS(T + 0.5 * k2, rho, u)
-        k4 = self.RHS(T + k3, rho, u)
-        T = T + (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+        T = self.apply_bc(T, timestep)
+        f_compute = self.precisionPolicy.cast_to_compute(f_poststreaming)
+        rho, u = self.fluid_solver.update_macroscopic(f_compute)
+
+        f_poststreaming, f_postcollision = self.fluid_solver.step(f_poststreaming, timestep, return_fpost=return_fpost)
+        T = self._advance_temperature(T, timestep, rho, u)
 
         T = self.apply_bc(T, timestep)
 
@@ -547,6 +498,9 @@ class Thermal(object):
         """
         T = self.assign_fields_sharded()
         f = self.fluid_solver.assign_fields_sharded()
+        # output_data can set this flag to True to stop the simulation early
+        # (e.g. once a droplet has fully evaporated)
+        self.stop_simulation = False
         start_step = 0
         if self.restore_checkpoint:
             assert self.mngr is not None, "Checkpoint manager does not exist."
@@ -573,9 +527,9 @@ class Thermal(object):
 
             if io_flag:
                 # Save the previous values of the macroscopic fields (for error computation)
-                rho_prev, u_prev = self.fluid_solver.update_macroscopic(f)
-                rho_prev = downsample_field(rho_prev, self.downsamplingFactor)
-                u_prev = downsample_field(u_prev, self.downsamplingFactor)
+                rho_prev, u_prev = self.update_macroscopic_output(f, T)
+                rho_prev = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), rho_prev)
+                u_prev = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), u_prev)
                 T_prev = downsample_field(T, self.downsamplingFactor)
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho_prev = process_allgather(rho_prev)
@@ -598,9 +552,9 @@ class Thermal(object):
             if io_flag:
                 # Save the simulation data
                 print(f"Saving data at timestep {timestep}/{t_max}")
-                rho, u = self.fluid_solver.update_macroscopic(f)
-                rho = downsample_field(rho, self.downsamplingFactor)
-                u = downsample_field(u, self.downsamplingFactor)
+                rho, u = self.update_macroscopic_output(f, T)
+                rho = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), rho)
+                u = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), u)
                 T_out = downsample_field(T, self.downsamplingFactor)
 
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
@@ -610,6 +564,10 @@ class Thermal(object):
 
                 # Save the data
                 self.handle_io_timestep(timestep, f, fstar, T_out, rho, u, T_prev, rho_prev, u_prev)
+
+            if self.stop_simulation:
+                print(f"Stopping the simulation early at timestep {timestep} (requested by output_data).")
+                break
 
             if checkpoint_flag:
                 # Save the checkpoint
@@ -691,3 +649,152 @@ class Thermal(object):
         **kwargs: The simulation data at the current I/O timestep, see handle_io_timestep.
         """
         pass
+
+
+class MultiphaseThermal(Thermal):
+    """
+    Multiphase implementation of the hybrid thermal LBM solver with phase
+    change support. The fluid is advanced by the wrapped Multiphase solver
+    (pytrees of distribution functions, one per component) while a single
+    shared temperature field is advanced by the finite difference solver.
+
+    The temperature equation solved is (reference 1 in the module docstring):
+    \\frac{\\partial T}{\\partial t} = -\\mathbf{u} \\cdot \\nabla T + \\frac{1}{\\rho c_v}(\\nabla \\cdot (K \\nabla T)
+    - T \\frac{\\partial p_{EOS}}{\\partial T} \\nabla \\cdot \\mathbf{u} + S_T)
+
+    where the T (dp_EOS/dT) div(u) term accounts for the latent heat released or absorbed during phase change, rho and u are the mixture density
+    and velocity, and S_T is a user defined source term (see source()).
+
+    The temperature field is passed into the fluid solver every step, so the EOS of the fluid solver must be constructed with
+    temperature_field_type="thermal"; the pressure (and hence the pseudopotential) then follows the local temperature, which is what drives
+    evaporation and condensation.
+
+    Assumes all components share a single temperature field (thermal equilibrium between components at every node).
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.fluid_solver.eos.temperature_field_type != "thermal":
+            raise ValueError('The EOS of the fluid solver must be constructed with temperature_field_type="thermal" for MultiphaseThermal.')
+        if self.apply_buoyancy:
+            raise ValueError("apply_buoyancy is not supported for MultiphaseThermal; use the body_force parameter of the fluid solver instead.")
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def divergence_x(self, u):
+        """
+        Compute the divergence of a vector field using the isotropic lattice
+        difference stencil, by summing the diagonal entries of the gradient of
+        each velocity component.
+
+        Parameters
+        ----------
+        u (jax.numpy.ndarray): Vector field of shape (nx, ny, 2) in 2D or (nx, ny, nz, 3) in 3D.
+
+        Returns
+        -------
+        jax.numpy.ndarray: Divergence of the field, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+        """
+        div_u = jnp.zeros_like(u[..., :1])
+        for alpha in range(self.dim):
+            div_u = div_u + self.grad_x(u[..., alpha : alpha + 1])[..., alpha : alpha + 1]
+        return div_u
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def RHS(self, T, rho_tree, u_tree):
+        """
+        Right hand side of the thermal equation for multiphase flow:
+        -\\mathbf{u} \\cdot \\nabla T + \\frac{1}{\\rho c_v}(K \\nabla^2 T + \\nabla K \\cdot \\nabla T
+        - T \\frac{\\partial p_{EOS}}{\\partial T} \\nabla \\cdot \\mathbf{u} + S_T)
+
+        The mixture (total) density and velocity are used; the phase change
+        term uses the sum of dp_EOS/dT over all components.
+
+        Parameters
+        ----------
+        T (jax.numpy.ndarray): Temperature field.
+
+        rho_tree (pytree of jax.numpy.ndarray): Density field of all components.
+
+        u_tree (pytree of jax.numpy.ndarray): Velocity field of all components.
+
+        Returns
+        -------
+        jax.numpy.ndarray: RHS of the thermal equation, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+        """
+        grad_T = self.grad_x(T)
+        lap_T = self.laplacian_x(T)
+        # Mixture (total) density and velocity
+        rho = self.fluid_solver.compute_total_density(rho_tree)
+        u = self.fluid_solver.compute_total_velocity(rho_tree, u_tree)
+
+        advection = jnp.sum(u * grad_T, axis=-1, keepdims=True)
+        diffusion = self.K * lap_T + jnp.sum(self.grad_K * grad_T, axis=-1, keepdims=True)
+
+        div_u = self.divergence_x(u)
+        dp_eos_dT_tree = self.fluid_solver.eos.dp_eos_dT(rho_tree, T)
+        phase_change = T * reduce(operator.add, dp_eos_dT_tree) * div_u
+
+        return -advection + (diffusion - phase_change + self.source(T)) / (rho * self.c_v)
+
+    @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
+    def step(self, T_prev, f_poststreaming_tree, timestep, return_fpost=False):
+        """
+        This function performs a single step of the multiphase hybrid thermal LBM simulation.
+
+        It evaluates the component fields and temperature right hand side at
+        the current time level, then advances the fluid and temperature fields
+        together by one time step. The current temperature is passed to the
+        thermal EOS used by the fluid collision.
+
+        Parameters
+        ----------
+        T_prev (jax.numpy.ndarray): The temperature field from the previous timestep.
+
+        f_poststreaming_tree (pytree of jax.numpy.ndarray): The post-streaming distribution functions.
+
+        timestep (int): The current timestep of the simulation.
+
+        return_fpost (bool, optional): If True, the function also returns the post-collision distribution functions.
+
+        Returns
+        -------
+        T (jax.numpy.ndarray): The temperature field after the simulation step.
+
+        f_poststreaming_tree (pytree of jax.numpy.ndarray): The post-streaming distribution functions after the simulation step.
+
+        f_postcollision_tree (pytree of jax.numpy.ndarray or None): The post-collision distribution functions after the
+        simulation step, or None if return_fpost is False.
+        """
+        T = self.precisionPolicy.cast_to_compute(T_prev)
+        T = self.apply_bc(T, timestep)
+        f_compute_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), f_poststreaming_tree)
+        rho_tree, _ = self.fluid_solver.update_macroscopic(f_compute_tree)
+        u_tree = self.fluid_solver.macroscopic_velocity(f_compute_tree, rho_tree, T=T)
+
+        f_poststreaming_tree, f_postcollision_tree = self.fluid_solver.step(f_poststreaming_tree, timestep, return_fpost, T)
+        T = self._advance_temperature(T, timestep, rho_tree, u_tree)
+
+        T = self.apply_bc(T, timestep)
+
+        return self.precisionPolicy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree
+
+    def update_macroscopic_output(self, f_tree, T):
+        """
+        Compute the component densities and force-corrected velocities for I/O.
+
+        Parameters
+        ----------
+        f_tree (pytree of jax.numpy.ndarray): Post-streaming distribution functions.
+
+        T (jax.numpy.ndarray): Temperature field.
+
+        Returns
+        -------
+        rho_tree (pytree of jax.numpy.ndarray): Density field of all components.
+
+        u_tree (pytree of jax.numpy.ndarray): Velocity field of all components.
+        """
+        f_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), f_tree)
+        rho_tree, _ = self.fluid_solver.update_macroscopic(f_tree)
+        u_tree = self.fluid_solver.macroscopic_velocity(f_tree, rho_tree, T=self.precisionPolicy.cast_to_compute(T))
+        return rho_tree, u_tree

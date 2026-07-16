@@ -990,9 +990,10 @@ class Multiphase(LBMBase):
             )
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, fin_tree):
+    def collision(self, fin_tree, T=None):
         """
-        Apply collision step of LBM
+        Apply collision step of LBM. The optional temperature field T is used
+        by thermal EOS variants (see compute_pressure).
         """
         pass
 
@@ -1141,7 +1142,7 @@ class Multiphase(LBMBase):
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def macroscopic_velocity(self, f_tree, rho_tree):
+    def macroscopic_velocity(self, f_tree, rho_tree, T=None):
         """
         macroscopic_velocity computes the velocity and incorporates forces into velocity for Exact Difference Method (EDM) (used for SRT and MRT collision) models
         and the consistent forcing scheme developed by LinLin Fei et. al (for Cascaded LBM). This is used for post-processing only and not for equilibrium distribution computation.
@@ -1152,6 +1153,8 @@ class Multiphase(LBMBase):
 
         rho_tree (pytree of jax.numpy.ndarray): Density field.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
@@ -1159,7 +1162,7 @@ class Multiphase(LBMBase):
         # rho_tree = tree_map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
         c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
         u_tree = tree_map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)
-        F_tree = self.compute_force(rho_tree)
+        F_tree = self.compute_force(rho_tree, T=T)
         return tree_map(lambda rho, u, F: u + 0.5 * F / rho, rho_tree, u_tree, F_tree)
 
     @partial(jit, static_argnums=(0,))
@@ -1197,11 +1200,15 @@ class Multiphase(LBMBase):
         return n / d
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree=None):
+    def compute_pressure(self, rho_tree, psi_tree=None, T=None):
         """
         Generalized function for computing pressure. By default it uses equation
         of state but it can be modified if the pseudopotential is computed using
         a different method.
+
+        For a thermal EOS (temperature_field_type == "thermal") the local
+        temperature field T must be provided and the pressure is evaluated with
+        EOS_thermal, coupling the flow to the temperature solver in thermal.py.
 
         Parameters
         ----------
@@ -1209,10 +1216,16 @@ class Multiphase(LBMBase):
 
         psi_tree (pytree of jax.numpy.ndarray): Pseudopotential field.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         (pytree of jax.numpy.ndarray): Pressure field.
         """
+        if self.eos.temperature_field_type == "thermal":
+            if T is None:
+                raise ValueError("Temperature field T must be passed through step/collision when using a thermal EOS.")
+            return self.eos.EOS_thermal(rho_tree, T)
         return self.eos.EOS(rho_tree)
 
     @partial(jit, static_argnums=(0,))
@@ -1233,7 +1246,7 @@ class Multiphase(LBMBase):
         return reduce(operator.add, p_tree)
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         """
         Compute the potential (psi and U) which is required for computing interaction forces.
         The psi values are obtained using the corresponding EOS. This function can be overloaded to handle cases where one or more component does not
@@ -1243,12 +1256,14 @@ class Multiphase(LBMBase):
         ----------
         rho_tree (pytree of jax.numpy.ndarray): Density field.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         psi_tree (pytree of jax.numpy.ndarray): Pseudopotential field.
         """
         rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
-        p_tree = self.compute_pressure(rho_tree)
+        p_tree = self.compute_pressure(rho_tree, T=T)
         # Shan-Chen potential using modified pressure
         psi_tree = tree_map(
             lambda k, p, rho, G: jnp.sqrt(2 * (k * p - self.lattice.cs2 * rho) / G), self.k, p_tree, rho_tree, self.g_kkprime.diagonal().tolist()
@@ -1259,7 +1274,7 @@ class Multiphase(LBMBase):
 
     # Compute the force using the effective mass (psi) and the interaction potential (phi)
     @partial(jit, static_argnums=(0,))
-    def compute_force(self, rho_tree):
+    def compute_force(self, rho_tree, T=None):
         """
         Compute the force acting on each component(fluid). This includes fluid-fluid, fluid-solid, and body forces.
 
@@ -1267,12 +1282,14 @@ class Multiphase(LBMBase):
         ----------
         rho_tree (pytree of jax.numpy.ndarray): Density field.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         fluid_fluid_force (pytree of jax.numpy.ndarray): Total force field.
         """
         rho_tree = self.apply_contact_angle(rho_tree)
-        psi_tree, U_tree = self.compute_potential(rho_tree)
+        psi_tree, U_tree = self.compute_potential(rho_tree, T=T)
         fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree, U_tree)
         # fluid_solid_force = self.compute_fluid_solid_force(rho_tree)
         if self.body_force is not None:
@@ -1365,7 +1382,7 @@ class Multiphase(LBMBase):
     # )
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def apply_force(self, f_postcollision_tree, feq_tree, rho_tree, u_tree):
+    def apply_force(self, f_postcollision_tree, feq_tree, rho_tree, u_tree, T=None):
         """
         Modified version of the apply_force defined in LBMBase to account for modified force.
 
@@ -1379,11 +1396,13 @@ class Multiphase(LBMBase):
 
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         f_postcollision_tree (pytree of jax.numpy.ndarray): The post-collision distribution field with the force applied.
         """
-        F_tree = self.compute_force(rho_tree)
+        F_tree = self.compute_force(rho_tree, T=T)
 
         u_temp_tree = tree_map(lambda u, F, rho: u + F / rho, u_tree, F_tree, rho_tree)
         feq_force_tree = self.equilibrium(rho_tree, u_temp_tree)
@@ -1430,7 +1449,7 @@ class Multiphase(LBMBase):
         return tree_map(lambda fout, fin, BCs: __apply_bc__(fout, fin, BCs), fout_tree, fin_tree, self.BCs)
 
     @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
-    def step(self, f_poststreaming_tree, timestep, return_fpost=False):
+    def step(self, f_poststreaming_tree, timestep, return_fpost=False, T=None):
         """
         This function performs a single step of the LBM simulation.
 
@@ -1450,13 +1469,16 @@ class Multiphase(LBMBase):
 
         return_fpost (bool): Return post-collision distribution function (pytree).
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal
+        (see the hybrid thermal solver in thermal.py).
+
         Returns
         -------
         f_poststreaming_tree (pytree of jax.numpy.ndarray): Post-streamed distribution function.
 
         f_collision_tree (pytree of jax.numpy.ndarray {Optional}): Post-collision distribution function.
         """
-        f_postcollision_tree = self.collision(f_poststreaming_tree)
+        f_postcollision_tree = self.collision(f_poststreaming_tree, T=T)
         f_postcollision_tree = self.apply_bc(f_postcollision_tree, f_poststreaming_tree, timestep, "PostCollision")
         f_poststreaming_tree = tree_map(lambda f_postcollision: self.streaming(f_postcollision), f_postcollision_tree)
         f_poststreaming_tree = self.apply_bc(f_poststreaming_tree, f_postcollision_tree, timestep, "PostStreaming")
@@ -1737,12 +1759,13 @@ class MultiphaseBGK(Multiphase):
         super().__init__(**kwargs)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, fin_tree):
+    def collision(self, fin_tree, T=None):
         """
         BGK collision step for lattice, extended to pytrees.
 
         The collision step is where the main physics of the LBM is applied. In the BGK approximation,
         the distribution function is relaxed towards the equilibrium distribution function.
+        The optional temperature field T is forwarded to the force computation for thermal EOS.
         """
         fin_tree = tree_map(lambda fin: self.precisionPolicy.cast_to_compute(fin), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
@@ -1750,7 +1773,7 @@ class MultiphaseBGK(Multiphase):
         fneq_tree = tree_map(lambda feq, fin: feq - fin, feq_tree, fin_tree)
         fout_tree = tree_map(lambda fin, fneq, omega: fin + omega * fneq, fin_tree, fneq_tree, self.omega)
 
-        fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
+        fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree, T=T)
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
             rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
@@ -1921,7 +1944,7 @@ class MultiphaseMRT(Multiphase):
             raise NotImplementedError("MRT model with D3Q27 model has not been implemented")
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def apply_force(self, m_tree, meq_tree, rho_tree, u_tree):
+    def apply_force(self, m_tree, meq_tree, rho_tree, u_tree, T=None):
         """
         Modified version of the apply_force defined in LBMBase to account for modified force.
 
@@ -1935,11 +1958,13 @@ class MultiphaseMRT(Multiphase):
 
         u_tree (pytree of jax.numpy.ndarray): Velocity field for all components.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         f_postcollision_tree (pytree of jax.numpy.ndarray): Post-collision distribution functions with the force applied.
         """
-        F_tree = self.compute_force(rho_tree)
+        F_tree = self.compute_force(rho_tree, T=T)
 
         delta_u_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
         u_temp_tree = tree_map(lambda u, delta_u: u + delta_u, u_tree, delta_u_tree)
@@ -1949,19 +1974,20 @@ class MultiphaseMRT(Multiphase):
         return mout_tree
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, fin_tree):
+    def collision(self, fin_tree, T=None):
         """
-        MRT collision step for lattice.
+        MRT collision step for lattice. The optional temperature field T is
+        forwarded to the pressure and force computations for thermal EOS.
         """
         fin_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
         m_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
         meq_tree = tree_map(lambda feq, M: jnp.dot(feq, M), feq_tree, self.M)
-        psi_tree, _ = self.compute_potential(rho_tree)
+        psi_tree, _ = self.compute_potential(rho_tree, T=T)
         C_tree = self.adjust_surface_tension(psi_tree)
         mout_tree = tree_map(lambda m, meq, S: m - jnp.dot(m - meq, S), m_tree, meq_tree, self.S)
-        mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree)
+        mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree, T=T)
         fout_tree = tree_map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
@@ -2920,7 +2946,7 @@ class MultiphaseCascade(Multiphase):
         return tree_map(lambda F, sigma, psi, s_b: f(F, sigma, psi, s_b), F_tree, self.sigma, psi_tree, self.s_b)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def apply_force(self, Tdash_tree, rho_tree, u_tree):
+    def apply_force(self, Tdash_tree, rho_tree, u_tree, T=None):
         """
         Modified version of the apply_force defined in LBMBase to account for modified force.
 
@@ -2932,12 +2958,14 @@ class MultiphaseCascade(Multiphase):
 
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
 
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
         Returns
         -------
         f_postcollision_tree (pytree of jax.numpy.ndarray): The post-collision distribution functions with the force applied.
         """
-        F_tree = self.compute_force(rho_tree)
-        psi_tree, _ = self.compute_potential(rho_tree)
+        F_tree = self.compute_force(rho_tree, T=T)
+        psi_tree, _ = self.compute_potential(rho_tree, T=T)
         C_tree = self.compute_force_central_moments(F_tree, psi_tree)
         Tf_tree = tree_map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
         return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
@@ -2971,20 +2999,21 @@ class MultiphaseCascade(Multiphase):
     #     )
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, fin_tree):
+    def collision(self, fin_tree, T=None):
         """
-        Cascaded LBM collision step for lattice.
+        Cascaded LBM collision step for lattice. The optional temperature field
+        T is forwarded to the pressure and force computations for thermal EOS.
         """
         fin_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
         rho_tree, _ = self.update_macroscopic(fin_tree)
-        u_tree = self.macroscopic_velocity(fin_tree, rho_tree)
+        u_tree = self.macroscopic_velocity(fin_tree, rho_tree, T=T)
         T_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         Tdash_tree = self.compute_central_moment(T_tree, u_tree)
         Tdash_eq_tree = self.compute_eq_central_moments(rho_tree)
         Tout_tree = tree_map(
             lambda Tdash, Tdash_eq, S: jnp.dot(Tdash, jnp.eye(self.lattice.q) - S) + jnp.dot(Tdash_eq, S), Tdash_tree, Tdash_eq_tree, self.S
         )
-        Tout_tree = self.apply_force(Tout_tree, rho_tree, u_tree)
+        Tout_tree = self.apply_force(Tout_tree, rho_tree, u_tree, T=T)
         Tout_tree = self.compute_central_moment_inverse(Tout_tree, u_tree)
         fout_tree = tree_map(lambda T, Minv: jnp.dot(T, Minv), Tout_tree, self.M_inv)
         if self.wetting_formulation == "geometric" and self.dim == 3:

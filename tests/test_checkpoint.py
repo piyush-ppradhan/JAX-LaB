@@ -73,7 +73,7 @@ class SinusoidalMultiphaseBGK(MultiphaseBGK):
             velocity_tree.append(velocity)
         return density_tree, velocity_tree
 
-    def compute_force(self, rho_tree):
+    def compute_force(self, rho_tree, T=None):
         return [
             jnp.zeros(
                 (*density.shape[:-1], self.dim),

@@ -37,6 +37,12 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
     Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
 </p>
 <p align="center">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="" width="600">
+</p>
+<p align="center">
+    Vapor generation and departure during a two-dimensional pool-boiling simulation.
+</p>
+<p align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_impact.gif" alt="" width="600">
 </p>
 <p align="center">
@@ -88,8 +94,18 @@ Temporal evolution of the density field determined using neural network for the 
 - Incorporates **Equation of State (EOS)** to model multiphase flows. Currently implemented EOS include **Carnahan-Starling**, **Peng-Robinson**, **Redlich-Kwong**, **Redlich-Kwong-Soave**
 and **VanderWaals**.
 - **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model only).
+
 ### Multicomponent Flow Support
+
 JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any user modification.
+
+### Thermal Flow Modeling
+
+JAX-LaB provides a **hybrid thermal LBM solver** for two- and three-dimensional flows. The fluid is advanced with LBM, while the temperature advection-diffusion equation is solved on the same lattice using isotropic finite-difference stencils and fourth-order Runge-Kutta time integration. The complete fluid-temperature update remains implemented in JAX and supports distributed execution.
+
+- **Single-phase thermal flow:** `Thermal` couples a configured fluid solver to heat transport with constant or spatially varying specific heat and thermal conductivity. User-defined heat sources and buoyancy forcing are supported.
+- **Multiphase thermal flow:** `MultiphaseThermal` couples a shared temperature field to the local equation of state and includes the pressure-work phase-change term. This enables evaporation, condensation and boiling without explicitly tracking the liquid-vapor interface.
+- **Thermal boundary conditions:** Prescribed-temperature (Dirichlet) and prescribed-normal-gradient (Neumann) conditions can be combined with periodic boundaries.
 
 ## Wetting model
 - Wetting behavior of fluids can be modeled using the [geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301) and the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313).

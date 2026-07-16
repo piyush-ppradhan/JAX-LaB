@@ -100,7 +100,7 @@ class MultiphaseTaylorGreenInitialFields:
         density, velocity = _taylor_green_fields(domain, time=0.0)
         return [self.precisionPolicy.cast_to_output(density)], [self.precisionPolicy.cast_to_output(velocity)]
 
-    def compute_force(self, rho_tree):
+    def compute_force(self, rho_tree, T=None):
         return [jnp.zeros((*density.shape[:-1], self.dim), dtype=self.precisionPolicy.compute_dtype) for density in rho_tree]
 
     def adjust_surface_tension(self, psi_tree):

@@ -72,6 +72,7 @@ nav:
     - Boundary Conditions: boundary_conditions.md
     - Models: models.md
     - Multiphase: multiphase.md
+    - Thermal: thermal.md
     - Equations of State: eos.md
     - Lattice: lattice.md
     - Precision Policy: precision_policy.md

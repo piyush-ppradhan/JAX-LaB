@@ -96,7 +96,7 @@ class EOS:
         pass
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def drho_dT(self, rho_tree, T):
+    def dp_eos_dT(self, rho_tree, T):
         pass
 
 
@@ -136,9 +136,9 @@ class VanderWaal(EOS):
         return tree_map(eos, self.a, self.b, self.R, rho_tree)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def drho_dT(self, rho_tree, T):
-        drho_dT = lambda b, R, rho: (rho * R) / (1.0 - b * rho)
-        return tree_map(lambda b, R, rho: drho_dT(b, R, rho), self.b, self.R, rho_tree)
+    def dp_eos_dT(self, rho_tree, T):
+        dpeos_dT = lambda b, R, rho: (rho * R) / (1.0 - b * rho)
+        return tree_map(lambda b, R, rho: dpeos_dT(b, R, rho), self.b, self.R, rho_tree)
 
 
 class Redlich_Kwong(EOS):
@@ -177,9 +177,9 @@ class Redlich_Kwong(EOS):
         return tree_map(eos, self.a, self.b, self.R, rho_tree)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def drho_dT(self, rho_tree, T):
-        drho_dT = lambda a, b, R, rho: (rho * R) / (1.0 - b * rho) + (0.5 * a * rho**2) / ((T**1.5) * (1.0 + b * rho))
-        return tree_map(lambda a, b, R, rho: drho_dT(a, b, R, rho), self.a, self.b, self.R, rho_tree)
+    def dp_eos_dT(self, rho_tree, T):
+        dpeos_dT = lambda a, b, R, rho: (rho * R) / (1.0 - b * rho) + (0.5 * a * rho**2) / ((T**1.5) * (1.0 + b * rho))
+        return tree_map(lambda a, b, R, rho: dpeos_dT(a, b, R, rho), self.a, self.b, self.R, rho_tree)
 
 
 class Redlich_Kwong_Soave(EOS):
@@ -207,6 +207,7 @@ class Redlich_Kwong_Soave(EOS):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.rks_omega = kwargs.get("RKS_omega")
+        self.Tc_tree = tree_map(lambda a, b, R: (a / b) * (0.08664 / 0.42784) / R, self.a, self.b, self.R)
         self.set_alpha()
 
     @property
@@ -221,16 +222,10 @@ class Redlich_Kwong_Soave(EOS):
 
     def set_alpha(self):
         if self.temperature_field_type == "isothermal":
-            Tc_tree = tree_map(
-                lambda a, b, R: (a / b) * (0.08664 / 0.42784) * (1 / R),
-                self.a,
-                self.b,
-                self.R,
-            )
             self.alpha = tree_map(
                 lambda rks_omega, Tc: (1 + (0.480 + 1.574 * rks_omega - 0.176 * rks_omega**2) * (1 - jnp.sqrt(self.T / Tc))) ** 2,
                 self.rks_omega,
-                Tc_tree,
+                self.Tc_tree,
             )
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -240,22 +235,14 @@ class Redlich_Kwong_Soave(EOS):
 
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS_thermal(self, rho_tree, T):
-        self.Tc_tree = tree_map(
-            lambda a, b, R: (a / b) * (0.08664 / 0.42784) * (1 / R),
-            self.a,
-            self.b,
-            self.R,
-        )
         alpha_tree = tree_map(
-            lambda rks_omega, Tc: (1 + (0.480 + 1.574 * rks_omega - 0.176 * rks_omega**2) * (1 - jnp.sqrt(T / Tc))) ** 2,
-            self.rks_omega,
-            self.Tc_tree,
+            lambda rks_omega, Tc: (1 + (0.480 + 1.574 * rks_omega - 0.176 * rks_omega**2) * (1 - jnp.sqrt(T / Tc))) ** 2, self.rks_omega, self.Tc_tree
         )
         eos = lambda a, b, alpha, R, rho: (rho * R * T) / (1.0 - b * rho) - (a * alpha * rho**2) / (1.0 + b * rho)
         return tree_map(eos, self.a, self.b, alpha_tree, self.R, rho_tree)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def drho_dT(self, rho_tree, T):
+    def dp_eos_dT(self, rho_tree, T):
         dalpha_dT = lambda rks_omega, Tc: (
             -1.0
             * (T / Tc) ** 0.5
@@ -263,9 +250,9 @@ class Redlich_Kwong_Soave(EOS):
             * (-0.176 * rks_omega**2 + 1.574 * rks_omega + 0.48)
             / T
         )
-        drho_dT = lambda a, b, R, rho, rks_omega, Tc: (rho * R) / (1.0 - b * rho) - (a * dalpha_dT(rks_omega, Tc) * rho**2) / (1.0 + b * rho)
+        dpeos_dT = lambda a, b, R, rho, rks_omega, Tc: (rho * R) / (1.0 - b * rho) - (a * dalpha_dT(rks_omega, Tc) * rho**2) / (1.0 + b * rho)
         return tree_map(
-            lambda a, b, R, rho, rks_omega, Tc: drho_dT(a, b, R, rho, rks_omega, Tc), self.a, self.b, self.R, rho_tree, self.rks_omega, self.Tc_tree
+            lambda a, b, R, rho, rks_omega, Tc: dpeos_dT(a, b, R, rho, rks_omega, Tc), self.a, self.b, self.R, rho_tree, self.rks_omega, self.Tc_tree
         )
 
 
@@ -294,6 +281,7 @@ class Peng_Robinson(EOS):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.pr_omega = kwargs.get("pr_omega")
+        self.Tc_tree = tree_map(lambda a, b, R: (a / b) * (0.0778 / 0.45724) / R, self.a, self.b, self.R)
         self.set_alpha()
 
     @property
@@ -311,16 +299,10 @@ class Peng_Robinson(EOS):
 
     def set_alpha(self):
         if self.temperature_field_type == "isothermal":
-            Tc_tree = tree_map(
-                lambda a, b, R: (a / b) * (0.0778 / 0.45724) * (1 / R),
-                self.a,
-                self.b,
-                self.R,
-            )
             self.alpha = tree_map(
                 lambda pr_omega, Tc: (1 + (0.37464 + 1.54226 * pr_omega - 0.26992 * pr_omega**2) * (1 - jnp.sqrt(self.T / Tc))) ** 2,
                 self.pr_omega,
-                Tc_tree,
+                self.Tc_tree,
             )
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -330,12 +312,6 @@ class Peng_Robinson(EOS):
 
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS_thermal(self, rho_tree, T):
-        self.Tc_tree = tree_map(
-            lambda a, b, R: (a / b) * (0.0778 / 0.45724) * (1 / R),
-            self.a,
-            self.b,
-            self.R,
-        )
         alpha_tree = tree_map(
             lambda pr_omega, Tc: (1 + (0.37464 + 1.54226 * pr_omega - 0.26992 * pr_omega**2) * (1 - jnp.sqrt(T / Tc))) ** 2,
             self.pr_omega,
@@ -345,7 +321,7 @@ class Peng_Robinson(EOS):
         return tree_map(eos, self.a, self.b, alpha_tree, self.R, rho_tree)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def drho_dT(self, rho_tree, T):
+    def dp_eos_dT(self, rho_tree, T):
         dalpha_dT = lambda pr_omega, Tc: (
             -1.0
             * (T / Tc) ** 0.5
@@ -353,11 +329,11 @@ class Peng_Robinson(EOS):
             * (-0.26992 * pr_omega**2 + 1.54226 * pr_omega + 0.37464)
             / T
         )
-        drho_dT = lambda a, b, R, rho, pr_omega, Tc: (
+        dpeos_dT = lambda a, b, R, rho, pr_omega, Tc: (
             (rho * R) / (1.0 - b * rho) - (a * dalpha_dT(pr_omega, Tc) * rho**2) / (1.0 + 2 * b * rho - b**2 * rho**2)
         )
         return tree_map(
-            lambda a, b, R, rho, pr_omega, Tc: drho_dT(a, b, R, rho, pr_omega, Tc), self.a, self.b, self.R, rho_tree, self.pr_omega, self.Tc_tree
+            lambda a, b, R, rho, pr_omega, Tc: dpeos_dT(a, b, R, rho, pr_omega, Tc), self.a, self.b, self.R, rho_tree, self.pr_omega, self.Tc_tree
         )
 
 
@@ -399,7 +375,7 @@ class Carnahan_Starling(EOS):
         return tree_map(eos, self.a, self.R, rho_tree, x_tree)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def drho_dT(self, rho_tree, T):
+    def dp_eos_dT(self, rho_tree, T):
         x_tree = tree_map(lambda b, rho: 0.25 * b * rho, self.b, rho_tree)
-        drho_dT = lambda x, R, rho: (rho * R) * (1.0 + x + x**2 - x**3) / ((1.0 - x) ** 3)
-        return tree_map(lambda x, R, rho: drho_dT(x, R, rho), x_tree, self.R, rho_tree)
+        dpeos_dT = lambda x, R, rho: (rho * R) * (1.0 + x + x**2 - x**3) / ((1.0 - x) ** 3)
+        return tree_map(lambda x, R, rho: dpeos_dT(x, R, rho), x_tree, self.R, rho_tree)

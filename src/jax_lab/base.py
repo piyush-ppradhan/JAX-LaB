@@ -553,7 +553,7 @@ class LBMBase(object):
         -------
         None, None: The default density and velocity, both None. This indicates that the actual values should be set elsewhere.
         """
-        print("WARNING: Default initial conditions assumed: density = 1, velocity = 0")
+        print("WARNING: Default initial conditions assumed for the fluid: density = 1, velocity = 0")
         print("         To set explicit initial density and velocity, use self.initialize_macroscopic_fields.")
         return None, None
 

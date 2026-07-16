@@ -16,3 +16,9 @@
 
 ::: jax_lab.boundary_conditions.ExtrapolationOutflow
 
+
+::: jax_lab.boundary_conditions.ThermalBoundaryCondition
+
+::: jax_lab.boundary_conditions.DirichletTemperature
+
+::: jax_lab.boundary_conditions.NeumannTemperature

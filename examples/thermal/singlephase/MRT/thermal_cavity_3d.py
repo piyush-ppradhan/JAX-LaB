@@ -13,10 +13,10 @@ import os
 
 import numpy as np
 
-from jax_lab.boundary_conditions import BounceBackHalfway, EquilibriumBC
+from jax_lab.boundary_conditions import BounceBackHalfway, DirichletTemperature, EquilibriumBC, NeumannTemperature
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.models import MRTSim
-from jax_lab.thermal import DirichletTemperature, NeumannTemperature, Thermal
+from jax_lab.thermal import Thermal
 from jax_lab.utils import save_fields_vtk
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_3d")
@@ -138,6 +138,8 @@ if __name__ == "__main__":
         "fluid_solver": fluid,
         "specific_heat": 1.0,
         "thermal_conductivity": 0.05,
+        "apply_buoyancy": True,
+        "gravity": np.array([0.0, -1e-4]),
     }
     sim = ThermalCavity(**thermal_kwargs)
     sim.run(1000)
