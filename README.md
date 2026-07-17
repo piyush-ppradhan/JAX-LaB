@@ -2,90 +2,49 @@
 # JAX-LaB: A Python-based, Accelerated, Differentiable Massively Parallel Lattice Boltzmann Library for Modeling Multiphase and Multiphysics Flows & Physics-Based Machine Learning
 
 JAX-LaB is a fully differentiable, accelerated multiphysics and multiphase 2D/3D Lattice Boltzmann Method (LBM) Python library written in [JAX](https://github.com/google/jax) and it provides a unified workflow for forward and
-inverse modeling of multiphase flows. JAX-LaB is an extension of [XLB](https://github.com/Autodesk/XLB) and adds support multiphase and multiphysics flows to the original library.
+inverse modeling of multiphase flows. 
 
 ## Accompanying Paper
 The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
 
 ## Showcase
-<!-- <p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/capillary_fingering.gif" alt="" width="600">
-</p>
-<p align="center" width="300">
-  Capillary fingering in a channel (multi-component simulation)
-</p>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/capillary_rise.gif" alt="" width="700">
-</p>
-<p align="center" width="300">
-  Capillary rise in parallel plates (single component, multiphase simulation)
-</p> -->
-<!-- <p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="600">
-</p> -->
-<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="370">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="" width="370">
-</p>
-<p align="center">
-    Contact angle hysteresis: Left: droplet impinging on inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="" width="600">
-</p>
-<p align="center">
-    Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="" width="600">
-</p>
-<p align="center">
-    Vapor generation and departure during a two-dimensional pool-boiling simulation.
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_impact.gif" alt="" width="600">
-</p>
-<p align="center">
-  On GPU in-situ rendering using <a href="https://github.com/loliverhennigh/PhantomGaze">PhantomGaze</a> library (no I/O). Droplet impact on dry surface using MRT collision model with ~16 million cells.
-  (single component, multiphase simulation, density ratio: 350, fluid modeled using Peng-Robinson EOS).
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="" width="600">
-</p>
-<p align="center">
-  In-situ GPU rendering of drainage in a porous geometry. BGK collision model, 110 million cells.
-</p>
-<!--<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/car.png" alt="" width="500">
-</p>
-<p align="center">
-<a href=https://www.epc.ed.tum.de/en/aer/research-groups/automotive/drivaer > DrivAer model </a> in a wind-tunnel using KBC Lattice Boltzmann Simulation with approx. 317 million cells
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/building.png" alt="" width="700">
-</p>
-<p align="center">
-  Airflow in to, out of, and within a building (~400 million cells)
-</p>-->
-<p align="center">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="" width="450" title="Evaporation in Fontainebleau sandstone">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="" width="450" title="Drainage Simulation">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/rayleigh_taylor_2d.gif" alt="" height ="253" width="450" title="Rayleigh-Taylor instability">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="" width="450" title="Two-dimensional pool boiling">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="450" title="Contact Angle Hysteresis">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="" width="450" title="Droplet Evaporation">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/predicted.png" alt="" width="1000">
 </p>
 <p align="center">
 Temporal evolution of the density field determined using neural network for the inverse multiphase flow control problem of forming a droplet at t = 900. The MLP output is used as the initial condition for LBM and the backpropagation step during training leverages the auto-differentiation capabilities of JAX-LaB (see <a href="https://doi.org/10.1029/2025MS005313">paper</a> for details).
 </p>
-<br>
+<!-- <p align="center">
+  On GPU in-situ rendering using <a href="https://github.com/loliverhennigh/PhantomGaze">PhantomGaze</a> library (no I/O). Droplet impact on dry surface using MRT collision model with ~16 million cells.
+  (single component, multiphase simulation, density ratio: 350, fluid modeled using Peng-Robinson EOS).
+</p> -->
+<!-- <p align="center">
+  In-situ GPU rendering of drainage in a porous geometry. BGK collision model, 110 million cells.
+</p> -->
+<!-- <p align="center">
+    Contact angle hysteresis: Left: droplet impinging on inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
+</p> -->
+<!-- <p align="center">
+    Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
+</p> -->
+<!-- <p align="center">
+    Vapor generation and departure during a two-dimensional pool-boiling simulation.
+</p> -->
 
 ## Key Features
-- **Integration with JAX Ecosystem:** The library can be easily integrated with JAX's robust ecosystem of machine learning libraries such as [Equinox](https://github.com/patrick-kidger/equinox) [Flax](https://github.com/google/flax), [Haiku](https://github.com/deepmind/dm-haiku), [Optax](https://github.com/deepmind/optax), and many more.
-- **Differentiable LBM Kernels:** JAX-LaB provides differentiable LBM kernels that can be used in differentiable physics and deep learning applications.
-- **Scalability:** JAX-LaB is capable of scaling on distributed multi-GPU systems, enabling the execution of large-scale simulations on hundreds of GPUs with billions of cells.
-- **Support for Various LBM Boundary Conditions and Kernels:** JAX-LaB supports several LBM boundary conditions and collision kernels.
-- **Support for Multiphase, Multiphysics and Multicomponent flows**: JAX-LaB can accurately model multiphysics and multiphase flows using Shan-Chen method, simulating complex interface dynamics without tracking any interface.
-- **User-Friendly Interface:** Written entirely in Python, JAX-LaB emphasizes a highly accessible interface that allows users to extend the library with ease and quickly set up and run new simulations.
-- **Leverages JAX Array and Shardmap:** The library incorporates the new JAX array unified array type and JAX shardmap, providing users with a numpy-like interface. This allows users to focus solely on the semantics, leaving performance optimizations to the compiler.
-- **Platform Versatility:** The same JAX-LaB code can be executed on a variety of platforms including multi-core CPUs, single or multi-GPU systems, TPUs, and it also supports distributed runs on multi-GPU systems or TPU Pod slices.
-- **Visualization:** JAX-LaB provides a variety of visualization options including in-situ on GPU rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze).
+- **JAX Ecosystem Integration:** Works with machine learning libraries such as [Equinox](https://github.com/patrick-kidger/equinox), [Flax](https://github.com/google/flax), [Haiku](https://github.com/deepmind/dm-haiku), and [Optax](https://github.com/google-deepmind/optax).
+- **Differentiable LBM:** Provides differentiable kernels for physics and deep learning applications.
+- **Scalable and Portable:** Runs on multi-core CPUs, GPUs, and TPUs, with distributed support for simulations spanning hundreds of GPUs and billions of cells.
+- **Broad LBM Support:** Includes several boundary conditions and collision kernels, along with Shan-Chen multiphase, multiphysics, and multicomponent flow modeling.
+- **User-Friendly Python Interface:** Makes simulations easy to configure and the library straightforward to extend.
+- **JAX Array and Shardmap:** Offers a NumPy-like interface while leaving performance optimization to the compiler.
+- **Visualization:** Supports multiple output options, including in-situ GPU rendering with [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze).
 
 ## Capabilities
 ### Multiphase Flow Modeling
@@ -96,25 +55,21 @@ and **VanderWaals**.
 - **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model only).
 
 ### Multicomponent Flow Support
-
-JAX-LaB takes advantage of *pytrees* for computation hence, it can **model any number of components** (each with their own equation of state, initial condition and boundary conditions) without any user modification.
+Computations are performed using *pytrees*, that can **model any number of components**, each with their own equation of state, initial condition and boundary conditions without any user modification.
 
 ### Thermal Flow Modeling
+- **Hybrid thermal LBM solver** for two- and three-dimensional **single** and **multiphase & multicomponent** flows. 
+- Thermal equation is solved using lattice-based finite-difference stencils and **fourth-order Runge-Kutta** time integration. 
 
-JAX-LaB provides a **hybrid thermal LBM solver** for two- and three-dimensional flows. The fluid is advanced with LBM, while the temperature advection-diffusion equation is solved on the same lattice using isotropic finite-difference stencils and fourth-order Runge-Kutta time integration. The complete fluid-temperature update remains implemented in JAX and supports distributed execution.
-
-- **Single-phase thermal flow:** `Thermal` couples a configured fluid solver to heat transport with constant or spatially varying specific heat and thermal conductivity. User-defined heat sources and buoyancy forcing are supported.
-- **Multiphase thermal flow:** `MultiphaseThermal` couples a shared temperature field to the local equation of state and includes the pressure-work phase-change term. This enables evaporation, condensation and boiling without explicitly tracking the liquid-vapor interface.
-- **Thermal boundary conditions:** Prescribed-temperature (Dirichlet) and prescribed-normal-gradient (Neumann) conditions can be combined with periodic boundaries.
-
-## Wetting model
-- Wetting behavior of fluids can be modeled using the [geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301) and the [improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313).
+### Wetting model
+- [Geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301)
+- [Improved virtual density scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.100.053313)
 
 
 ### Collision Models
 - **BGK**
 - **Multi-Relaxation Time (MRT)**
-- **Cascaded Model**
+- **Cascaded (Central Moment)**
 - **KBC**
 
 ### Lattice
@@ -123,7 +78,6 @@ JAX-LaB provides a **hybrid thermal LBM solver** for two- and three-dimensional 
 - D3Q27
 
 ### Machine Learning
-
 - Easy integration with JAX's ecosystem of machine learning libraries
 - Differentiable LBM kernels both for single and multiphase flows
 - Differentiable boundary conditions
@@ -133,7 +87,6 @@ JAX-LaB provides a **hybrid thermal LBM solver** for two- and three-dimensional 
 - Mixed-Precision support (store vs compute)
 
 ### Output
-
 - Binary and ASCII VTK output (based on [PyVista](https://docs.pyvista.org/) library)
 - HDF5/XDMF output (based on [h5py](https://docs.h5py.org/)) to maximize I/O speed and minimize storage requirement
 - In-situ rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze) library
@@ -141,24 +94,18 @@ JAX-LaB provides a **hybrid thermal LBM solver** for two- and three-dimensional 
 - Image Output
 - 3D mesh voxelizer using [trimesh](https://trimesh.org/)
 
-### Boundary conditions
-
-- **Equilibrium BC:** In this boundary condition, the fluid populations are assumed to be in at equilibrium. Can be used to set prescribed velocity or pressure.
-
-- **Full-Way Bounceback BC:** In this boundary condition, the velocity of the fluid populations is reflected back to the fluid side of the boundary, resulting in zero fluid velocity at the boundary.
-
-- **Half-Way Bounceback BC:** Similar to the Full-Way Bounceback BC, in this boundary condition, the velocity of the fluid populations is partially reflected back to the fluid side of the boundary, resulting in a non-zero fluid velocity at the boundary.
-
-- **Do Nothing BC:** In this boundary condition, the fluid populations are allowed to pass through the boundary without any reflection or modification.
-
-- **Zouhe BC:** This boundary condition is used to impose a prescribed velocity or pressure profile at the boundary.
-- **Regularized BC:** This boundary condition is used to impose a prescribed velocity or pressure profile at the boundary. This BC is more stable than ZouHe BC, but computationally more expensive.
-- **Extrapolation Outflow BC:** A type of outflow boundary condition that uses extrapolation to avoid strong wave reflections.
-
-- **Interpolated Bounceback BC:** Interpolated bounce-back boundary condition due to Bouzidi for a lattice Boltzmann method simulation.
-
-- **Convective Outflow BC**: Convective outflow boundary condition, useful for porous media flows.
-
+### Boundary Conditions
+- **Equilibrium:** Sets prescribed velocity or pressure using equilibrium populations.
+- **Full-Way Bounceback:** Reflects populations to impose a stationary, no-slip wall.
+- **Half-Way Bounceback:** Imposes a no-slip wall halfway between fluid and solid nodes.
+- **Do Nothing:** Allows populations to pass through unmodified.
+- **Zou-He:** Imposes a prescribed velocity or pressure profile.
+- **Regularized:** Provides a more stable, but more expensive, alternative to Zou-He.
+- **Extrapolation Outflow:** Reduces wave reflections using extrapolation.
+- **Interpolated Bounceback:** Applies the Bouzidi scheme to curved or off-lattice walls.
+- **Convective Outflow:** Supports outflow in applications such as porous media flow.
+- **Dirichlet:** Prescribes temperature at the boundary.
+- **Neumann:** Prescribes the normal temperature gradient.
 
 ## Installation Guide
 
@@ -168,7 +115,6 @@ pip install jax-lab
 ```
 
 ### Accelerator support
-
 Hardware acceleration is selected through dependency extras, which delegate the compiled backend packages to [JAX's own extras](https://docs.jax.dev/en/latest/installation.html):
 ```bash
 pip install "jax-lab[cuda13]"   # NVIDIA GPU (CUDA 13, bundled)
