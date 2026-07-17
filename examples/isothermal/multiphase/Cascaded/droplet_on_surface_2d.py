@@ -16,7 +16,7 @@ from jax import jit, config
 from jax.tree import map as tree_map
 
 from jax_lab.boundary_conditions import BounceBack, ExactNonEquilibriumExtrapolation
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.lattice import LatticeD2Q9, LatticeD3Q19
 from jax_lab.multiphase import MultiphaseCascade
 from jax_lab.utils import save_fields_vtk
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     T = 0.86 * Tc
 
     kwargs = {"a": a, "b": b, "pr_omega": [0.344, 1], "R": R, "T": T}
-    eos = Peng_Robinson(**kwargs)
+    eos = PengRobinson(**kwargs)
 
     s2 = 0.8  # This sets the kinematic viscosity
     s_0 = [1.0, 1.0]  # Mass conservation

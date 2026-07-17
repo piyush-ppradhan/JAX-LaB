@@ -1,4 +1,5 @@
 import importlib
+import logging
 import os
 import re
 import warnings
@@ -11,6 +12,8 @@ from jax import jit
 from jax.image import resize
 from pathlib import Path
 from termcolor import colored
+
+logger = logging.getLogger(__name__)
 
 
 def _import_optional(module_name, feature):
@@ -811,9 +814,9 @@ def save_fields_hdf5_xdmf(
 
     elapsed = time() - start
     if xdmf_path is None:
-        print(f"Saved {h5_path} in {elapsed:.6f} seconds.")
+        logger.info(f"Saved {h5_path} in {elapsed:.6f} seconds.")
     else:
-        print(f"Saved {h5_path} and {xdmf_path} in {elapsed:.6f} seconds.")
+        logger.info(f"Saved {h5_path} and {xdmf_path} in {elapsed:.6f} seconds.")
 
     return h5_path, xdmf_path
 
@@ -857,7 +860,7 @@ def save_fields_vtk(timestep, fields, output_dir=".", prefix="fields"):
             assert value.shape == dimensions, "All fields must have the same dimensions!"
 
     if not os.path.exists(output_dir):
-        print(colored("Directory does not exist, creating the directory " + output_dir, "yellow"))
+        logger.info(colored("Directory does not exist, creating the directory " + output_dir, "yellow"))
         os.makedirs(output_dir, exist_ok=True)
 
     output_filename = os.path.join(output_dir, prefix + "_" + f"{timestep:07d}.vtk")
@@ -878,7 +881,7 @@ def save_fields_vtk(timestep, fields, output_dir=".", prefix="fields"):
     # Save the grid to a VTK file
     start = time()
     grid.save(output_filename, binary=True)
-    print(f"Saved {output_filename} in {time() - start:.6f} seconds.")
+    logger.info(f"Saved {output_filename} in {time() - start:.6f} seconds.")
 
 
 def live_volume_rendering(timestep, field):
@@ -1004,7 +1007,7 @@ def save_BCs_vtk(timestep, BCs, gridInfo, output_dir="."):
 
     start = time()
     grid.save(output_filename, binary=True)
-    print(f"Saved {output_filename} in {time() - start:.6f} seconds.")
+    logger.info(f"Saved {output_filename} in {time() - start:.6f} seconds.")
 
 
 def rotate_geometry(indices, origin, axis, angle):

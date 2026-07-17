@@ -16,7 +16,7 @@ import numpy as np
 from jax_lab.boundary_conditions import BounceBackHalfway
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.utils import save_fields_vtk
 
 import matplotlib.pyplot as plt
@@ -185,7 +185,7 @@ if __name__ == "__main__":
     T = 0.7 * Tc
 
     kwargs = {"a": a, "b": b, "R": R, "pr_omega": pr_omega, "T": T}
-    eos = Peng_Robinson(**kwargs)
+    eos = PengRobinson(**kwargs)
 
     theta = (12 * np.pi / 180) * np.ones((nx, ny, nz, 1))
     phi = 1.05 * np.ones((nx, ny, nz, 1))

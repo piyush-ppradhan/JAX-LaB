@@ -17,7 +17,7 @@ import numpy as np
 from jax import config
 
 from jax_lab.boundary_conditions import DirichletTemperature
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseMRT
 from jax_lab.thermal import MultiphaseThermal
@@ -268,7 +268,7 @@ if __name__ == "__main__":
 
         rho_vapor_far = float(vapor_density_at_pressure(T_vap, p_sat))
         rk_substeps = max(1, int(np.ceil((K / (rho_vapor_far * specific_heat)) * lambda_max / 2.5)))
-        eos = Peng_Robinson(a=[a], b=[b], R=[R], pr_omega=[pr_omega], temperature_field_type="thermal")
+        eos = PengRobinson(a=[a], b=[b], R=[R], pr_omega=[pr_omega], temperature_field_type="thermal")
         kwargs = {
             "n_components": 1,
             "lattice": LatticeD3Q19(precision),

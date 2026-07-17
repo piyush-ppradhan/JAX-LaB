@@ -12,9 +12,13 @@ except PackageNotFoundError:
     __version__ = "0.0.0"
 
 from .eos import (
+    CarnahanStarling,
     EOS,
     Carnahan_Starling,
+    PengRobinson,
     Peng_Robinson,
+    RedlichKwong,
+    RedlichKwongSoave,
     Redlich_Kwong,
     Redlich_Kwong_Soave,
     VanderWaals,
@@ -33,8 +37,12 @@ __all__ = [
     "Thermal",
     "__version__",
     "EOS",
+    "CarnahanStarling",
     "Carnahan_Starling",
+    "PengRobinson",
     "Peng_Robinson",
+    "RedlichKwong",
+    "RedlichKwongSoave",
     "Redlich_Kwong",
     "Redlich_Kwong_Soave",
     "VanderWaals",

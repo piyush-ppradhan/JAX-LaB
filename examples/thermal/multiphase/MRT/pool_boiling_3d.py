@@ -19,7 +19,7 @@ from jax.tree import map as tree_map
 from jax.tree import reduce
 
 from jax_lab.boundary_conditions import BounceBackHalfway, DirichletTemperature
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseMRT
 from jax_lab.thermal import MultiphaseThermal
@@ -275,7 +275,7 @@ if __name__ == "__main__":
     M[17, :] = (e[:, 2] ** 2 - e[:, 0] ** 2) * e[:, 1]
     M[18, :] = (e[:, 0] ** 2 - e[:, 1] ** 2) * e[:, 2]
 
-    eos = Peng_Robinson(
+    eos = PengRobinson(
         a=[a],
         b=[b],
         R=[R],

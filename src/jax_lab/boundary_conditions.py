@@ -1,3 +1,4 @@
+import warnings
 from functools import partial
 
 import jax.numpy as jnp
@@ -33,13 +34,13 @@ class BoundaryCondition(object):
 
     name (str or None): The name of the boundary condition. This should be set in subclasses.
 
-    isSolid (bool): Whether the boundary condition is for a solid boundary. This should be set in subclasses.
+    is_solid (bool): Whether the boundary condition is for a solid boundary. This should be set in subclasses.
 
-    isDynamic (bool): Whether the boundary condition is dynamic (changes over time). This should be set in subclasses.
+    is_dynamic (bool): Whether the boundary condition is dynamic (changes over time). This should be set in subclasses.
 
-    needsExtraConfiguration (bool): Whether the boundary condition requires extra configuration. This should be set in subclasses.
+    needs_extra_configuration (bool): Whether the boundary condition requires extra configuration. This should be set in subclasses.
 
-    implementationStep (str): The step in the lattice Boltzmann method algorithm at which the boundary condition is applied. This should be set in subclasses.
+    implementation_step (str): The lattice Boltzmann algorithm step at which the boundary condition is applied.
     """
 
     def __init__(self, indices, gridInfo, precision_policy):
@@ -55,6 +56,51 @@ class BoundaryCondition(object):
         self.isDynamic = False
         self.needsExtraConfiguration = False
         self.implementationStep = "PostStreaming"
+
+    @property
+    def precision_policy(self):
+        """Return the compute and output precision policy."""
+        return self.precisionPolicy
+
+    @precision_policy.setter
+    def precision_policy(self, value):
+        self.precisionPolicy = value
+
+    @property
+    def is_solid(self):
+        """Return whether this condition represents a solid boundary."""
+        return self.isSolid
+
+    @is_solid.setter
+    def is_solid(self, value):
+        self.isSolid = value
+
+    @property
+    def is_dynamic(self):
+        """Return whether this condition changes with time."""
+        return self.isDynamic
+
+    @is_dynamic.setter
+    def is_dynamic(self, value):
+        self.isDynamic = value
+
+    @property
+    def needs_extra_configuration(self):
+        """Return whether this condition requires configuration."""
+        return self.needsExtraConfiguration
+
+    @needs_extra_configuration.setter
+    def needs_extra_configuration(self, value):
+        self.needsExtraConfiguration = value
+
+    @property
+    def implementation_step(self):
+        """Return the algorithm step at which this condition is applied."""
+        return self.implementationStep
+
+    @implementation_step.setter
+    def implementation_step(self, value):
+        self.implementationStep = value
 
     def create_local_mask_and_normal_arrays(self, grid_mask):
         """
@@ -232,9 +278,11 @@ class BoundaryCondition(object):
 
         Parameters
         ----------
-        fout (jax.numpy.ndarray: The output distribution functions.
+        fout : jax.Array
+            Output distribution functions.
 
-        fin : jax.numpy.ndarray): The input distribution functions.
+        fin : jax.Array
+            Input distribution functions.
 
         Returns
         -------
@@ -514,7 +562,11 @@ class BounceBackHalfway(BoundaryCondition):
         if (nbd_orig != nbd_modified) and self.vel is not None:
             vel_avg = np.mean(self.vel, axis=0)
             self.vel = jnp.zeros(indices_new.shape, dtype=self.precisionPolicy.compute_dtype) + vel_avg
-            print("WARNING: assuming a constant averaged velocity vector is imposed at all BC cells!")
+            warnings.warn(
+                "A constant averaged velocity vector is imposed at all boundary cells.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         return
 
@@ -1425,10 +1477,6 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
             g1 = 1/3 and g2 = 1/12
         For D3Q19
             g1 = 1/6 and g2 = 1/12
-
-        Parameters
-        ----------
-        None
 
         Returns
         -------

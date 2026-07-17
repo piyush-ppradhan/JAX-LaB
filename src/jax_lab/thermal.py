@@ -8,9 +8,10 @@ References
 Physics of Fluids 32, 103312 (2020).
 """
 
+import logging
 import operator
-
 import time
+import warnings
 from functools import partial
 
 import jax
@@ -24,6 +25,8 @@ from jax.experimental.multihost_utils import process_allgather
 from termcolor import colored
 
 from .utils import downsample_field
+
+logger = logging.getLogger(__name__)
 
 
 class Thermal(object):
@@ -206,8 +209,11 @@ class Thermal(object):
         None
             Sentinel requesting the default uniform temperature.
         """
-        print("WARNING: Default initial condition assumed: temperature = 1")
-        print("         Override initialize_temperature_field to set an explicit initial temperature.")
+        warnings.warn(
+            "Default initial temperature assumed: temperature = 1. Override initialize_temperature_field to set an explicit value.",
+            UserWarning,
+            stacklevel=2,
+        )
         return None
 
     @partial(jit, static_argnums=(0, 1, 2, 4))
@@ -510,7 +516,7 @@ class Thermal(object):
                 try:
                     T = self.mngr.restore(latest_step, args=orb.args.StandardRestore({"T": T}))["T"]
                     f = self.fluid_solver.mngr.restore(latest_step, args=orb.args.StandardRestore({"f": f}))["f"]
-                    print(f"Restored checkpoint at step {latest_step}.")
+                    logger.info(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")
 
@@ -542,7 +548,7 @@ class Thermal(object):
 
             # Print the progress of the simulation
             if print_iter_flag:
-                print(
+                logger.info(
                     colored("Timestep ", "blue")
                     + colored(f"{timestep}", "green")
                     + colored(" of ", "blue")
@@ -552,7 +558,7 @@ class Thermal(object):
 
             if io_flag:
                 # Save the simulation data
-                print(f"Saving data at timestep {timestep}/{t_max}")
+                logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho, u = self.update_macroscopic_output(f, T)
                 rho = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), rho)
                 u = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), u)
@@ -567,12 +573,12 @@ class Thermal(object):
                 self.handle_io_timestep(timestep, f, fstar, T_out, rho, u, T_prev, rho_prev, u_prev)
 
             if self.stop_simulation:
-                print(f"Stopping the simulation early at timestep {timestep} (requested by output_data).")
+                logger.info(f"Stopping the simulation early at timestep {timestep} (requested by output_data).")
                 break
 
             if checkpoint_flag:
                 # Save the checkpoint
-                print(f"Saving checkpoint at timestep {timestep}/{t_max}")
+                logger.info(f"Saving checkpoint at timestep {timestep}/{t_max}")
                 self.mngr.save(timestep, args=orb.args.StandardSave({"T": T}))
                 if self.fluid_solver.mngr is not None:
                     self.fluid_solver.mngr.save(timestep, args=orb.args.StandardSave({"f": f}))
@@ -590,9 +596,9 @@ class Thermal(object):
             end = time.time()
             n_voxels = self.nx * self.ny if self.dim == 2 else self.nx * self.ny * self.nz
             domain = f"{self.nx} x {self.ny}" if self.dim == 2 else f"{self.nx} x {self.ny} x {self.nz}"
-            print(colored("Domain: ", "blue") + colored(domain, "green"))
-            print(colored("Number of voxels: ", "blue") + colored(f"{n_voxels}", "green"))
-            print(colored("MLUPS: ", "blue") + colored(f"{n_voxels * t_max / (end - start) / 1e6}", "red"))
+            logger.info(colored("Domain: ", "blue") + colored(domain, "green"))
+            logger.info(colored("Number of voxels: ", "blue") + colored(f"{n_voxels}", "green"))
+            logger.info(colored("MLUPS: ", "blue") + colored(f"{n_voxels * t_max / (end - start) / 1e6}", "red"))
 
         if self.mngr is not None:
             self.mngr.wait_until_finished()

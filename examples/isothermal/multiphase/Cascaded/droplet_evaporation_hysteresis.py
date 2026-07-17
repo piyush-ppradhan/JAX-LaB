@@ -23,7 +23,7 @@ from jax.tree import map as tree_map
 from skimage.measure import find_contours
 
 from jax_lab.boundary_conditions import BounceBack, ExtrapolationOutflowMultiphase
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseCascade
 from jax_lab.utils import save_fields_hdf5_xdmf
@@ -240,7 +240,7 @@ if __name__ == "__main__":
     s_4 = [1.0]
 
     g_kkprime = -1 * np.ones((1, 1))
-    eos = Peng_Robinson(a=[3 / 49], b=[2 / 21], pr_omega=[0.344], R=[1.0], T=0.86 * 0.1093785558)
+    eos = PengRobinson(a=[3 / 49], b=[2 / 21], pr_omega=[0.344], R=[1.0], T=0.86 * 0.1093785558)
     theta_wall = prescribed_contact_angle * np.ones((nx, ny, nz, 1))
 
     subprocess.run(["rm", "-rf", output_dir], check=True)

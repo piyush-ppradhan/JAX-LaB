@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from jax_lab.boundary_conditions import BounceBack
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseMRT
 from jax_lab.utils import save_fields_hdf5_xdmf
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     b = 2 / 21
     Tc = 0.1093785558
     T = 0.86 * Tc
-    eos = Peng_Robinson(a=a, b=b, pr_omega=0.344, R=1.0, T=T)
+    eos = PengRobinson(a=a, b=b, pr_omega=0.344, R=1.0, T=T)
     rho_g = 0.379598891
     rho_l = 6.499210784
     interface_level = 0.5 * (rho_l + rho_g)

@@ -1,33 +1,25 @@
-# Standard Libraries
+"""Singlephase lattice Boltzmann simulation structure, later modified for multiphase implementation."""
+
+import logging
 import os
 import time
-
-# functools imports
+import warnings
 from functools import partial
 
-# Third-Party Libraries
 import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as orb
-
-# JAX-related imports
 from jax import jit, lax, vmap, shard_map
 from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
-
-# from jax.experimental.shard_map import shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from termcolor import colored
 
-# Local/Custom Libraries
 from .precision_policy import PrecisionPolicy
 from .utils import downsample_field
 
-# jax.config.update("jax_spmd_mode", "allow_all") # Only needed for JAX versions <= 0.6.0
-
-# Disables annoying TF warnings
-# os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+logger = logging.getLogger(__name__)
 
 
 class LBMBase(object):
@@ -93,7 +85,11 @@ class LBMBase(object):
 
         # Check for distributed mode
         if self.nDevices > jax.local_device_count():
-            print("WARNING: Running in distributed mode. Make sure that jax.distributed.initialize is called before performing any JAX computations.")
+            warnings.warn(
+                "Running in distributed mode. Call jax.distributed.initialize before performing JAX computations.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         self.c = self.lattice.c
         self.q = self.lattice.q
@@ -118,9 +114,10 @@ class LBMBase(object):
         self.nx = nx
         if nx % self.nDevices:
             self.nx = nx + (self.nDevices - nx % self.nDevices)
-            print(
-                colored("WARNING: nx increased from {} to {} in order to accommodate domain sharding per XLA device.".format(nx, self.nx)),
-                "yellow",
+            warnings.warn(
+                f"nx increased from {nx} to {self.nx} to accommodate domain sharding per XLA device.",
+                RuntimeWarning,
+                stacklevel=2,
             )
         self.ny = ny
         self.nz = nz
@@ -462,17 +459,17 @@ class LBMBase(object):
         }
         simulation_name = self.__class__.__name__
 
-        print(colored(f"**** Simulation Parameters for {simulation_name} ****", "green"))
+        logger.info(colored(f"**** Simulation Parameters for {simulation_name} ****", "green"))
 
         header = f"{colored('Parameter', 'blue'):>30} | {colored('Value', 'yellow')}"
-        print(header)
-        print("-" * 50)
+        logger.info(header)
+        logger.info("-" * 50)
 
         for attr in attributes_to_show:
             value = getattr(self, attr, "Attribute not set")
             descriptive_name = descriptive_names.get(attr, attr)  # Use the attribute name as a fallback
             row = f"{colored(descriptive_name, 'blue'):>30} | {colored(value, 'yellow')}"
-            print(row)
+            logger.info(row)
 
     def _create_boundary_data(self):
         """
@@ -489,13 +486,13 @@ class LBMBase(object):
         # Create the grid mask on each process
         start = time.time()
         grid_mask = self.create_grid_mask(solid_halo_voxels)
-        print("Time to create the grid mask:", time.time() - start)
+        logger.info("Time to create the grid mask: %.6f seconds", time.time() - start)
 
         start = time.time()
         for bc in self.BCs:
             assert bc.implementationStep in ["PostStreaming", "PostCollision"]
             bc.create_local_mask_and_normal_arrays(grid_mask)
-        print("Time to create the local masks and normal arrays:", time.time() - start)
+        logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
     @partial(jit, static_argnums=(0, 1, 2, 4))
     def distributed_array_init(self, shape, ttype, init_val=0, sharding=None):
@@ -645,8 +642,11 @@ class LBMBase(object):
         -------
         None, None: The default density and velocity, both None. This indicates that the actual values should be set elsewhere.
         """
-        print("WARNING: Default initial conditions assumed for the fluid: density = 1, velocity = 0")
-        print("         To set explicit initial density and velocity, use self.initialize_macroscopic_fields.")
+        warnings.warn(
+            "Default fluid initial conditions assumed: density = 1 and velocity = 0. Override initialize_macroscopic_fields to set explicit values.",
+            UserWarning,
+            stacklevel=2,
+        )
         return None, None
 
     def assign_fields_sharded(self):
@@ -659,10 +659,6 @@ class LBMBase(object):
 
         If the density or velocity are not provided, the function initializes the distribution functions with a default
         value (self.w), representing density=1 and velocity=0. Otherwise, it uses the provided density and velocity to initialize the populations.
-
-        Parameters
-        ----------
-        None
 
         Returns
         -------
@@ -990,7 +986,7 @@ class LBMBase(object):
                 try:
                     # f = self.mngr.restore(latest_step, restore_kwargs={'restore_args': restore_args})['f']
                     f = self.mngr.restore(latest_step, args=orb.args.StandardRestore(state))["f"]
-                    print(f"Restored checkpoint at step {latest_step}.")
+                    logger.info(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")
 
@@ -1018,7 +1014,7 @@ class LBMBase(object):
             f, fstar = self.step(f, timestep, return_fpost=self.returnFpost)
             # Print the progress of the simulation
             if print_iter_flag:
-                print(
+                logger.info(
                     colored("Timestep ", "blue")
                     + colored(f"{timestep}", "green")
                     + colored(" of ", "blue")
@@ -1028,7 +1024,7 @@ class LBMBase(object):
 
             if io_flag:
                 # Save the simulation data
-                print(f"Saving data at timestep {timestep}/{t_max}")
+                logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho, u = self.update_macroscopic(f)
                 rho = downsample_field(rho, self.downsamplingFactor)
                 u = downsample_field(u, self.downsamplingFactor)
@@ -1042,7 +1038,7 @@ class LBMBase(object):
 
             if checkpoint_flag:
                 # Save the checkpoint
-                print(f"Saving checkpoint at timestep {timestep}/{t_max}")
+                logger.info(f"Saving checkpoint at timestep {timestep}/{t_max}")
                 state = {"f": f}
                 # self.mngr.save(timestep, state)
                 self.mngr.save(timestep, args=orb.args.StandardSave(state))
@@ -1057,22 +1053,22 @@ class LBMBase(object):
             jax.block_until_ready(f)
             end = time.time()
             if self.dim == 2:
-                print(
+                logger.info(
                     colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny}", "green")
                     if self.dim == 2
                     else colored(f"{self.nx} x {self.ny} x {self.nz}", "green")
                 )
-                print(
+                logger.info(
                     colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny}", "green")
                     if self.dim == 2
                     else colored(f"{self.nx * self.ny * self.nz}", "green")
                 )
-                print(colored("MLUPS: ", "blue") + colored(f"{self.nx * self.ny * t_max / (end - start) / 1e6}", "red"))
+                logger.info(colored("MLUPS: ", "blue") + colored(f"{self.nx * self.ny * t_max / (end - start) / 1e6}", "red"))
 
             elif self.dim == 3:
-                print(colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny} x {self.nz}", "green"))
-                print(colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny * self.nz}", "green"))
-                print(
+                logger.info(colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny} x {self.nz}", "green"))
+                logger.info(colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny * self.nz}", "green"))
+                logger.info(
                     colored("MLUPS: ", "blue")
                     + colored(
                         f"{self.nx * self.ny * self.nz * t_max / (end - start) / 1e6}",

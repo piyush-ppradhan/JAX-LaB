@@ -1,13 +1,6 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 # JAX-LaB: A Python-based, Accelerated, Differentiable Massively Parallel Lattice Boltzmann Library for Modeling Multiphase and Multiphysics Flows & Physics-Based Machine Learning
 
-JAX-LaB is a fully differentiable, accelerated multiphysics and multiphase 2D/3D Lattice Boltzmann Method (LBM) Python library written in [JAX](https://github.com/google/jax) and it provides a unified workflow for forward and
-inverse modeling of multiphase flows. 
-
-## Accompanying Paper
-The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
-
-## Showcase
 <div align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="" width="49%" title="Evaporation in Fontainebleau sandstone">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="" width="49%" title="Drainage Simulation">
@@ -21,7 +14,7 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="" width="49%" title="Droplet Evaporation">
 </div>
 <div align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/predicted.png" alt="" width="98%">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/predicted.png" alt="" width="98.5%">
 </div>
 
 <div align="center">
@@ -62,11 +55,11 @@ and **VanderWaals**.
 - **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model only).
 
 ### Multicomponent Flow Support
-Computations are performed using *pytrees*, that can **model any number of components**, each with their own equation of state, initial condition and boundary conditions without any user modification.
+Computations use *pytrees* to **model any number of components**, each with its own equation of state, initial condition, and boundary conditions, without requiring library modifications.
 
 ### Thermal Flow Modeling
-- **Hybrid thermal LBM solver** for two- and three-dimensional **single** and **multiphase & multicomponent** flows. 
-- Thermal equation is solved using lattice-based finite-difference stencils and **fourth-order Runge-Kutta** time integration. 
+- **Hybrid thermal LBM solver** for two- and three-dimensional **single-phase, multiphase, and multicomponent** flows.
+- Thermal equation is solved using lattice-based finite-difference stencils and **fourth-order Runge-Kutta** time integration.
 
 ### Wetting model
 - [Geometric wetting scheme](https://journals.aps.org/pre/abstract/10.1103/PhysRevE.87.013301)
@@ -113,6 +106,10 @@ Computations are performed using *pytrees*, that can **model any number of compo
 - **Convective Outflow:** Supports outflow in applications such as porous media flow.
 - **Dirichlet:** Prescribes temperature at the boundary.
 - **Neumann:** Prescribes the normal temperature gradient.
+
+## Accompanying Paper
+
+The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
 
 ## Installation Guide
 

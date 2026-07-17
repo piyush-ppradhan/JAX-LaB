@@ -16,7 +16,7 @@ import subprocess
 import numpy as np
 
 from jax_lab.lattice import LatticeD3Q19
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.multiphase import MultiphaseMRT
 from jax_lab.boundary_conditions import BounceBack
 from jax_lab.utils import save_fields_vtk
@@ -465,7 +465,7 @@ if __name__ == "__main__":
     A[1, 1] = A_kk
 
     kwargs = {"a": a, "b": b, "pr_omega": pr_omega, "R": R, "T": T}
-    eos = Peng_Robinson(**kwargs)
+    eos = PengRobinson(**kwargs)
 
     for r in [25, 30, 35, 40, 45, 50]:
         kwargs = {

@@ -14,7 +14,7 @@ from jax import config
 
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.boundary_conditions import BounceBack
 from jax_lab.utils import save_fields_vtk
 
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     Tc = 0.1093785558
     T = 0.86 * Tc
     kwargs = {"a": a, "b": b, "pr_omega": 0.344, "R": 1.0, "T": T}
-    eos = Peng_Robinson(**kwargs)
+    eos = PengRobinson(**kwargs)
     rho_g = 0.379598891
     rho_l = 6.499210784
 

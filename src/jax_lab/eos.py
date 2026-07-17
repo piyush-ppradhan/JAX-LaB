@@ -200,19 +200,19 @@ class VanderWaals(EOS):
         return tree_map(lambda b, R, rho: dpeos_dT(b, R, rho), self.b, self.R, rho_tree)
 
 
-class Redlich_Kwong(EOS):
+class RedlichKwong(EOS):
     """
     Define multiphase model using the Redlich-Kwong EOS.
 
     Parameters
     ----------
-    a: list
-    b: list
-    R: list
-    T: float or jax.numpy.ndarray
+    a, b, R : list of float
+        Equation parameters for each component.
+    T : float or jax.Array
+        Temperature used by the isothermal equation of state.
 
-    Reference
-    ---------
+    References
+    ----------
     1. Redlich O., Kwong JN., "On the thermodynamics of solutions; an equation of state; fugacities of gaseous solutions."
     Chem Rev. 1949 Feb;44(1):233-44. https://doi.org/10.1021/cr60137a013.
 
@@ -241,19 +241,21 @@ class Redlich_Kwong(EOS):
         return tree_map(lambda a, b, R, rho: dpeos_dT(a, b, R, rho), self.a, self.b, self.R, rho_tree)
 
 
-class Redlich_Kwong_Soave(EOS):
+class RedlichKwongSoave(EOS):
     """
     Define multiphase model using the Redlich-Kwong-Soave EOS.
 
     Parameters
     ----------
-    a: list
-    b: list
-    R: list
-    T: float or jax.numpy.ndarray
+    a, b, R : list of float
+        Equation parameters for each component.
+    T : float or jax.Array
+        Temperature used by the isothermal equation of state.
+    RKS_omega : list of float
+        Acentric factor for each component.
 
-    Reference
-    ---------
+    References
+    ----------
     1. Giorgio Soave, "Equilibrium constants from a modified Redlich-Kwong equation of state",
     Chemical Engineering Science 27, no. 6(1972), 1197-1203, https://doi.org/10.1016/0009-2509(72)80096-4.
 
@@ -315,19 +317,21 @@ class Redlich_Kwong_Soave(EOS):
         )
 
 
-class Peng_Robinson(EOS):
+class PengRobinson(EOS):
     """
     Define multiphase model using the Peng-Robinson EOS.
 
     Parameters
     ----------
-    a: list
-    b: list
-    R: list
-    T: float or jax.numpy.ndarray
+    a, b, R : list of float
+        Equation parameters for each component.
+    T : float or jax.Array
+        Temperature used by the isothermal equation of state.
+    pr_omega : float or list of float
+        Acentric factor for each component.
 
-    Reference
-    ---------
+    References
+    ----------
     1. Peng, Ding-Yu, and Donald B. Robinson. "A new two-constant equation of state."
     Industrial & Engineering Chemistry Fundamentals 15, no. 1 (1976): 59-64. https://doi.org/10.1021/i160057a011
 
@@ -396,19 +400,19 @@ class Peng_Robinson(EOS):
         )
 
 
-class Carnahan_Starling(EOS):
+class CarnahanStarling(EOS):
     """
     Define multiphase model using the Carnahan-Starling EOS.
 
     Parameters
     ----------
-    a: list
-    b: list
-    R: list
-    T: float or jax.numpy.ndarray
+    a, b, R : list of float
+        Equation parameters for each component.
+    T : float or jax.Array
+        Temperature used by the isothermal equation of state.
 
-    Reference
-    ---------
+    References
+    ----------
     1.  Carnahan, Norman F., and Kenneth E. Starling. "Equation of state for nonattracting rigid spheres."
     The Journal of chemical physics 51, no. 2 (1969): 635-636. https://doi.org/10.1063/1.1672048
 
@@ -438,3 +442,10 @@ class Carnahan_Starling(EOS):
         x_tree = tree_map(lambda b, rho: 0.25 * b * rho, self.b, rho_tree)
         dpeos_dT = lambda x, R, rho: (rho * R) * (1.0 + x + x**2 - x**3) / ((1.0 - x) ** 3)
         return tree_map(lambda x, R, rho: dpeos_dT(x, R, rho), x_tree, self.R, rho_tree)
+
+
+# Backward-compatible aliases for the original public class names.
+Redlich_Kwong = RedlichKwong
+Redlich_Kwong_Soave = RedlichKwongSoave
+Peng_Robinson = PengRobinson
+Carnahan_Starling = CarnahanStarling

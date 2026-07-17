@@ -2,10 +2,10 @@
 
 ::: jax_lab.eos.VanderWaals
 
-::: jax_lab.eos.Redlich_Kwong
+::: jax_lab.eos.RedlichKwong
 
-::: jax_lab.eos.Redlich_Kwong_Soave
+::: jax_lab.eos.RedlichKwongSoave
 
-::: jax_lab.eos.Peng_Robinson
+::: jax_lab.eos.PengRobinson
 
-::: jax_lab.eos.Carnahan_Starling
+::: jax_lab.eos.CarnahanStarling

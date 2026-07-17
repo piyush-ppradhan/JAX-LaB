@@ -2,6 +2,7 @@
 Definition of Multiphase class for simulating a multiphase flow.
 """
 
+import logging
 import operator
 import time
 
@@ -33,23 +34,31 @@ from .boundary_conditions import (
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .utils import downsample_field
 
+logger = logging.getLogger(__name__)
+
 # This significantly reduces the performance. Use if necessary
 # jax.config.update("jax_debug_nans", True)
 
 
 class Multiphase(LBMBase):
     """
-    Multiphase model, based on the Shan-Chen method. To model the fluid, an equation of state (EOS) is defined by the user.
-    Sequence of computation is pressure (EOS, dependent on the density and temperature) --> effective mass (phi).
-    Can model both single component multiphase (SCMP) and multi-component multiphase (MCMP).
+    Multiphase model based on the Shan-Chen method.
+
+    The user supplies an equation of state (EOS). Pressure is evaluated from
+    density and temperature before the effective mass. Both single-component
+    multiphase and multicomponent multiphase systems are supported.
 
     Parameters
     ----------
-    k (list): Modification coefficient, used to tune surface tension.
+    k : list
+        Modification coefficient used to tune surface tension.
 
-    A (numpy.ndarray): Weighting factor, used for linear combination of Shan-Chen and Zhang-Chen Forces
+    A : numpy.ndarray
+        Weighting factor for combining the Shan-Chen and Zhang-Chen forces.
 
-    g_kk (numpy.ndarray): Inter component interaction strength. Its a matrix of size n_components x n_components. It must be symmetric.
+    g_kkprime : numpy.ndarray
+        Symmetric component-interaction matrix with shape
+        ``(n_components, n_components)``.
 
     References
     ----------
@@ -61,11 +70,12 @@ class Multiphase(LBMBase):
 
     Notes
     -----
-    1. The boundary conditions for each component is handeled separately. For example a wall BC for two-component system must be
-    defined twice, once for each component (see examples for details).
-    2. Pytrees store component-specific values; order is as defined in initialize_macroscopic_fields by the user.
-    2. Length of pytrees is equal to the no of components in the system.
-    3. All component-specific values passed as a list or an array by the user must be set according to the sequence defined in the initialize_macroscopic_fields.
+    1. Boundary conditions are handled separately for each component. For
+       example, define a wall condition once per component in a two-component
+       system.
+    2. Pytrees contain one leaf per component in the order defined by
+       ``initialize_macroscopic_fields``.
+    3. Component-specific lists and arrays must use the same ordering.
     """
 
     def __init__(self, **kwargs):
@@ -607,10 +617,6 @@ class Multiphase(LBMBase):
         """
         Precompute interpolation data for geometric wetting.
 
-        Parameters
-        ----------
-        None
-
         Returns
         -------
         geometric_wetting_data (list): Component-wise interpolation data for wetted boundary nodes.
@@ -703,17 +709,13 @@ class Multiphase(LBMBase):
                 })
             geometric_wetting_data.append(component_data)
 
-        print(f"Time taken to determine geometric wetting characteristics: {characteristics_time:.6f} seconds")
+        logger.info(f"Time taken to determine geometric wetting characteristics: {characteristics_time:.6f} seconds")
 
         return geometric_wetting_data, geometric_fluid_mask
 
     def get_solid_mask_streamed(self):
         """
         Define the solid mask used for fluid-solid interaction force. The boundary conditions must be passed separately.
-
-        Parameters
-        ----------
-        None
 
         Returns
         -------
@@ -755,25 +757,25 @@ class Multiphase(LBMBase):
         # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
         # stream into a boundary voxel.
         for i in range(self.n_components):
-            print(f"Component: {i + 1}")
+            logger.info(f"Component: {i + 1}")
             solid_halo_list = [np.array(bc.indices).T for bc in self.BCs[i] if bc.isSolid]
             solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
 
             # Create the grid mask on each process
             start = time.time()
             grid_mask = self.create_grid_mask(solid_halo_voxels)
-            print("Time to create the grid mask:", time.time() - start)
+            logger.info("Time to create the grid mask: %.6f seconds", time.time() - start)
 
             start = time.time()
             for bc in self.BCs[i]:
                 assert bc.implementationStep in ["PostStreaming", "PostCollision"]
                 bc.create_local_mask_and_normal_arrays(grid_mask)
-            print("Time to create the local masks and normal arrays:", time.time() - start)
+            logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
     @partial(jit, static_argnums=(0, 3), inline=True)
     def equilibrium(self, rho_tree, u_tree, cast_output=True):
         """
-        Compute the equillibrium distribution function using the given density and velocity pytrees.
+        Compute the equilibrium distribution using density and velocity pytrees.
 
         Parameters
         ----------
@@ -785,7 +787,7 @@ class Multiphase(LBMBase):
 
         Returns
         -------
-        feq_tree (pytree of jax.numpy.ndarray): Equillibrium distribution
+        feq_tree (pytree of jax.numpy.ndarray): Equilibrium distribution.
         """
         if cast_output:
             cast = lambda x: self.precisionPolicy.cast_to_compute(x)
@@ -804,6 +806,20 @@ class Multiphase(LBMBase):
 
     @partial(jit, static_argnums=(0,))
     def compute_average_density(self, rho_tree):
+        """
+        Compute component densities averaged over neighboring fluid nodes.
+
+        Parameters
+        ----------
+        rho_tree : pytree of jax.Array
+            Component density fields with shape ``(nx, ny, 1)`` in 2D or
+            ``(nx, ny, nz, 1)`` in 3D.
+
+        Returns
+        -------
+        pytree of jax.Array
+            Averaged component density fields with the same shapes as the inputs.
+        """
         rho_s_tree = tree_map(lambda rho: self.streaming(jnp.repeat(rho, axis=-1, repeats=self.lattice.q)), rho_tree)
         rho_ave_tree = tree_map(
             lambda rho_s, solid_mask: (
@@ -966,10 +982,6 @@ class Multiphase(LBMBase):
         For D3Q19
             g1 = 1/6 and g2 = 1/12
 
-        Parameters
-        ----------
-        None
-
         Returns
         -------
         G_ff (jax.numpy.ndarray): Dimension: (q, )
@@ -999,10 +1011,6 @@ class Multiphase(LBMBase):
         If this function is not modified then, the distribution pytree is initialized with density value of 1.0 everywhere and velocity of 0.0 everywhere
 
         The distribution is initialized with rho0 and u0 values, using the self.equilibrium function.
-
-        Parameters
-        ----------
-        None
 
         Returns
         -------
@@ -1390,7 +1398,7 @@ class Multiphase(LBMBase):
                 try:
                     restored_state = self.mngr.restore(latest_step, args=orb.args.StandardRestore(state))
                     f_tree = [restored_state[c_name(i)] for i in range(self.n_components)]
-                    print(f"Restored checkpoint at step {latest_step}.")
+                    logger.info(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")
 
@@ -1435,7 +1443,7 @@ class Multiphase(LBMBase):
 
             # Print the progress of the simulation
             if print_iter_flag:
-                print(
+                logger.info(
                     colored("Timestep ", "blue")
                     + colored(f"{timestep}", "green")
                     + colored(" of ", "blue")
@@ -1445,7 +1453,7 @@ class Multiphase(LBMBase):
 
             if io_flag:
                 # Save the simulation data
-                print(f"Saving data at timestep {timestep}/{t_max}")
+                logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho_tree, _ = self.update_macroscopic(f_tree)
                 u_tree = self.macroscopic_velocity(f_tree, rho_tree)
                 psi_tree, _ = self.compute_potential(rho_tree)
@@ -1489,7 +1497,7 @@ class Multiphase(LBMBase):
 
             if checkpoint_flag:
                 # Save the checkpoint
-                print(f"Saving checkpoint at timestep {timestep}/{t_max}")
+                logger.info(f"Saving checkpoint at timestep {timestep}/{t_max}")
                 state = {}
                 c_name = lambda i: f"component_{i}"
                 for i in range(self.n_components):
@@ -1507,17 +1515,17 @@ class Multiphase(LBMBase):
             jax.block_until_ready(f_tree)
             end = time.time()
             if self.dim == 2:
-                print(
+                logger.info(
                     colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny}", "green")
                     if self.dim == 2
                     else colored(f"{self.nx} x {self.ny} x {self.nz}", "green")
                 )
-                print(
+                logger.info(
                     colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny}", "green")
                     if self.dim == 2
                     else colored(f"{self.nx * self.ny * self.nz}", "green")
                 )
-                print(
+                logger.info(
                     colored("MLUPS: ", "blue")
                     + colored(
                         f"{self.n_components * self.nx * self.ny * t_max / (end - start) / 1e6}",
@@ -1526,9 +1534,9 @@ class Multiphase(LBMBase):
                 )
 
             elif self.dim == 3:
-                print(colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny} x {self.nz}", "green"))
-                print(colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny * self.nz}", "green"))
-                print(
+                logger.info(colored("Domain: ", "blue") + colored(f"{self.nx} x {self.ny} x {self.nz}", "green"))
+                logger.info(colored("Number of voxels: ", "blue") + colored(f"{self.nx * self.ny * self.nz}", "green"))
+                logger.info(
                     colored("MLUPS: ", "blue")
                     + colored(
                         f"{self.n_components * self.nx * self.ny * self.nz * t_max / (end - start) / 1e6}",

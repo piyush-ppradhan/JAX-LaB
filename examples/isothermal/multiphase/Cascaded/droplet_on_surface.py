@@ -17,7 +17,7 @@ from jax import config, jit
 from jax.tree import map as tree_map
 
 from jax_lab.boundary_conditions import BounceBack, ExtrapolationOutflowMultiphase
-from jax_lab.eos import Peng_Robinson
+from jax_lab.eos import PengRobinson
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseCascade
 from jax_lab.utils import save_fields_hdf5_xdmf
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     Tc = 0.1093785558
     T = 0.86 * Tc
     kwargs = {"a": a, "b": b, "pr_omega": [0.344], "R": R, "T": T}
-    eos = Peng_Robinson(**kwargs)
+    eos = PengRobinson(**kwargs)
 
     # Initial semi circular droplet specification
     r = 40
