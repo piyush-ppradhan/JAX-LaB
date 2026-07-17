@@ -1,0 +1,5 @@
+# setuptools-scm includes all git-tracked files in the sdist by default;
+# prune large non-code directories to keep the archive under PyPI's 100MB limit.
+prune assets
+prune examples
+prune docs
