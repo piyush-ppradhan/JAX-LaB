@@ -160,3 +160,25 @@ Run an example:
 ```bash
 python3 examples/singlephase/cavity2d.py
 ```
+
+## Citation
+
+```bibtex
+@article{pradhan_jax-lab_2026,
+    title = {{JAX}-{LaB}: {A} {High}-{Performance}, {Differentiable} {Lattice} {Boltzmann} {Library} for {Modeling} {Multiphase} {Fluid} {Dynamics} in {Geosciences} and {Engineering}},
+    volume = {18},
+    copyright = {© 2026 The Author(s). Journal of Advances in Modeling Earth Systems published by Wiley Periodicals LLC on behalf of American Geophysical Union.},
+    issn = {1942-2466},
+    shorttitle = {{JAX}-{LaB}},
+    url = {https://onlinelibrary.wiley.com/doi/abs/10.1029/2025MS005313},
+    doi = {10.1029/2025MS005313},
+    language = {en},
+    number = {2},
+    urldate = {2026-02-20},
+    journal = {Journal of Advances in Modeling Earth Systems},
+    author = {Pradhan, Piyush and Gentine, Pierre and Kelly, Shaina},
+    year = {2026},
+    keywords = {GPU, JAX, Lattice Boltzmann method, Python, Shan-Chen method, multiphase flow},
+    pages = {e2025MS005313},
+}
+```
