@@ -1,0 +1,63 @@
+[project]
+site_name = "JAX-LaB"
+site_description = "Documentation for project JAX-LaB"
+site_url = "https://piyush-ppradhan.github.io/JAX-LaB/"
+docs_dir = "docs"
+site_dir = "site"
+repo_name = "piyush-ppradhan/JAX-LaB"
+repo_url = "https://github.com/piyush-ppradhan/JAX-LaB"
+edit_uri = "edit/multiphase/docs/"
+watch = ["src/jax_lab"]
+extra_javascript = [
+  "javascripts/mathjax.js",
+  "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js",
+]
+nav = [
+  { "Home" = "index.md" },
+  { "API" = [
+    { "Base" = "base.md" },
+    { "Boundary Conditions" = "boundary_conditions.md" },
+    { "Models" = "models.md" },
+    { "Multiphase" = "multiphase.md" },
+    { "Thermal" = "thermal.md" },
+    { "Equations of State" = "eos.md" },
+    { "Lattice" = "lattice.md" },
+    { "Precision Policy" = "precision_policy.md" },
+    { "Unit Conversion" = "unit.md" },
+    { "Utilities" = "utils.md" },
+  ] },
+]
+
+[project.theme]
+variant = "modern"
+
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.footnotes]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.toc]
+[project.markdown_extensions.smarty]
+
+[project.markdown_extensions.pymdownx.arithmatex]
+generic = true
+
+[project.markdown_extensions.pymdownx.superfences]
+
+[project.markdown_extensions.pymdownx.highlight]
+use_pygments = true
+linenums = true
+anchor_linenums = true
+linenums_style = "table"
+
+[project.markdown_extensions.pymdownx.inlinehilite]
+
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["."]
+check_paths = true
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["src"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+separate_signature = true
+show_root_heading = true

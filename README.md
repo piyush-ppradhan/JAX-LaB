@@ -111,6 +111,16 @@ Computations use *pytrees* to **model any number of components**, each with its 
 
 The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
 
+## Documentation
+
+The API documentation is available at [piyush-ppradhan.github.io/JAX-LaB](https://piyush-ppradhan.github.io/JAX-LaB/). It is built with [Zensical](https://zensical.org/) and deployed automatically on every push to the main branch.
+
+To build and preview the documentation locally:
+```bash
+pip install -e ".[docs]"
+zensical serve
+```
+
 ## Installation Guide
 
 JAX-LaB is distributed as the `jax-lab` package (import name `jax_lab`). The default install targets CPU:

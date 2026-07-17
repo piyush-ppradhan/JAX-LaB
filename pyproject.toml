@@ -40,7 +40,7 @@ tpu = ["jax[tpu]>=0.9"]
 rocm = ["jax[rocm7-local]>=0.9"]
 # Development and documentation tooling
 dev = ["build", "twine", "ruff", "pytest"]
-docs = ["mkdocs", "mkdocs-material", "mkdocstrings[python]", "mkdocs-autolinks-plugin", "pymdown-extensions"]
+docs = ["zensical", "mkdocstrings-python"]
 
 [project.urls]
 Repository = "https://github.com/piyush-ppradhan/JAX-LaB"

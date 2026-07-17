@@ -24,13 +24,7 @@ from termcolor import colored
 from .base import LBMBase
 
 # User-defined libraries
-from .boundary_conditions import (
-    BounceBack,
-    BounceBackHalfway,
-    BounceBackMoving,
-    InterpolatedBounceBackBouzidi,
-    InterpolatedBounceBackDifferentiable,
-)
+from .boundary_conditions import BounceBack, BounceBackHalfway, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .utils import downsample_field
 
@@ -70,11 +64,8 @@ class Multiphase(LBMBase):
 
     Notes
     -----
-    1. Boundary conditions are handled separately for each component. For
-       example, define a wall condition once per component in a two-component
-       system.
-    2. Pytrees contain one leaf per component in the order defined by
-       ``initialize_macroscopic_fields``.
+    1. Boundary conditions are handled separately for each component. For example, define a wall condition once per component in a two-component system.
+    2. Pytrees contain one leaf per component in the order defined by ``initialize_macroscopic_fields``.
     3. Component-specific lists and arrays must use the same ordering.
     """
 

@@ -29,6 +29,7 @@ from .multiphase import Multiphase, MultiphaseBGK, MultiphaseCascade, Multiphase
 from .boundary_conditions import DirichletTemperature, NeumannTemperature
 from .precision_policy import Precision, PrecisionPolicy
 from .thermal import MultiphaseThermal, Thermal
+from .unit import Unit
 
 __all__ = [
     "DirichletTemperature",
@@ -60,4 +61,5 @@ __all__ = [
     "MultiphaseMRT",
     "Precision",
     "PrecisionPolicy",
+    "Unit",
 ]
