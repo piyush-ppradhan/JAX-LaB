@@ -1,6 +1,6 @@
 ::: jax_lab.eos.EOS
 
-::: jax_lab.eos.VanderWaal
+::: jax_lab.eos.VanderWaals
 
 ::: jax_lab.eos.Redlich_Kwong
 

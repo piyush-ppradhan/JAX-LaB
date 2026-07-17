@@ -75,7 +75,6 @@ class Multiphase(LBMBase):
         self.A = kwargs.get("A")
         self.eos = kwargs.get("EOS", None)
         self.g_kkprime = kwargs.get("g_kkprime")  # Fluid-fluid interaction strength
-        # self.g_ks = kwargs.get("g_ks")  # Fluid-solid interaction strength
         self.body_force = kwargs.get("body_force", None)
         self.wetting_formulation = kwargs.get("wetting_formulation", "improved_virtual_density")  # "geometric" or "improved_virtual_density"
 
@@ -83,9 +82,6 @@ class Multiphase(LBMBase):
             self.computed_nearest_next_nearest_nbr = False
 
         self.G_ff = self.compute_ff_greens_function()
-        # self.G_fs = self.compute_fs_greens_function()
-
-        # self.omega = jnp.array(self.omega, dtype=self.precisionPolicy.compute_dtype)
         self.g_kkprime = jnp.array(self.g_kkprime, dtype=self.precisionPolicy.compute_dtype)
 
         self.solid_mask_streamed = self.get_solid_mask_streamed()
@@ -173,20 +169,6 @@ class Multiphase(LBMBase):
         if not np.allclose(value, np.transpose(value), atol=1e-6):
             raise ValueError("g_kkprime must be a symmetric matrix")
         self._g_kkprime = np.array(value)
-
-    # @property
-    # def g_ks(self):
-    #     return self._g_ks
-    #
-    # @g_ks.setter
-    # def g_ks(self, value):
-    #     if len(value) != self.n_components:
-    #         raise ValueError("g_ks must be a list size n_components")
-    #     if isinstance(value, np.ndarray):
-    #         value = self.distributed_array_init(
-    #             value.shape, self.precisionPolicy.compute_dtype, value
-    #         )
-    #     self._g_ks = value
 
     @property
     def wetting_formulation(self):
@@ -737,39 +719,6 @@ class Multiphase(LBMBase):
         -------
         solid_mask array: (numpy.ndarray) Dimension: (nx, ny, 1) for d == 2 and (nx, ny, nz, 1) for d == 3
         """
-        # solid_indices = []
-        # for i in range(self.n_components):
-        #     for bc in self.BCs[i]:
-        #         if (
-        #             isinstance(bc, BounceBack)
-        #             or isinstance(bc, BounceBackHalfway)
-        #             or isinstance(bc, BounceBackMoving)
-        #         ):
-        #             solid_indices.append(np.array(bc.indices).T)
-        # solid_index = None
-        # if not len(solid_indices) == 0:
-        #     solid_index = np.vstack(solid_indices)
-        # if self.dim == 2:
-        #     shape = (self.nx, self.ny, 1)
-        #     solid_mask = jnp.zeros(shape, dtype=jnp.int8)
-        #     if solid_index is not None:
-        #         solid_mask = solid_mask.at[solid_index[:, 0], solid_index[:, 1], 0].set(
-        #             1
-        #         )
-        # else:
-        #     shape = (self.nx, self.ny, self.nz, 1)
-        #     solid_mask = jnp.zeros(shape, dtype=jnp.int8)
-        #     if solid_index is not None:
-        #         solid_mask = solid_mask.at[
-        #             solid_index[:, 0], solid_index[:, 1], solid_index[:, 2], 0
-        #         ].set(1)
-        # return self.streaming(
-        #     jnp.repeat(
-        #         solid_mask,
-        #         axis=-1,
-        #         repeats=self.q,
-        #     )
-        # )
         solid_mask = []
         solid_indices = [[] for i in range(self.n_components)]
         for i in range(self.n_components):
@@ -1042,48 +991,6 @@ class Multiphase(LBMBase):
             raise NotImplementedError("Please define Green's function for D3Q27 lattice by modifying compute_ff_greens_function.")
         return jnp.array(G_ff, dtype=self.precisionPolicy.compute_dtype)
 
-    # def compute_fs_greens_function(self):
-    #     """
-    #     Define the Green's function used to model interaction between kth fluid and solid.
-    #
-    #     During computation, this G_fs is multiplied with corresponding g_ks value to get the Green's function:
-    #     G_ks = self.g_ks[k] * self.G_fs
-    #
-    #     Green's function used in this case:
-    #     G_ks(x, x') = g1 * g_ks,       if |x - x'| = 1
-    #                 = g2 * g_ks,       if |x - x'| = sqrt(2)
-    #                 = 0,               otherwise
-    #
-    #     Here d is the dimension of problem and x' are the neighboring points.
-    #     For D2Q9:
-    #         g1 = 2 and g2 = 1/2
-    #     For D3Q19
-    #         g1 = 1 and g2 = 1/2
-    #
-    #     Parameters
-    #     ----------
-    #     None
-    #
-    #     Returns
-    #     -------
-    #     G_fs: jax.numpy.ndarray
-    #         Dimension: (q, )
-    #     """
-    #     c = np.array(self.lattice.c).T
-    #     cl = np.linalg.norm(c, axis=-1)
-    #     G_fs = np.zeros((self.q,), dtype=np.float64)
-    #     if isinstance(self.lattice, LatticeD2Q9):
-    #         g1 = 1 / 3
-    #         g2 = 1 / 12
-    #         G_fs[np.isclose(cl, 1.0, atol=1e-6)] = g1
-    #         G_fs[np.isclose(cl, jnp.sqrt(2.0), atol=1e-6)] = g2
-    #     elif isinstance(self.lattice, LatticeD3Q19):
-    #         g1 = 1 / 6
-    #         g2 = 1 / 12
-    #         G_fs[np.isclose(cl, 1.0, atol=1e-6)] = g1
-    #         G_fs[np.isclose(cl, jnp.sqrt(2.0), atol=1e-6)] = g2
-    #     return jnp.array(G_fs, dtype=self.precisionPolicy.compute_dtype)
-
     def assign_fields_sharded(self):
         """
         This function is used to initialize pytree of the distribution arrays using the initial velocities and velocity defined in self.initialize_macroscopic_fields function.
@@ -1346,41 +1253,6 @@ class Multiphase(LBMBase):
             list(vmap(ffk_2, in_axes=(0))(self.A)),
         )
 
-    # @partial(jit, static_argnums=(0,))
-    # def compute_fluid_solid_force(self, rho_tree):
-    #     """
-    #     Compute the fluid-fluid interaction force using the effective mass (psi).
-
-    #     Parameters
-    #     ----------
-    #     psi_tree: Pytree of jax.numpy.ndarray
-    #         Pytree of pseudopotential of all components.
-
-    #     Returns
-    #     -------
-    #     Pytree of jax.numpy.ndarray
-    #         Pytree of fluid-solid interaction force.
-    #     """
-    #     return tree_map(
-    #         lambda g_ks, rho, solid_mask: -g_ks
-    #         * rho
-    #         * jnp.dot(self.G_fs * solid_mask, self.c.T),
-    #         self.g_ks,
-    #         rho_tree,
-    #         self.solid_mask_streamed
-    #     )
-    # psi_tree, _ = self.compute_potential(rho_tree)
-    # psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.lattice.q)), psi_tree)
-    # return tree_map(
-    #     lambda g_ks, psi, psi_s, solid_mask: -g_ks
-    #     * psi
-    #     * jnp.dot(self.G_fs * solid_mask * psi_s, self.c.T),
-    #     self.g_ks,
-    #     psi_tree,
-    #     psi_s_tree,
-    #     self.solid_mask_streamed
-    # )
-
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, f_postcollision_tree, feq_tree, rho_tree, u_tree, T=None):
         """
@@ -1434,12 +1306,6 @@ class Multiphase(LBMBase):
                 else:
                     fout = fout.at[bc.indices].set(bc.apply(fout, fin))
             return fout
-
-        # for i in range(self.n_components):
-        #     for bc in self.BCs[i]:
-        #         fout_tree[i] = _apply_bc_(fin_tree[i], fout_tree[i], bc)
-        #
-        # return fout_tree
 
         def __apply_bc__(fout, fin, BCs):
             for bc in BCs:
@@ -2969,34 +2835,6 @@ class MultiphaseCascade(Multiphase):
         C_tree = self.compute_force_central_moments(F_tree, psi_tree)
         Tf_tree = tree_map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
         return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
-
-    # @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    # def collision(self, fin_tree):
-    #     """
-    #     Cascaded LBM collision step for lattice.
-    #     """
-    #     fin_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), fin_tree)
-    #     rho_tree, u_tree = self.update_macroscopic(fin_tree)
-    #     T_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
-    #     N_tree = self.compute_shift_matrix(u_tree)
-    #     Tdash_tree = self.compute_central_moment(T_tree, N_tree)
-    #     Tdash_eq_tree = self.compute_eq_central_moments(rho_tree)
-    #     Tout_tree = tree_map(
-    #         lambda Tdash, Tdash_eq, S: -jnp.dot(Tdash - Tdash_eq, S),
-    #         Tdash_tree,
-    #         Tdash_eq_tree,
-    #         self.S,
-    #     )
-    #     Tout_tree = self.apply_force(Tout_tree, Tdash_eq_tree, rho_tree, u_tree)
-    #     Ninv_tree = self.compute_shift_matrix_inverse(u_tree)
-    #     Tout_tree = self.compute_central_moment(Tout_tree, Ninv_tree)
-    #     fout_tree = tree_map(
-    #         lambda fin, T, Minv: fin + jnp.dot(T, Minv), fin_tree, Tout_tree, self.M_inv
-    #     )
-    #     return tree_map(
-    #         lambda fout: self.precisionPolicy.cast_to_output(fout),
-    #         fout_tree,
-    #     )
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision(self, fin_tree, T=None):

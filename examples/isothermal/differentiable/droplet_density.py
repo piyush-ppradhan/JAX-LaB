@@ -8,7 +8,7 @@ import numpy as np
 import optax
 from jax import config, debug, jit, lax, nn, random
 
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 from jax_lab.lattice import LatticeD2Q9
 from jax_lab.multiphase import MultiphaseBGK
 from jax_lab.utils import save_fields_vtk
@@ -167,7 +167,7 @@ if __name__ == "__main__":
         "k": [0.1],
         "A": -0.33 * np.ones((1, 1)),
         "g_kkprime": -1.0 * np.ones((1, 1)),
-        "EOS": VanderWaal(**{"a": [a], "b": [b], "R": [R], "T": T}),
+        "EOS": VanderWaals(**{"a": [a], "b": [b], "R": [R], "T": T}),
         "body_force": [0.0, 0.0],
         "omega": [1.0],
         "precision": precision,

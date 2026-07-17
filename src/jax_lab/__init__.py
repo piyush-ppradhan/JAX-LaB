@@ -17,7 +17,7 @@ from .eos import (
     Peng_Robinson,
     Redlich_Kwong,
     Redlich_Kwong_Soave,
-    VanderWaal,
+    VanderWaals,
 )
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .models import AdvectionDiffusionBGK, BGKSim, CLBMSim, KBCSim, MRTSim
@@ -37,7 +37,7 @@ __all__ = [
     "Peng_Robinson",
     "Redlich_Kwong",
     "Redlich_Kwong_Soave",
-    "VanderWaal",
+    "VanderWaals",
     "LatticeD2Q9",
     "LatticeD3Q19",
     "LatticeD3Q27",

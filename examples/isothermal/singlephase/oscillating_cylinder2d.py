@@ -1,5 +1,5 @@
 """
-This script conducts a 2D simulation of flow around a cylinder using the lattice Boltzmann method (LBM). This is a classic problem in fluid dynamics and is often used to examine the behavior of fluid flow over a bluff body.
+This script conducts a 2D simulation of flow around an oscillating cylinder using the lattice Boltzmann method (LBM). This is a classic problem in fluid dynamics and is often used to examine the behavior of fluid flow over a bluff body.
 
 In this example you'll be introduced to the following concepts:
 

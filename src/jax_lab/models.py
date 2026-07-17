@@ -1143,15 +1143,15 @@ class CLBMSim(LBMBase):
         """
         Calculate the central moments of the equilibrium distribution.
 
-        Parameters:
+        Parameters
         ----------
-        rho: jax.numpy.ndarray
-           Density field.
+        rho : jax.numpy.ndarray
+            Density field.
 
-        Returns:
+        Returns
         -------
-        T_eq: jax.numpy.ndarray
-            central moment of the equilibrium distribution.
+        T_eq : jax.numpy.ndarray
+            Central moments of the equilibrium distribution.
         """
 
         if isinstance(self.lattice, LatticeD2Q9):
@@ -1192,14 +1192,14 @@ class CLBMSim(LBMBase):
         """
         Calculate the central moments of the force distribution. Includes modification to accurately replicate mechanical stability conditions.
 
-        Parameters:
+        Parameters
         ----------
-        F: pytree of jax.numpy.ndarray
+        F : pytree of jax.numpy.ndarray
             Force field.
 
-        Returns:
+        Returns
         -------
-        T_eq: pytree of jax.numpy.ndarray
+        C : pytree of jax.numpy.ndarray
             Central moments of the force distribution.
         """
 

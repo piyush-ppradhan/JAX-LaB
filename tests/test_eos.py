@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jax_lab.eos import Carnahan_Starling, Peng_Robinson, Redlich_Kwong, Redlich_Kwong_Soave, VanderWaal
+from jax_lab.eos import Carnahan_Starling, Peng_Robinson, Redlich_Kwong, Redlich_Kwong_Soave, VanderWaals
 
 
 EOS_DATA_DIRECTORY = Path(__file__).parent / "eos_data"
@@ -28,7 +28,7 @@ EOS_CASES = (
     pytest.param(Peng_Robinson, "satpoints_PR.txt", 2.0 / 49.0, 2.0 / 21.0, {"pr_omega": 0.344}, 6e-5, id="peng-robinson"),
     pytest.param(Redlich_Kwong, "satpoints_RK.txt", 2.0 / 49.0, 2.0 / 21.0, {}, 0.0, id="redlich-kwong"),
     pytest.param(Redlich_Kwong_Soave, "satpoints_SRK.txt", 2.0 / 49.0, 2.0 / 21.0, {"RKS_omega": [0.344]}, 1.5e-3, id="redlich-kwong-soave"),
-    pytest.param(VanderWaal, "satpoints_VW.txt", 9.0 / 49.0, 2.0 / 21.0, {}, 0.0, id="van-der-waals"),
+    pytest.param(VanderWaals, "satpoints_VW.txt", 9.0 / 49.0, 2.0 / 21.0, {}, 0.0, id="van-der-waals"),
 )
 
 PRECISION_CASES = (

@@ -12,7 +12,7 @@ from jax_lab.lattice import LatticeD2Q9
 from jax_lab.multiphase import MultiphaseMRT
 from jax_lab.boundary_conditions import BounceBack
 from jax_lab.utils import save_fields_vtk
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 
 from jax import config
 
@@ -224,7 +224,7 @@ if __name__ == "__main__":
     T = 0.7 * Tc
 
     kwargs = {"a": a, "b": b, "R": R, "T": T}
-    eos = VanderWaal(**kwargs)
+    eos = VanderWaals(**kwargs)
 
     precision = "f32/f32"
 

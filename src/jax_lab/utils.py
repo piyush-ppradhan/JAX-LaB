@@ -1,6 +1,7 @@
 import importlib
 import os
 import re
+import warnings
 from functools import partial
 from time import time
 
@@ -880,14 +881,17 @@ def save_fields_vtk(timestep, fields, output_dir=".", prefix="fields"):
     print(f"Saved {output_filename} in {time() - start:.6f} seconds.")
 
 
-def live_volume_randering(timestep, field):
+def live_volume_rendering(timestep, field):
     # WORK IN PROGRESS
     """
     Live rendering of a 3D volume using pyvista.
 
     Parameters
     ----------
-    field (np.ndarray): A 3D array containing the field to be rendered.
+    timestep : int
+        Current simulation timestep.
+    field : numpy.ndarray
+        Three-dimensional field to render.
 
     Returns
     -------
@@ -899,8 +903,8 @@ def live_volume_randering(timestep, field):
     The colormap is updated every 0.1 seconds to reflect changes to the field.
 
     """
-    pv = _import_optional("pyvista", "live_volume_randering")
-    plt = _import_optional("matplotlib.pylab", "live_volume_randering")
+    pv = _import_optional("pyvista", "live_volume_rendering")
+    plt = _import_optional("matplotlib.pylab", "live_volume_rendering")
     # Create a uniform grid (Note that the field must be 3D) otherwise raise error
     if field.ndim != 3:
         raise ValueError("The input field must be 3D!")
@@ -926,6 +930,16 @@ def live_volume_randering(timestep, field):
         # Update the rendering scene every 0.1 seconds
         plt.imshow(pl.screenshot())
         plt.pause(0.1)
+
+
+def live_volume_randering(timestep, field):
+    """Call :func:`live_volume_rendering` using the deprecated spelling."""
+    warnings.warn(
+        "live_volume_randering is deprecated; use live_volume_rendering instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return live_volume_rendering(timestep, field)
 
 
 def save_BCs_vtk(timestep, BCs, gridInfo, output_dir="."):
@@ -1020,7 +1034,7 @@ def rotate_geometry(indices, origin, axis, angle):
     return tuple(jnp.rint(indices_rotated).astype("int32").T)
 
 
-def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, pitch=None):
+def voxelize_stl(stl_filename, length_lbm_unit=None, transformation_matrix=None, pitch=None, **kwargs):
     """
     Converts an STL file to a voxelized mesh.
 
@@ -1030,7 +1044,7 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, 
 
     length_lbm_unit (float, optional): The unit length in LBM. Either this or 'pitch' must be provided.
 
-    tranformation_matrix (array-like, optional): A transformation matrix to be applied to the mesh before voxelization.
+    transformation_matrix (array-like, optional): A transformation matrix to be applied to the mesh before voxelization.
 
     pitch : (float, optional): The pitch of the voxel grid. Either this or 'length_lbm_unit' must be provided.
 
@@ -1044,13 +1058,27 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, 
     provided, it is applied to the mesh before voxelization. The pitch of the voxel grid is calculated based on the
     maximum extent of the mesh and the provided lattice Boltzmann unit length, unless a pitch is provided directly.
     """
+    legacy_transformation_matrix = kwargs.pop("tranformation_matrix", None)
+    if kwargs:
+        unexpected = next(iter(kwargs))
+        raise TypeError(f"voxelize_stl() got an unexpected keyword argument '{unexpected}'")
+    if legacy_transformation_matrix is not None:
+        if transformation_matrix is not None:
+            raise TypeError("Specify only one of 'transformation_matrix' and deprecated 'tranformation_matrix'.")
+        warnings.warn(
+            "tranformation_matrix is deprecated; use transformation_matrix instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        transformation_matrix = legacy_transformation_matrix
+
     trimesh = _import_optional("trimesh", "voxelize_stl")
     if length_lbm_unit is None and pitch is None:
         raise ValueError("Either 'length_lbm_unit' or 'pitch' must be provided!")
     mesh = trimesh.load_mesh(stl_filename, process=False)
     length_phys_unit = mesh.extents.max()
-    if tranformation_matrix is not None:
-        mesh.apply_transform(tranformation_matrix)
+    if transformation_matrix is not None:
+        mesh.apply_transform(transformation_matrix)
     if pitch is None:
         pitch = length_phys_unit / length_lbm_unit
     mesh_voxelized = mesh.voxelized(pitch=pitch)
@@ -1103,7 +1131,19 @@ def axangle2mat(axis, angle, is_normalized=False):
 
 @partial(jit)
 def q_criterion(u):
-    # Compute derivatives
+    """
+    Compute the Q-criterion on the interior of a three-dimensional velocity field.
+
+    Parameters
+    ----------
+    u : jax.Array
+        Velocity field with shape ``(nx, ny, nz, 3)`` and unit grid spacing.
+
+    Returns
+    -------
+    jax.Array
+        Q-criterion field with shape ``(nx - 2, ny - 2, nz - 2)``.
+    """
     u_x = u[..., 0]
     u_y = u[..., 1]
     u_z = u[..., 2]

@@ -32,21 +32,36 @@ from .utils import downsample_field
 
 class LBMBase(object):
     """
-    LBMBase: A class that represents a base for Lattice Boltzmann Method simulation.
+    Base class for lattice Boltzmann simulations.
 
     Parameters
     ----------
-    lattice (object): The lattice object that contains the lattice structure and weights.
-
-    omega (float): The relaxation parameter for the LBM simulation.
-
-    nx (int): Number of grid points in the x-direction.
-
-    ny (int): Number of grid points in the y-direction.
-
-    nz (int, optional): Number of grid points in the z-direction. Defaults to 0.
-
-    precision (str, optional): A string specifying the precision used for the simulation. Defaults to "f32/f32".
+    lattice : Lattice
+        Lattice structure and weights.
+    omega : float
+        Relaxation parameter.
+    nx, ny : int
+        Grid points in the x and y directions.
+    nz : int
+        Grid points in the z direction. Use 0 for two-dimensional simulations.
+    precision : str
+        Compute/storage precision policy, such as ``"f32/f32"``.
+    checkpoint_rate : int, optional
+        Timesteps between checkpoints. Defaults to 0, which disables checkpointing.
+    checkpoint_dir : str, optional
+        Checkpoint directory. Defaults to ``"./checkpoints"``.
+    downsampling_factor : int, optional
+        Spatial output downsampling factor. Defaults to 1.
+    print_info_rate : int, optional
+        Timesteps between progress messages. Defaults to 100.
+    io_rate : int, optional
+        Timesteps between output operations. Defaults to 0, which disables output.
+    return_fpost : bool, optional
+        Whether simulation steps return post-collision populations. Defaults to False.
+    compute_MLUPS : bool, optional
+        Whether to run in performance-measurement mode. Defaults to False.
+    restore_checkpoint : bool, optional
+        Whether to restore the latest checkpoint. Defaults to False.
     """
 
     def __init__(self, **kwargs):
@@ -330,6 +345,83 @@ class LBMBase(object):
             raise TypeError("nDevices must be an integer")
         self._nDevices = value
 
+    @property
+    def precision_policy(self):
+        """Return the mixed-precision policy."""
+        return self.precisionPolicy
+
+    @precision_policy.setter
+    def precision_policy(self, value):
+        self.precisionPolicy = value
+
+    @property
+    def checkpoint_rate(self):
+        """Return the checkpoint interval."""
+        return self.checkpointRate
+
+    @checkpoint_rate.setter
+    def checkpoint_rate(self, value):
+        self.checkpointRate = value
+
+    @property
+    def checkpoint_dir(self):
+        """Return the checkpoint directory."""
+        return self.checkpointDir
+
+    @checkpoint_dir.setter
+    def checkpoint_dir(self, value):
+        self.checkpointDir = value
+
+    @property
+    def downsampling_factor(self):
+        """Return the spatial output downsampling factor."""
+        return self.downsamplingFactor
+
+    @downsampling_factor.setter
+    def downsampling_factor(self, value):
+        self.downsamplingFactor = value
+
+    @property
+    def print_info_rate(self):
+        """Return the progress-reporting interval."""
+        return self.printInfoRate
+
+    @print_info_rate.setter
+    def print_info_rate(self, value):
+        self.printInfoRate = value
+
+    @property
+    def io_rate(self):
+        """Return the output interval."""
+        return self.ioRate
+
+    @io_rate.setter
+    def io_rate(self, value):
+        self.ioRate = value
+
+    @property
+    def return_fpost(self):
+        """Return whether post-collision populations are returned."""
+        return self.returnFpost
+
+    @return_fpost.setter
+    def return_fpost(self, value):
+        self.returnFpost = value
+
+    @property
+    def compute_mlups(self):
+        """Return whether performance-measurement mode is enabled."""
+        return self.computeMLUPS
+
+    @compute_mlups.setter
+    def compute_mlups(self, value):
+        self.computeMLUPS = value
+
+    @property
+    def n_devices(self):
+        """Return the global JAX device count."""
+        return self.nDevices
+
     def show_simulation_parameters(self):
         attributes_to_show = [
             "omega",
@@ -415,7 +507,7 @@ class LBMBase(object):
         ----------
         shape (tuple): The shape of the array to be created.
 
-        type (dtype): The data type of the array to be created.
+        ttype (dtype): The data type of the array to be created.
 
         init_val (scalar, optional): The initial value to fill the array with. Defaults to 0.
 

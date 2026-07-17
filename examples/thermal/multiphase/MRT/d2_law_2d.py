@@ -19,7 +19,7 @@ import numpy as np
 from jax import config
 
 from jax_lab.boundary_conditions import DirichletTemperature
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 from jax_lab.lattice import LatticeD2Q9
 from jax_lab.multiphase import MultiphaseMRT
 from jax_lab.thermal import MultiphaseThermal
@@ -34,7 +34,7 @@ output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_d2
 
 def vapor_density_at_pressure(T, pressure):
     """
-    Compute the stable vapor density at a prescribed Van der Waals pressure.
+    Compute the stable vapor density at a prescribed VanderWaals pressure.
 
     Parameters
     ----------
@@ -228,7 +228,7 @@ if __name__ == "__main__":
                 os.remove(stale_output)
 
         rk_substeps = max(1, int(np.ceil((K / (rho_vapor_far * specific_heat)) * lambda_max / 2.5)))
-        eos = VanderWaal(a=[a], b=[b], R=[R], temperature_field_type="thermal")
+        eos = VanderWaals(a=[a], b=[b], R=[R], temperature_field_type="thermal")
         kwargs = {
             "n_components": 1,
             "lattice": LatticeD2Q9(precision),
@@ -307,6 +307,6 @@ if __name__ == "__main__":
     axes.set(xlabel=r"$t^* = t\nu/D_0^2$", ylabel=r"$(D/D_0)^2$", title=r"$D^2$ law")
     axes.legend()
     axes.grid(True, alpha=0.3)
-    fig.suptitle("2D droplet evaporation (MRT, Van der Waals)")
+    fig.suptitle("2D droplet evaporation (MRT, VanderWaals)")
     fig.savefig(os.path.join(output_dir, "d2_law_2d.png"), dpi=200, bbox_inches="tight")
     print(f"Saved {os.path.join(output_dir, 'd2_law_2d.png')}")

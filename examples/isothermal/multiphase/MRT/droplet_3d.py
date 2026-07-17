@@ -14,7 +14,7 @@ from jax import config
 
 from jax_lab.lattice import LatticeD3Q19
 from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 from jax_lab.utils import save_fields_vtk
 
 # config.update("jax_default_matmul_precision", "float32")
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     delta_rho = np.zeros((nx, ny, nz, 1))
 
     kwargs = {"a": a, "b": b, "R": R, "T": T}
-    eos = VanderWaal(**kwargs)
+    eos = VanderWaals(**kwargs)
 
     precision = "f32/f32"
     kwargs = {

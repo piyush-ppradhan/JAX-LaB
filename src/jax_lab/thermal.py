@@ -195,18 +195,19 @@ class Thermal(object):
 
     def initialize_temperature_field(self):
         """
-        This function initializes the temperature field to its default value of 1.
+        Return the initial temperature field.
 
-        Note: This function is a placeholder and should be overridden in a
-        subclass or in an instance of the class to provide specific initial
-        conditions.
+        The default implementation returns ``None``, which
+        :meth:`assign_fields_sharded` interprets as a uniform temperature of 1.
+        Override this method to provide a scalar or spatially varying field.
 
         Returns
         -------
-        None: The default temperature. This indicates that the actual value should be set elsewhere.
+        None
+            Sentinel requesting the default uniform temperature.
         """
         print("WARNING: Default initial condition assumed: temperature = 1")
-        print("         To set an explicit initial temperature, use self.initialize_temperature_field.")
+        print("         Override initialize_temperature_field to set an explicit initial temperature.")
         return None
 
     @partial(jit, static_argnums=(0, 1, 2, 4))

@@ -6,7 +6,7 @@
 
 ::: jax_lab.utils.save_fields_vtk
 
-::: jax_lab.utils.live_volume_randering
+::: jax_lab.utils.live_volume_rendering
 
 ::: jax_lab.utils.save_BCs_vtk
 

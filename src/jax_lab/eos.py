@@ -8,7 +8,19 @@ import jax.numpy as jnp
 
 class EOS:
     """
-    Base class for all equation of state. By default isothermal temperature field is used, which requires specifying temperature T during initialization.
+    Base class for equations of state.
+
+    Parameters
+    ----------
+    temperature_field_type : str, optional
+        ``"isothermal"`` for a fixed temperature or ``"thermal"`` for a
+        temperature field. Defaults to ``"isothermal"``.
+    a, b : float or list of float
+        Equation-specific parameters for each component.
+    R : float or list of float
+        Gas constant for each component.
+    T : float, optional
+        Fixed temperature required for isothermal calculations.
     """
 
     def __init__(self, temperature_field_type="isothermal", **kwargs):
@@ -32,7 +44,7 @@ class EOS:
         elif isinstance(value, list):
             self._R = value
         else:
-            raise ValueError("Gas constant must be int, float or a list (for a multi-component flows)")
+            raise ValueError("Gas constant must be an int, float, or list for multicomponent flows")
 
     @property
     def temperature_field_type(self):
@@ -64,7 +76,7 @@ class EOS:
     @a.setter
     def a(self, value):
         if value is None:
-            raise ValueError("EOS parameter a must be provided EOS")
+            raise ValueError("EOS parameter a must be provided")
         if isinstance(value, float) or isinstance(value, int):
             self._a = [value]
         elif isinstance(value, list):
@@ -79,7 +91,7 @@ class EOS:
     @b.setter
     def b(self, value):
         if value is None:
-            raise ValueError("EOS parameter b must be provided EOS")
+            raise ValueError("EOS parameter b must be provided")
         if isinstance(value, float) or isinstance(value, int):
             self._b = [value]
         elif isinstance(value, list):
@@ -89,30 +101,77 @@ class EOS:
 
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS(self, rho_tree):
+        """
+        Evaluate the isothermal equation of state.
+
+        Parameters
+        ----------
+        rho_tree : pytree of jax.Array
+            Component density fields.
+
+        Returns
+        -------
+        pytree of jax.Array
+            Component pressure fields.
+        """
         pass
 
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS_thermal(self, rho_tree, T):
+        """
+        Evaluate the equation of state with a temperature field.
+
+        Parameters
+        ----------
+        rho_tree : pytree of jax.Array
+            Component density fields.
+        T : jax.Array
+            Temperature field.
+
+        Returns
+        -------
+        pytree of jax.Array
+            Component pressure fields.
+        """
         pass
 
     @partial(jit, static_argnums=(0,), inline=True)
     def dp_eos_dT(self, rho_tree, T):
+        """
+        Evaluate the pressure derivative with respect to temperature.
+
+        Parameters
+        ----------
+        rho_tree : pytree of jax.Array
+            Component density fields.
+        T : jax.Array
+            Temperature field.
+
+        Returns
+        -------
+        pytree of jax.Array
+            Component pressure derivatives.
+        """
         pass
 
 
-class VanderWaal(EOS):
+class VanderWaals(EOS):
     """
-    Define multiphase model using the VanderWaals EOS.
+    Define a multiphase model using the VanderWaals EOS.
 
     Parameters
     ----------
-    a: list
-    b: list
-    R: list
-    T: float or jax.numpy.ndarray
+    a : list of float
+        Attraction parameter for each component.
+    b : list of float
+        Excluded-volume parameter for each component.
+    R : list of float
+        Gas constant for each component.
+    T : float or jax.Array
+        Temperature used by the isothermal equation of state.
 
-    Reference
-    ---------
+    References
+    ----------
     1. Reprint of: The Equation of State for Gases and Liquids. The Journal of Supercritical Fluids,
     100th year Anniversary of van der Waals' Nobel Lecture, 55, no. 2 (2010): 403–14. https://doi.org/10.1016/j.supflu.2010.11.001.
 

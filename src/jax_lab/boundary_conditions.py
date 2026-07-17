@@ -596,30 +596,26 @@ class EquilibriumBC(BoundaryCondition):
 
 
 class DoNothing(BoundaryCondition):
+    """
+    Preserve post-collision populations at selected boundary nodes.
+
+    Parameters
+    ----------
+    indices : tuple of numpy.ndarray
+        Boundary-node indices.
+    gridInfo : dict
+        Grid and lattice metadata.
+    precision_policy : PrecisionPolicy
+        Compute and output precision policy.
+
+    Notes
+    -----
+    Streaming is skipped at these nodes by returning the post-collision
+    populations after streaming. This avoids values wrapping into the domain
+    from the opposite side of the rolled population array.
+    """
+
     def __init__(self, indices, gridInfo, precision_policy):
-        """
-        Do-nothing boundary condition for a lattice Boltzmann method simulation.
-
-        This class implements a do-nothing boundary condition, where no action is taken at the boundary nodes. The boundary
-        condition is applied after the streaming step.
-
-        Attributes
-        ----------
-        name (str): The name of the boundary condition. For this class, it is "DoNothing".
-
-        implementationStep : str): The step in the lattice Boltzmann method algorithm at which the boundary condition is applied. For this class, it is "PostStreaming".
-
-        Notes
-        -----
-        This boundary condition enforces skipping of streaming altogether as it sets post-streaming equal to post-collision
-        populations (so no streaming at this BC voxels). The problem with returning post-streaming values or "fout[self.indices]
-        is that the information that exit the domain on the opposite side of this boundary, would "re-enter". This is because
-        we roll the entire array and so the boundary condition acts like a one-way periodic BC. If EquilibriumBC is used as
-        the BC for that opposite boundary, then the rolled-in values are taken from the initial condition at equilibrium.
-        Otherwise if ZouHe is used for example the simulation looks like a run-down simulation at low-Re. The opposite boundary
-        may be even a wall (consider pipebend example). If we correct imissing directions and assign "fin", this method becomes
-        much less stable and also one needs to correctly take care of corner cases.
-        """
         super().__init__(indices, gridInfo, precision_policy)
         self.name = "DoNothing"
         self.implementationStep = "PostStreaming"
@@ -1204,46 +1200,6 @@ class ConvectiveOutflow(BoundaryCondition):
         nbd = len(self.indices[0])
         self.bindex = np.arange(nbd)[:, None]
 
-    # @partial(jit, static_argnums=(0, 3), inline=True)
-    # def prepare_populations(self, fout, fin, implementation_step):
-    #     """
-    #     Prepares the distribution functions for the boundary condition.
-    #
-    #     Parameters
-    #     ----------
-    #     fout : jax.numpy.ndarray
-    #         The incoming distribution functions.
-    #     fin : jax.numpy.ndarray
-    #         The outgoing distribution functions.
-    #     implementation_step : str
-    #         The step in the lattice Boltzmann method algorithm at which the preparation is applied.
-    #
-    #     Returns
-    #     -------
-    #     jax.numpy.ndarray
-    #         The prepared distribution functions.
-    #
-    #     Notes
-    #     -----
-    #     During PostCollision, stores the previous timestep's post-streaming boundary values
-    #     (imissing directions) into the iknown slots of the post-collision array. These values
-    #     survive streaming and are retrieved in the apply method during PostStreaming.
-    #     """
-    #     if implementation_step == "PostStreaming":
-    #         return fout
-    #
-    #     if not self.neighbors_found:
-    #         self.find_neighbors()
-    #         self.neighbors_found = True
-    #
-    #     nbd = len(self.indices[0])
-    #     bindex = np.arange(nbd)[:, None]
-    #     fps_bdr = fin[self.indices]
-    #     fpc_bdr = fout[self.indices]
-    #     fpc_bdr = fpc_bdr.at[bindex, self.iknown].set(fps_bdr[bindex, self.imissing])
-    #     fout = fout.at[self.indices].set(fpc_bdr)
-    #     return fout
-
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
         """
@@ -1528,70 +1484,6 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         beta = self.w_NEQ * jnp.repeat(self.prescribed - rho_incorrect, axis=-1, repeats=self.lattice.q) / jnp.sum(self.w_NEQ)
         fbd = fbd.at[bindex, self.imissing].set(fbd[bindex, self.imissing] + beta[bindex, self.imissing])
         return fbd
-
-
-class ThermalBoundaryCondition(object):
-    """
-    Thermal boundary conditions base class definition. Thermal part of the code utilizes finite difference method (FDM) instead of LBM, hence separate treatment of thermal BCs.
-    The boundary condition can handle both time dependent and independent source using is_dynamic flag. By default, is_dynamic is set as False.
-
-
-    Parameters
-    ----------
-    indices: (array-like): Indices of the boundary nodes.
-    nx (int): The number of nodes in the x direction.
-    ny (int): The number of nodes in the y direction.
-    nz (int): The number of nodes in the z direction.
-    dim (int): The number of dimensions in the simulation (2 or 3).
-    precision_policy (precisionPolicy): The precision policy used in the simulation.
-    isDynamic (bool): Specify if the boundary condition value is time-dependent. By default it is set as False.
-    """
-
-    def __init__(self, indices, fluid_solver, is_dynamic=False, value=None):
-        self.indices = indices
-        self.nx = fluid_solver.gridInfo["nx"]
-        self.ny = fluid_solver.gridInfo["ny"]
-        self.nz = fluid_solver.gridInfo["nz"]
-        self.dim = fluid_solver
-        self.precisionPolicy = fluid_solver.precision_policy
-        self.isDynamic = is_dynamic
-        if not self.isDynamic:
-            self.value = jnp.array(value, dtype=self.precisionPolicy.compute_dtype)
-        else:
-            self.value = None
-
-    @partial(jit, static_argnums=(0,))
-    def update(self, timestep):
-        pass
-
-    @partial(jit, static_argnums=(0,))
-    def apply(self, T, timestep):
-        pass
-
-
-class ThermalDirichlet(ThermalBoundaryCondition):
-    """
-    Dirichlet boundary condition for thermal equation.
-    """
-
-    def __init__(self, indices, fluid_solver, temperature):
-        super().__init__(indices, fluid_solver, is_dynamic=False, value=temperature)
-
-    @partial(jit, static_argnums=(0,))
-    def apply(self, T, timestep):
-        if self.isDynamic:
-            self.value = self.update(timestep)
-        T = T.at[self.indices].set(self.value)
-        return T
-
-
-class ThermalNeumann(ThermalBoundaryCondition):
-    """
-    Neumann boundary condition for thermal equation.
-    """
-
-    def __init__(self, indices, fluid_solver, flux):
-        super().__init__(indices, fluid_solver, is_dynamic=False, value=flux)
 
 
 class ThermalBoundaryCondition(object):

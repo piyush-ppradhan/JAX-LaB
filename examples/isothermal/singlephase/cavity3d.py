@@ -120,7 +120,7 @@ class Cavity(KBCSim):
 
         # Calculate the velocity magnitude
         # u_mag = np.linalg.norm(u, axis=2)
-        # live_volume_randering(timestep, u_mag)
+        # live_volume_rendering(timestep, u_mag)
 
 
 if __name__ == "__main__":

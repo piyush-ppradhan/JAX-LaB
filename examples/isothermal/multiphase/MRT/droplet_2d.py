@@ -12,7 +12,7 @@ from jax import config
 import numpy as np
 
 from jax_lab.lattice import LatticeD2Q9
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 from jax_lab.utils import save_fields_vtk
 from jax_lab.multiphase import MultiphaseMRT
 
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     s_v = [1.0]
 
     kwargs = {"a": [a], "b": [b], "R": [R], "T": T}
-    eos = VanderWaal(**kwargs)
+    eos = VanderWaals(**kwargs)
 
     precision = "f32/f32"
     kwargs = {

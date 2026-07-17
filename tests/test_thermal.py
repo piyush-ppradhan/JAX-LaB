@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from jax_lab.boundary_conditions import DirichletTemperature, NeumannTemperature
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 from jax_lab.lattice import LatticeD2Q9, LatticeD3Q19
 from jax_lab.models import BGKSim
 from jax_lab.multiphase import MultiphaseBGK
@@ -150,7 +150,7 @@ def make_multiphase_thermal(temperature_field_type="thermal", K=0.05):
         g_kkprime=-np.ones((1, 1)),
         k=[1.0],
         A=np.zeros((1, 1)),
-        EOS=VanderWaal(**eos_kwargs),
+        EOS=VanderWaals(**eos_kwargs),
         precision=PRECISION,
         io_rate=0,
         print_info_rate=0,

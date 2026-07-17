@@ -8,18 +8,18 @@ inverse modeling of multiphase flows.
 The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
 
 ## Showcase
-<p align="center">
+<div align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="" width="49%" title="Evaporation in Fontainebleau sandstone">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="" width="49%" title="Drainage Simulation">
-</p>
-<p align="center">
+</div>
+<div align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/rayleigh_taylor_2d.gif" alt="" width="49%" title="Rayleigh-Taylor instability">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="" width="49%" title="Two-dimensional pool boiling">
-</p>
-<p align="center">
+</div>
+<div align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="49%" title="Contact Angle Hysteresis">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="" width="49%" title="Droplet Evaporation">
-</p>
+</div>
 <div align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/predicted.png" alt="" width="98%">
 </div>
@@ -137,9 +137,9 @@ The I/O and visualization utilities load their dependencies lazily (at call time
 
 | Package | Required by |
 |---|---|
-| [PyVista](https://docs.pyvista.org/) | `save_fields_vtk`, `save_BCs_vtk`, `live_volume_randering` |
+| [PyVista](https://docs.pyvista.org/) | `save_fields_vtk`, `save_BCs_vtk`, `live_volume_rendering` |
 | [h5py](https://docs.h5py.org/) | `save_fields_hdf5_xdmf` |
-| [matplotlib](https://matplotlib.org/) | `save_image`, `live_volume_randering` |
+| [matplotlib](https://matplotlib.org/) | `save_image`, `live_volume_rendering` |
 | [trimesh](https://trimesh.org/) + Rtree | `voxelize_stl` |
 
 Calling one of these functions without its dependency installed raises an `ImportError` naming the missing package. The `io` extra installs all of them at once (recommended for running the examples, most of which write VTK or image output):

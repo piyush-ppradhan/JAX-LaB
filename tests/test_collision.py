@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jax_lab.eos import VanderWaal
+from jax_lab.eos import VanderWaals
 from jax_lab.lattice import LatticeD2Q9, LatticeD3Q19
 from jax_lab.models import BGKSim, MRTSim
 from jax_lab.multiphase import MultiphaseBGK, MultiphaseMRT
@@ -216,7 +216,7 @@ def test_multiphase_collision_against_taylor_green(model_class, lattice_class, d
         "g_kkprime": -np.ones((1, 1)),
         "k": [1.0],
         "A": np.zeros((1, 1)),
-        "EOS": VanderWaal(a=[9.0 / 49.0], b=[2.0 / 21.0], R=[1.0], T=0.8 * 0.5714285714),
+        "EOS": VanderWaals(a=[9.0 / 49.0], b=[2.0 / 21.0], R=[1.0], T=0.8 * 0.5714285714),
     }
     if model_class is MultiphaseMRT:
         parameters |= _mrt_relaxation_parameters(parameters["lattice"], multiphase=True)
