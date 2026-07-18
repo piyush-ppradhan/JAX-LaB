@@ -1,6 +1,5 @@
 """
-Utility class to convert between LBM (lattice) units and physical SI units for single and
-multiphase, thermal and isothermal flows.
+Utility class to convert between LBM (lattice) units and physical SI units for single and multiphase, thermal and isothermal flows.
 
 References
 ----------
@@ -15,13 +14,10 @@ class Unit:
     """
     Convert quantities between LBM (lattice) units and SI units.
 
-    The conversion is defined by four independent scale factors (mass, length, time and
-    temperature), each expressed as SI units per lattice unit. All derived quantities
-    (density, velocity, pressure, force, viscosity) are converted using combinations of
-    these factors. Conversion methods accept scalars, JAX/numpy arrays or pytrees of
-    arrays, so both single phase fields and multiphase/multicomponent field trees
-    (as used by the Multiphase class) are supported. The temperature scale is only
-    relevant for thermal flows; isothermal flows can leave it at its default.
+    The conversion is defined by four independent scale factors (mass, length, time and temperature), each expressed as SI units per lattice unit. All derived quantities
+    (density, velocity, pressure, force, viscosity) are converted using combinations of these factors. Conversion methods accept scalars, JAX/numpy arrays or pytrees of
+    arrays, so both single phase fields and multiphase/multicomponent field trees (as used by the Multiphase class) are supported. The temperature scale is only relevant
+    for thermal flows; isothermal flows can leave it at its default.
 
     Parameters
     ----------
@@ -386,10 +382,8 @@ class Unit:
         """
         Determine the mass, length and time scales for a single phase flow.
 
-        Matching kinematic viscosity and density between SI and LBM units fixes two of
-        the three mechanical scales, so exactly one of lbm_length, lbm_time or lbm_mass
-        must be provided to close the system. Assumes the LBM viscosity was chosen for
-        the target relaxation time, nu = cs^2 * (tau - 1/2) (see Krüger et al., 2017).
+        Matching kinematic viscosity and density between SI and LBM units fixes two of the three mechanical scales, so exactly one of lbm_length, lbm_time or lbm_mass
+        must be provided to close the system. Assumes the LBM viscosity was chosen for the target relaxation time, nu = cs^2 * (tau - 1/2) (see Krüger et al., 2017).
 
         Parameters
         ----------
@@ -444,12 +438,9 @@ class Unit:
         """
         Determine the mass, length, time and temperature scales for a multiphase flow.
 
-        Same closure as determine_lbm_scale_singlephase, but the LBM reference density
-        is fixed by the equation of state (typically the critical or coexistence liquid
-        density) and must be provided. For thermal flows, matching a reference
-        temperature (typically the critical temperature of the EOS) sets the
-        temperature scale; isothermal flows can omit it (see Yuan and Schaefer, 2006,
-        https://doi.org/10.1063/1.2187070).
+        Same closure as determine_lbm_scale_singlephase, but the LBM reference density is fixed by the equation of state (typically the critical or coexistence liquid
+        density) and must be provided. For thermal flows, matching a reference temperature (typically the critical temperature of the EOS) sets the temperature scale;
+        isothermal flows can omit it (see Yuan and Schaefer, 2006, https://doi.org/10.1063/1.2187070).
 
         Parameters
         ----------

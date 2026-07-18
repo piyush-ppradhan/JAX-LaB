@@ -193,7 +193,8 @@ class BoundaryCondition(object):
 
         Notes
         -----
-        This method should be overridden in subclasses if the boundary condition requires preparation of the distribution functions during post-collision or post-streaming. See ExtrapolationBoundaryCondition for an example.
+        This method should be overridden in subclasses if the boundary condition requires preparation of the distribution functions during post-collision or post-streaming.
+        See ExtrapolationBoundaryCondition for an example.
         """
         return fout
 

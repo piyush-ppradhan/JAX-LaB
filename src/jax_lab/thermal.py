@@ -65,7 +65,7 @@ class Thermal(object):
     def __init__(self, **kwargs):
         self.fluid_solver = kwargs.get("fluid_solver")
         if self.fluid_solver is None:
-            raise ValueError("A configured fluid solver must be provided via the 'fluid_solver' keyword.")
+            raise ValueError("A fluid_solver must be provided for thermal simulations.")
 
         # Share grid, lattice, precision and run control settings with the fluid solver
         self.lattice = self.fluid_solver.lattice
