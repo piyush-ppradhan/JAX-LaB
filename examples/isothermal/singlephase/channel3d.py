@@ -528,18 +528,18 @@ class TurbulentChannel(KBCSim):
 
     def set_boundary_conditions(self):
         # top and bottom sides of the channel are no-slip and the other directions are periodic
-        wall = np.concatenate((self.boundingBoxIndices["bottom"], self.boundingBoxIndices["top"]))
-        self.BCs.append(Regularized(tuple(wall.T), self.gridInfo, self.precisionPolicy, "velocity", np.zeros((wall.shape[0], 3))))
+        wall = np.concatenate((self.bounding_box_indices["bottom"], self.bounding_box_indices["top"]))
+        self.BCs.append(Regularized(tuple(wall.T), self.grid_info, self.precision_policy, "velocity", np.zeros((wall.shape[0], 3))))
         return
 
     def initialize_macroscopic_fields(self):
-        rho = self.precisionPolicy.cast_to_output(1.0)
+        rho = self.precision_policy.cast_to_output(1.0)
         u = self.distributed_array_init(
             (self.nx, self.ny, self.nz, self.dim),
-            self.precisionPolicy.compute_dtype,
+            self.precision_policy.compute_dtype,
             init_val=1e-2 * np.random.random((self.nx, self.ny, self.nz, self.dim)),
         )
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.precision_policy.cast_to_output(u)
         return rho, u
 
     def initialize_populations(self, rho, u):
@@ -557,7 +557,7 @@ class TurbulentChannel(KBCSim):
         # define the external force
         force = np.zeros((self.nx, self.ny, self.nz, 3))
         force[..., 0] = Re_tau**2 * visc**2 / h**3
-        return self.precisionPolicy.cast_to_output(force)
+        return self.precision_policy.cast_to_output(force)
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho"])

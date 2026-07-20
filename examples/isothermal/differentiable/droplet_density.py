@@ -62,11 +62,11 @@ class GroundTruthBGK(MultiphaseBGK):
 
         rho = np.zeros((self.nx, self.ny, 1))
         rho[..., 0] = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
-        rho = self.distributed_array_init(rho.shape, self.precisionPolicy.compute_dtype, init_val=rho)
+        rho = self.distributed_array_init(rho.shape, self.precision_policy.compute_dtype, init_val=rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init(u.shape, self.precisionPolicy.compute_dtype, init_val=u)
-        return [self.precisionPolicy.cast_to_output(rho)], [self.precisionPolicy.cast_to_output(u)]
+        u = self.distributed_array_init(u.shape, self.precision_policy.compute_dtype, init_val=u)
+        return [self.precision_policy.cast_to_output(rho)], [self.precision_policy.cast_to_output(u)]
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho_tree"][0])
@@ -82,22 +82,22 @@ class AutodiffMultiphaseBGK(MultiphaseBGK):
     def __init__(self, model, **kwargs):
         super().__init__(**kwargs)
         self.model = model
-        self.rho_init_rand = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho_init_rand)
+        self.rho_init_rand = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho_init_rand)
 
     def initialize_macroscopic_fields(self):
         rho = self.model(self.rho_init_rand)
-        rho = self.distributed_array_init(rho.shape, self.precisionPolicy.compute_dtype, init_val=rho)
+        rho = self.distributed_array_init(rho.shape, self.precision_policy.compute_dtype, init_val=rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init(u.shape, self.precisionPolicy.compute_dtype, init_val=u)
-        return [self.precisionPolicy.cast_to_output(rho)], [self.precisionPolicy.cast_to_output(u)]
+        u = self.distributed_array_init(u.shape, self.precision_policy.compute_dtype, init_val=u)
+        return [self.precision_policy.cast_to_output(rho)], [self.precision_policy.cast_to_output(u)]
 
     def initialize_macroscopic_fields_from_rho(self, rho):
-        rho = self.distributed_array_init(rho.shape, self.precisionPolicy.compute_dtype, init_val=rho)
+        rho = self.distributed_array_init(rho.shape, self.precision_policy.compute_dtype, init_val=rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init(u.shape, self.precisionPolicy.compute_dtype, init_val=u)
-        return [self.precisionPolicy.cast_to_output(rho)], [self.precisionPolicy.cast_to_output(u)]
+        u = self.distributed_array_init(u.shape, self.precision_policy.compute_dtype, init_val=u)
+        return [self.precision_policy.cast_to_output(rho)], [self.precision_policy.cast_to_output(u)]
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho_tree"][0])

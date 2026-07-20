@@ -41,26 +41,26 @@ class PorousMedia(MultiphaseBGK):
         rho_tree = []
 
         rho = np.ones((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # apply inlet equilibrium boundary condition at the left
-        inlet = self.boundingBoxIndices["left"]
-        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        self.BCs[0].append(Regularized(tuple(inlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_inlet))
+        inlet = self.bounding_box_indices["left"]
+        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        self.BCs[0].append(Regularized(tuple(inlet.T), self.grid_info, self.precision_policy, "pressure", rho_inlet))
 
         # Same at the outlet
-        outlet = self.boundingBoxIndices["right"]
-        rho_outlet = 0.97 * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        self.BCs[0].append(Regularized(tuple(outlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_outlet))
+        outlet = self.bounding_box_indices["right"]
+        rho_outlet = 0.97 * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        self.BCs[0].append(Regularized(tuple(outlet.T), self.grid_info, self.precision_policy, "pressure", rho_outlet))
 
         # Wall boundary condition
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
@@ -71,13 +71,13 @@ class PorousMedia(MultiphaseBGK):
         idx[:, 2] = ind[2]
         wall = np.concatenate((
             idx,
-            self.boundingBoxIndices["top"],
-            self.boundingBoxIndices["bottom"],
-            self.boundingBoxIndices["front"],
-            self.boundingBoxIndices["back"],
+            self.bounding_box_indices["top"],
+            self.bounding_box_indices["bottom"],
+            self.bounding_box_indices["front"],
+            self.bounding_box_indices["back"],
         ))
         self.BCs[0].append(
-            BounceBack(tuple(wall.T), self.gridInfo, self.precisionPolicy, theta[tuple(wall.T)], phi[tuple(wall.T)], delta_rho[tuple(wall.T)])
+            BounceBack(tuple(wall.T), self.grid_info, self.precision_policy, theta[tuple(wall.T)], phi[tuple(wall.T)], delta_rho[tuple(wall.T)])
         )
 
     @partial(jit, static_argnums=(0,))
@@ -109,14 +109,14 @@ class PorousMediaGeometric(PorousMedia):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # apply inlet equilibrium boundary condition at the left
-        inlet = self.boundingBoxIndices["left"]
-        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        self.BCs[0].append(Regularized(tuple(inlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_inlet))
+        inlet = self.bounding_box_indices["left"]
+        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        self.BCs[0].append(Regularized(tuple(inlet.T), self.grid_info, self.precision_policy, "pressure", rho_inlet))
 
         # Same at the outlet
-        outlet = self.boundingBoxIndices["right"]
-        rho_outlet = 0.97 * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        self.BCs[0].append(Regularized(tuple(outlet.T), self.gridInfo, self.precisionPolicy, "pressure", rho_outlet))
+        outlet = self.bounding_box_indices["right"]
+        rho_outlet = 0.97 * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        self.BCs[0].append(Regularized(tuple(outlet.T), self.grid_info, self.precision_policy, "pressure", rho_outlet))
 
         # Wall boundary condition
         ind = np.where(binary == 1.0)
@@ -126,13 +126,13 @@ class PorousMediaGeometric(PorousMedia):
         idx[:, 2] = ind[2]
         wall = np.concatenate((
             idx,
-            self.boundingBoxIndices["top"],
-            self.boundingBoxIndices["bottom"],
-            self.boundingBoxIndices["front"],
-            self.boundingBoxIndices["back"],
+            self.bounding_box_indices["top"],
+            self.bounding_box_indices["bottom"],
+            self.bounding_box_indices["front"],
+            self.bounding_box_indices["back"],
         ))
         wall = tuple(wall.T)
-        self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta[wall]))
+        self.BCs[0].append(BounceBack(wall, self.grid_info, self.precision_policy, theta[wall]))
 
 
 if __name__ == "__main__":

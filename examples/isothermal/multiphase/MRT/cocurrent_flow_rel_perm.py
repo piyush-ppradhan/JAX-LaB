@@ -31,24 +31,24 @@ class Channel2D(MultiphaseMRT):
         rho_tree = []
 
         rho = rho_c * np.ones((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
 
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
         # apply bounce back boundary condition to the walls
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls], phi[walls], delta_rho[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls], phi[walls], delta_rho[walls]))
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
@@ -92,10 +92,10 @@ class Channel2DGeometric(Channel2D):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
         # apply bounce back boundary condition to the walls
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls]))
 
 
 class CocurrentFlow(MultiphaseMRT):
@@ -109,30 +109,30 @@ class CocurrentFlow(MultiphaseMRT):
         # Wetting fluid
         rho = fraction * rho_t * np.ones((self.nx, self.ny, 1))
         rho[:, self.ny // 2 - a : self.ny // 2 + a] = (1 - fraction) * rho_t
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # Non-wetting fluid
         rho = (1 - fraction) * rho_t * np.ones((self.nx, self.ny, 1))
         rho[:, self.ny // 2 - a : self.ny // 2 + a] = fraction * rho_t
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
         # apply bounce back boundary condition to the walls
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_w[walls], phi_w[walls], delta_rho_w[walls]))
-        self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_nw[walls], phi_nw[walls], delta_rho_nw[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_w[walls], phi_w[walls], delta_rho_w[walls]))
+        self.BCs[1].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_nw[walls], phi_nw[walls], delta_rho_nw[walls]))
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
@@ -195,11 +195,11 @@ class CocurrentFlowGeometric(CocurrentFlow):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
         # apply bounce back boundary condition to the walls
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_w[walls]))
-        self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_nw[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_w[walls]))
+        self.BCs[1].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_nw[walls]))
 
 
 if __name__ == "__main__":

@@ -49,13 +49,13 @@ class DropletOnLiquid3D(MultiphaseMRT):
         rho[:, 0 : self.ny, :, 0] = rho_profile[::-1].reshape((-1, 1))
         rho[..., 0] = rho[..., 0] + sphere - rho_g
 
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
-        u = jnp.zeros((self.nx, self.ny, self.nz, 3), dtype=self.precisionPolicy.compute_dtype)
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = jnp.zeros((self.nx, self.ny, self.nz, 3), dtype=self.precision_policy.compute_dtype)
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
@@ -65,11 +65,11 @@ class DropletOnLiquid3D(MultiphaseMRT):
         )
         walls = tuple(walls.T)
         self.BCs[0].append(
-            BounceBackHalfway(walls, self.gridInfo, self.precisionPolicy, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls])
+            BounceBackHalfway(walls, self.grid_info, self.precision_policy, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls])
         )
 
     def output_data(self, **kwargs):
-        rho = jnp.array(kwargs["rho_tree"][0][0, ..., 0], dtype=self.precisionPolicy.compute_dtype)
+        rho = jnp.array(kwargs["rho_tree"][0][0, ..., 0], dtype=self.precision_policy.compute_dtype)
 
         red = pg.SolidColor(color=(1.0, 0.0, 0.0), opacity=1.0)
 
@@ -131,7 +131,7 @@ class DropletOnLiquid3DGeometric(DropletOnLiquid3D):
             [[i, j, k] for i in range(self.nx) for j in [0, 1, 2, self.ny - 3, self.ny - 2, self.ny - 1] for k in range(self.nz)], dtype=int
         )
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBackHalfway(walls, self.gridInfo, self.precisionPolicy, theta=theta[walls]))
+        self.BCs[0].append(BounceBackHalfway(walls, self.grid_info, self.precision_policy, theta=theta[walls]))
 
 
 if __name__ == "__main__":

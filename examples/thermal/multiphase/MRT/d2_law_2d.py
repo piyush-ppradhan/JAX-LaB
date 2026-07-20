@@ -71,12 +71,12 @@ class EvaporatingDroplet(MultiphaseMRT):
         rho_vapor = vapor_density_at_pressure(T, p_sat)
         rho = liquid_fraction * rho_l + (1.0 - liquid_fraction) * rho_vapor
         rho = rho.reshape((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho_tree = [self.precisionPolicy.cast_to_output(rho)]
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho_tree = [self.precision_policy.cast_to_output(rho)]
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u_tree = [self.precisionPolicy.cast_to_output(u)]
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u_tree = [self.precision_policy.cast_to_output(u)]
         return rho_tree, u_tree
 
 
@@ -106,7 +106,7 @@ class DropletThermal(MultiphaseThermal):
 
     def set_thermal_boundary_conditions(self):
         faces = ("left", "right", "bottom", "top")
-        bbox = self.fluid_solver.boundingBoxIndices
+        bbox = self.fluid_solver.bounding_box_indices
         far_field = np.unique(np.concatenate([bbox[face] for face in faces]), axis=0)
         self.thermal_BCs = [DirichletTemperature(tuple(far_field.T), prescribed=T_vap)]
 

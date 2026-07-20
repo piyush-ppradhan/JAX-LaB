@@ -29,23 +29,23 @@ class DropletOnWall2D(MultiphaseCascade):
         dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2 - 100) ** 2)
         rho = 0.5 * (rho_w_l + rho_w_g) - 0.5 * (rho_w_l - rho_w_g) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((nx, ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = [rho]
         rho = 0.5 * (rho_a_l + rho_a_g) - 0.5 * (rho_a_l - rho_a_g) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((nx, ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         p_tree = self.compute_pressure(rho_tree)
         # Shan-Chen potential using modified pressure
         psi_tree = tree_map(
@@ -71,7 +71,7 @@ class DropletOnWall2D(MultiphaseCascade):
                 * rho_tree[0]
                 * jnp.dot(
                     self.G_ff * self.streaming(jnp.repeat(rho_tree[1], repeats=self.lattice.q, axis=-1)),
-                    self.precisionPolicy.cast_to_compute(self.lattice.c.T),
+                    self.precision_policy.cast_to_compute(self.lattice.c.T),
                 )
             )
             # F_2 = (
@@ -79,7 +79,7 @@ class DropletOnWall2D(MultiphaseCascade):
             #     * rho_tree[1]
             #     * jnp.dot(
             #         self.G_ff * self.streaming(jnp.repeat(rho_tree[0], repeats=self.lattice.q, axis=-1)),
-            #         self.precisionPolicy.cast_to_compute(self.lattice.c.T),
+            #         self.precision_policy.cast_to_compute(self.lattice.c.T),
             #     )
             # )
             F_2 = F_1
@@ -93,7 +93,7 @@ class DropletOnWall2D(MultiphaseCascade):
     @partial(jit, static_argnums=(0,))
     def compute_force_central_moments(self, F_tree, F_intra_tree, psi_tree):
         def f(F, F_intra, sigma, psi, s_b):
-            C = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            C = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             Fx = F_intra[..., 0]
             Fy = F_intra[..., 1]
             eta = 4 * sigma * (Fx**2 + Fy**2) / ((psi[..., 0] ** 2) * (1 / s_b - 0.5))  # For mechanical stability
@@ -131,10 +131,10 @@ class DropletOnWall2D(MultiphaseCascade):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(
-            BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(ind.T)], phi_w[tuple(ind.T)], delta_rho_w[tuple(ind.T)])
+            BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_w[tuple(ind.T)], phi_w[tuple(ind.T)], delta_rho_w[tuple(ind.T)])
         )
         self.BCs[1].append(
-            BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_a[tuple(ind.T)], phi_a[tuple(ind.T)], delta_rho_a[tuple(ind.T)])
+            BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_a[tuple(ind.T)], phi_a[tuple(ind.T)], delta_rho_a[tuple(ind.T)])
         )
 
     def output_data(self, **kwargs):
@@ -153,16 +153,16 @@ class DropletOnWall2DGeometric(DropletOnWall2D):
         self.BCs[0].append(
             BounceBack(
                 tuple(ind.T),
-                self.gridInfo,
-                self.precisionPolicy,
+                self.grid_info,
+                self.precision_policy,
                 theta_w[tuple(ind.T)],
             )
         )
         self.BCs[1].append(
             BounceBack(
                 tuple(ind.T),
-                self.gridInfo,
-                self.precisionPolicy,
+                self.grid_info,
+                self.precision_policy,
                 theta_a[tuple(ind.T)],
             )
         )

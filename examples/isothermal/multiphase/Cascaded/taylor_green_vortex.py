@@ -32,15 +32,15 @@ class TaylorGreen2D(MultiphaseCascade):
 
         rho = np.zeros((self.nx, self.ny, 1))
         rho[..., 0] = 3.0 * (1.0 - u_0**2 / 4.0 * (np.cos(2.0 * phi * x) + np.cos(2.0 * phi * y)))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
         u[..., 0] = u_0 * np.sin(phi * x) * np.cos(phi * y)
         u[..., 1] = -u_0 * np.cos(phi * x) * np.sin(phi * y)
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 

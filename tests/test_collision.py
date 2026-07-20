@@ -87,8 +87,8 @@ class TaylorGreenInitialFields:
         domain = (self.nx, self.ny, self.nz)
         density, velocity = _taylor_green_fields(domain, time=0.0)
         return (
-            self.precisionPolicy.cast_to_output(density),
-            self.precisionPolicy.cast_to_output(velocity),
+            self.precision_policy.cast_to_output(density),
+            self.precision_policy.cast_to_output(velocity),
         )
 
 
@@ -98,13 +98,13 @@ class MultiphaseTaylorGreenInitialFields:
     def initialize_macroscopic_fields(self):
         domain = (self.nx, self.ny, self.nz)
         density, velocity = _taylor_green_fields(domain, time=0.0)
-        return [self.precisionPolicy.cast_to_output(density)], [self.precisionPolicy.cast_to_output(velocity)]
+        return [self.precision_policy.cast_to_output(density)], [self.precision_policy.cast_to_output(velocity)]
 
     def compute_force(self, rho_tree, T=None):
-        return [jnp.zeros((*density.shape[:-1], self.dim), dtype=self.precisionPolicy.compute_dtype) for density in rho_tree]
+        return [jnp.zeros((*density.shape[:-1], self.dim), dtype=self.precision_policy.compute_dtype) for density in rho_tree]
 
     def adjust_surface_tension(self, psi_tree):
-        return [jnp.zeros((*psi.shape[:-1], self.q), dtype=self.precisionPolicy.compute_dtype) for psi in psi_tree]
+        return [jnp.zeros((*psi.shape[:-1], self.q), dtype=self.precision_policy.compute_dtype) for psi in psi_tree]
 
 
 def _mrt_matrix(lattice):

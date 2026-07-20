@@ -90,12 +90,12 @@ class EvaporatingDroplet(MultiphaseMRT):
         rho_vapor = vapor_density_at_pressure(T, p_sat)
         rho = liquid_fraction * rho_l + (1.0 - liquid_fraction) * rho_vapor
         rho = rho.reshape((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho_tree = [self.precisionPolicy.cast_to_output(rho)]
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho_tree = [self.precision_policy.cast_to_output(rho)]
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u_tree = [self.precisionPolicy.cast_to_output(u)]
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u_tree = [self.precision_policy.cast_to_output(u)]
         return rho_tree, u_tree
 
 
@@ -126,7 +126,7 @@ class DropletThermal(MultiphaseThermal):
 
     def set_thermal_boundary_conditions(self):
         faces = ("left", "right", "front", "back", "bottom", "top")
-        bbox = self.fluid_solver.boundingBoxIndices
+        bbox = self.fluid_solver.bounding_box_indices
         far_field = np.unique(np.concatenate([bbox[face] for face in faces]), axis=0)
         self.thermal_BCs = [DirichletTemperature(tuple(far_field.T), prescribed=T_vap)]
 
@@ -146,7 +146,7 @@ class DropletThermal(MultiphaseThermal):
         relative_mass_error = abs(mass - self.initial_mass) / self.initial_mass
 
         D, liquid_volume, liquid_fraction = droplet_diameter(rho)
-        if timestep % self.ioRate == 0:
+        if timestep % self.io_rate == 0:
             save_fields_hdf5_xdmf(timestep, {"rho": rho, "T": T}, output_dir, prefix=self.xdmf_prefix)
             # save_fields_vtk(timestep, {"rho": rho, "T": T}, output_dir, prefix=self.vtk_prefix)
         if liquid_volume <= 1.0 or D <= self.minimum_diameter:
@@ -164,7 +164,7 @@ class DropletThermal(MultiphaseThermal):
         centroid = np.array([(liquid_fraction * coordinate).sum() / liquid_volume for coordinate in coordinates])
         self.history.append((timestep, D, centroid[0], centroid[1], centroid[2]))
 
-        if timestep % self.ioRate == 0:
+        if timestep % self.io_rate == 0:
             print(
                 f"timestep {timestep}: (D/D0)^2 = {(D / self.D0) ** 2:.4f}, "
                 # f"rho = [{rho.min():.4f}, {rho.max():.4f}], T/Tc = [{T.min() / Tc:.4f}, {T.max() / Tc:.4f}], "

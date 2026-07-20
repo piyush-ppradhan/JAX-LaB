@@ -41,17 +41,17 @@ class Cavity(KBCSim):
 
     def set_boundary_conditions(self):
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["left"], self.boundingBoxIndices["right"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["left"], self.bounding_box_indices["right"], self.bounding_box_indices["bottom"]))
         # apply bounce back boundary condition to the walls
-        self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBackHalfway(tuple(walls.T), self.grid_info, self.precision_policy))
 
         # apply inlet equilibrium boundary condition to the top wall
-        moving_wall = self.boundingBoxIndices["top"]
+        moving_wall = self.bounding_box_indices["top"]
 
-        rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_wall = np.zeros(moving_wall.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_wall = np.zeros(moving_wall.shape, dtype=self.precision_policy.compute_dtype)
         vel_wall[:, 0] = prescribed_vel
-        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall))
+        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.grid_info, self.precision_policy, rho_wall, vel_wall))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
@@ -65,7 +65,7 @@ class Cavity(KBCSim):
         # from jax_lab.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
         save_fields_vtk(timestep, fields)
-        save_BCs_vtk(timestep, self.BCs, self.gridInfo)
+        save_BCs_vtk(timestep, self.BCs, self.grid_info)
 
 
 if __name__ == "__main__":

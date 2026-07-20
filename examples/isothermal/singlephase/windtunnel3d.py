@@ -60,34 +60,34 @@ class Car(KBCSim):
         tx, ty, tz = np.array([nx, ny, nz]) - car_matrix.shape
         shift = [tx // 4, ty // 2, 0]
         car_indices = np.argwhere(car_matrix) + shift
-        self.BCs.append(BounceBackHalfway(tuple(car_indices.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBackHalfway(tuple(car_indices.T), self.grid_info, self.precision_policy))
 
         wall = np.concatenate((
-            self.boundingBoxIndices["bottom"],
-            self.boundingBoxIndices["top"],
-            self.boundingBoxIndices["front"],
-            self.boundingBoxIndices["back"],
+            self.bounding_box_indices["bottom"],
+            self.bounding_box_indices["top"],
+            self.bounding_box_indices["front"],
+            self.bounding_box_indices["back"],
         ))
-        self.BCs.append(BounceBack(tuple(wall.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBack(tuple(wall.T), self.grid_info, self.precision_policy))
 
-        doNothing = self.boundingBoxIndices["right"]
-        self.BCs.append(DoNothing(tuple(doNothing.T), self.gridInfo, self.precisionPolicy))
-        self.BCs[-1].implementationStep = "PostCollision"
-        # rho_outlet = np.ones(doNothing.shape[0], dtype=self.precisionPolicy.compute_dtype)
+        doNothing = self.bounding_box_indices["right"]
+        self.BCs.append(DoNothing(tuple(doNothing.T), self.grid_info, self.precision_policy))
+        self.BCs[-1].implementation_step = "PostCollision"
+        # rho_outlet = np.ones(doNothing.shape[0], dtype=self.precision_policy.compute_dtype)
         # self.BCs.append(ZouHe(tuple(doNothing.T),
-        #                                          self.gridInfo,
-        #                                          self.precisionPolicy,
+        #                                          self.grid_info,
+        #                                          self.precision_policy,
         #                                          'pressure', rho_outlet))
 
-        inlet = self.boundingBoxIndices["left"]
-        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        inlet = self.bounding_box_indices["left"]
+        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
 
         vel_inlet[:, 0] = prescribed_vel
-        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
+        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_inlet, vel_inlet))
         # self.BCs.append(ZouHe(tuple(inlet.T),
-        #                                          self.gridInfo,
-        #                                          self.precisionPolicy,
+        #                                          self.grid_info,
+        #                                          self.precision_policy,
         #                                          'velocity', vel_inlet))
 
     def output_data(self, **kwargs):

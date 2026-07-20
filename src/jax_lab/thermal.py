@@ -69,26 +69,26 @@ class Thermal(object):
 
         # Share grid, lattice, precision and run control settings with the fluid solver
         self.lattice = self.fluid_solver.lattice
-        self.precisionPolicy = self.fluid_solver.precisionPolicy
+        self.precision_policy = self.fluid_solver.precision_policy
         self.nx = self.fluid_solver.nx
         self.ny = self.fluid_solver.ny
         self.nz = self.fluid_solver.nz
         self.dim = self.fluid_solver.dim
         self.streaming = self.fluid_solver.streaming
-        self.ioRate = self.fluid_solver.ioRate
-        self.printInfoRate = self.fluid_solver.printInfoRate
-        self.downsamplingFactor = self.fluid_solver.downsamplingFactor
-        self.returnFpost = self.fluid_solver.returnFpost
-        self.computeMLUPS = self.fluid_solver.computeMLUPS
+        self.io_rate = self.fluid_solver.io_rate
+        self.print_info_rate = self.fluid_solver.print_info_rate
+        self.downsampling_factor = self.fluid_solver.downsampling_factor
+        self.return_fpost = self.fluid_solver.return_fpost
+        self.compute_MLUPS = self.fluid_solver.compute_MLUPS
         self.restore_checkpoint = self.fluid_solver.restore_checkpoint
-        self.checkpointRate = self.fluid_solver.checkpointRate
-        self.checkpointDir = kwargs.get("checkpoint_dir", "./temperature_checkpoints")
-        self.nDevices = jax.device_count()
+        self.checkpoint_rate = self.fluid_solver.checkpoint_rate
+        self.checkpoint_dir = kwargs.get("checkpoint_dir", "./temperature_checkpoints")
+        self.n_devices = jax.device_count()
         self.backend = jax.default_backend()
 
-        if self.checkpointRate > 0:
-            mngr_options = orb.CheckpointManagerOptions(save_interval_steps=self.checkpointRate, max_to_keep=1)
-            self.mngr = orb.CheckpointManager(self.checkpointDir, options=mngr_options)
+        if self.checkpoint_rate > 0:
+            mngr_options = orb.CheckpointManagerOptions(save_interval_steps=self.checkpoint_rate, max_to_keep=1)
+            self.mngr = orb.CheckpointManager(self.checkpoint_dir, options=mngr_options)
         else:
             self.mngr = None
 
@@ -106,10 +106,10 @@ class Thermal(object):
             gravity = kwargs.get("gravity")
             if gravity is None:
                 raise ValueError("gravity must be provided when apply_buoyancy is True.")
-            self.gravity = jnp.array(np.array(gravity, dtype=np.float64), dtype=self.precisionPolicy.compute_dtype)
+            self.gravity = jnp.array(np.array(gravity, dtype=np.float64), dtype=self.precision_policy.compute_dtype)
             # The fluid collision only invokes apply_force when a force is present
             if self.fluid_solver.force is None:
-                self.fluid_solver.force = jnp.zeros(self.dim, dtype=self.precisionPolicy.compute_dtype)
+                self.fluid_solver.force = jnp.zeros(self.dim, dtype=self.precision_policy.compute_dtype)
             self.fluid_solver.apply_force = self.apply_force_thermal
 
         self.set_thermal_boundary_conditions()
@@ -151,9 +151,9 @@ class Thermal(object):
         if isinstance(value, np.ndarray):
             if value.shape != shape:
                 raise ValueError(f"The shape of {name} array must match the dimensions: (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D")
-            return jnp.array(value, dtype=self.precisionPolicy.compute_dtype)
+            return jnp.array(value, dtype=self.precision_policy.compute_dtype)
         elif isinstance(value, (int, float)):
-            return float(value) * jnp.ones(shape, dtype=self.precisionPolicy.compute_dtype)
+            return float(value) * jnp.ones(shape, dtype=self.precision_policy.compute_dtype)
         else:
             raise ValueError(f"Invalid type for {name}. It must be float or numpy.ndarray.")
 
@@ -259,9 +259,9 @@ class Thermal(object):
         if T0 is None:
             T0 = 1.0
         if isinstance(T0, np.ndarray):
-            T0 = jnp.array(T0, dtype=self.precisionPolicy.output_dtype)
+            T0 = jnp.array(T0, dtype=self.precision_policy.output_dtype)
 
-        T = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=T0)
+        T = self.distributed_array_init(shape, self.precision_policy.output_dtype, init_val=T0)
 
         return T
 
@@ -320,7 +320,7 @@ class Thermal(object):
         jax.numpy.ndarray: Gradient of the field, of shape (nx, ny, 2) in 2D or (nx, ny, nz, 3) in 3D.
         """
         field_streamed = self.streaming(jnp.repeat(field, repeats=self.lattice.q, axis=-1))
-        c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype).T
+        c = jnp.array(self.lattice.c, dtype=self.precision_policy.compute_dtype).T
         return -self.lattice.inv_cs2 * jnp.dot(self.lattice.w * field_streamed, c)
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -468,9 +468,9 @@ class Thermal(object):
         f_postcollision (jax.numpy.ndarray or None): The post-collision distribution functions after the simulation
         step, or None if return_fpost is False.
         """
-        T = self.precisionPolicy.cast_to_compute(T_prev)
+        T = self.precision_policy.cast_to_compute(T_prev)
         T = self.apply_bc(T, timestep)
-        f_compute = self.precisionPolicy.cast_to_compute(f_poststreaming)
+        f_compute = self.precision_policy.cast_to_compute(f_poststreaming)
         rho, u = self.fluid_solver.update_macroscopic(f_compute)
 
         f_poststreaming, f_postcollision = self.fluid_solver.step(f_poststreaming, timestep, return_fpost=return_fpost)
@@ -478,7 +478,7 @@ class Thermal(object):
 
         T = self.apply_bc(T, timestep)
 
-        return self.precisionPolicy.cast_to_output(T), f_poststreaming, f_postcollision
+        return self.precision_policy.cast_to_output(T), f_poststreaming, f_postcollision
 
     def run(self, t_max):
         """
@@ -524,27 +524,27 @@ class Thermal(object):
                 if not (t_max > start_step):
                     raise ValueError(f"Simulation already exceeded maximum allowable steps (t_max = {t_max}). Consider increasing t_max.")
 
-        if self.computeMLUPS:
+        if self.compute_MLUPS:
             start = time.time()
         # Loop over all time steps
         for timestep in range(start_step, t_max + 1):
-            io_flag = self.ioRate > 0 and (timestep % self.ioRate == 0 or timestep == t_max)
-            print_iter_flag = self.printInfoRate > 0 and timestep % self.printInfoRate == 0
-            checkpoint_flag = self.checkpointRate > 0 and timestep % self.checkpointRate == 0
+            io_flag = self.io_rate > 0 and (timestep % self.io_rate == 0 or timestep == t_max)
+            print_iter_flag = self.print_info_rate > 0 and timestep % self.print_info_rate == 0
+            checkpoint_flag = self.checkpoint_rate > 0 and timestep % self.checkpoint_rate == 0
 
             if io_flag:
                 # Save the previous values of the macroscopic fields (for error computation)
                 rho_prev, u_prev = self.update_macroscopic_output(f, T)
-                rho_prev = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), rho_prev)
-                u_prev = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), u_prev)
-                T_prev = downsample_field(T, self.downsamplingFactor)
+                rho_prev = tree_map(lambda x: downsample_field(x, self.downsampling_factor), rho_prev)
+                u_prev = tree_map(lambda x: downsample_field(x, self.downsampling_factor), u_prev)
+                T_prev = downsample_field(T, self.downsampling_factor)
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho_prev = process_allgather(rho_prev)
                 u_prev = process_allgather(u_prev)
                 T_prev = process_allgather(T_prev)
 
             # Perform one time-step (fluid step followed by the temperature update)
-            T, f, fstar = self.step(T, f, timestep, return_fpost=self.returnFpost)
+            T, f, fstar = self.step(T, f, timestep, return_fpost=self.return_fpost)
 
             # Print the progress of the simulation
             if print_iter_flag:
@@ -560,9 +560,9 @@ class Thermal(object):
                 # Save the simulation data
                 logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho, u = self.update_macroscopic_output(f, T)
-                rho = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), rho)
-                u = tree_map(lambda x: downsample_field(x, self.downsamplingFactor), u)
-                T_out = downsample_field(T, self.downsamplingFactor)
+                rho = tree_map(lambda x: downsample_field(x, self.downsampling_factor), rho)
+                u = tree_map(lambda x: downsample_field(x, self.downsampling_factor), u)
+                T_out = downsample_field(T, self.downsampling_factor)
 
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho = process_allgather(rho)
@@ -584,12 +584,12 @@ class Thermal(object):
                     self.fluid_solver.mngr.save(timestep, args=orb.args.StandardSave({"f": f}))
 
             # Start the timer for the MLUPS computation after the first timestep (to remove compilation overhead)
-            if self.computeMLUPS and timestep == 1:
+            if self.compute_MLUPS and timestep == 1:
                 jax.block_until_ready(f)
                 jax.block_until_ready(T)
                 start = time.time()
 
-        if self.computeMLUPS:
+        if self.compute_MLUPS:
             # Compute and print the performance of the simulation in MLUPS
             jax.block_until_ready(T)
             jax.block_until_ready(f)
@@ -772,9 +772,9 @@ class MultiphaseThermal(Thermal):
         f_postcollision_tree (pytree of jax.numpy.ndarray or None): The post-collision distribution functions after the
         simulation step, or None if return_fpost is False.
         """
-        T = self.precisionPolicy.cast_to_compute(T_prev)
+        T = self.precision_policy.cast_to_compute(T_prev)
         T = self.apply_bc(T, timestep)
-        f_compute_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), f_poststreaming_tree)
+        f_compute_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), f_poststreaming_tree)
         rho_tree, _ = self.fluid_solver.update_macroscopic(f_compute_tree)
         u_tree = self.fluid_solver.macroscopic_velocity(f_compute_tree, rho_tree, T=T)
 
@@ -783,7 +783,7 @@ class MultiphaseThermal(Thermal):
 
         T = self.apply_bc(T, timestep)
 
-        return self.precisionPolicy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree
+        return self.precision_policy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree
 
     def update_macroscopic_output(self, f_tree, T):
         """
@@ -801,7 +801,7 @@ class MultiphaseThermal(Thermal):
 
         u_tree (pytree of jax.numpy.ndarray): Velocity field of all components.
         """
-        f_tree = tree_map(lambda f: self.precisionPolicy.cast_to_compute(f), f_tree)
+        f_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), f_tree)
         rho_tree, _ = self.fluid_solver.update_macroscopic(f_tree)
-        u_tree = self.fluid_solver.macroscopic_velocity(f_tree, rho_tree, T=self.precisionPolicy.cast_to_compute(T))
+        u_tree = self.fluid_solver.macroscopic_velocity(f_tree, rho_tree, T=self.precision_policy.cast_to_compute(T))
         return rho_tree, u_tree

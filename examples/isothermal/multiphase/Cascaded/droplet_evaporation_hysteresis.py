@@ -52,22 +52,22 @@ class DropletEvaporationHysteresis(MultiphaseCascade):
         dist_sq = (x_coord - droplet_center_x) ** 2 + (y_coord - droplet_center_y) ** 2 + (z_coord - droplet_center_z) ** 2
         rho = np.empty((self.nx, self.ny, self.nz, 1), dtype=np.float32)
         rho[..., 0] = 0.5 * (rho_w_l + rho_w_g) - 0.5 * (rho_w_l - rho_w_g) * np.tanh(2 * (np.sqrt(dist_sq) - droplet_radius) / interface_width)
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.precision_policy.cast_to_output(u)
         return [rho], [u]
 
     def set_boundary_conditions(self):
-        top = self.boundingBoxIndices["top"]
-        bottom = self.boundingBoxIndices["bottom"]
-        self.BCs[0].append(ExtrapolationOutflowMultiphase(tuple(top.T), self.gridInfo, self.precisionPolicy))
-        self.BCs[0].append(BounceBack(tuple(bottom.T), self.gridInfo, self.precisionPolicy, theta_wall[tuple(bottom.T)]))
+        top = self.bounding_box_indices["top"]
+        bottom = self.bounding_box_indices["bottom"]
+        self.BCs[0].append(ExtrapolationOutflowMultiphase(tuple(top.T), self.grid_info, self.precision_policy))
+        self.BCs[0].append(BounceBack(tuple(bottom.T), self.grid_info, self.precision_policy, theta_wall[tuple(bottom.T)]))
 
     @partial(jit, static_argnums=(0,))
     def compute_fluid_fluid_force(self, psi_tree, U_tree):
-        c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
         psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
 
         def ffk_1():
@@ -77,7 +77,7 @@ class DropletEvaporationHysteresis(MultiphaseCascade):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         p_tree = self.compute_pressure(rho_tree)
         psi_tree = tree_map(lambda p, rho, G: jnp.sqrt(2 * (p - self.lattice.cs2 * rho) / G), p_tree, rho_tree, self.g_kkprime.diagonal().tolist())
         U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
@@ -97,7 +97,7 @@ class DropletEvaporationHysteresis(MultiphaseCascade):
     @partial(jit, static_argnums=(0,))
     def compute_force_central_moments(self, F_tree, F_intra_tree, psi_tree):
         def f(F, F_intra, sigma, psi, s_b):
-            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             Fx = F_intra[..., 0]
             Fy = F_intra[..., 1]
             Fz = F_intra[..., 2]

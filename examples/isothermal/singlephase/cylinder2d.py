@@ -52,26 +52,26 @@ class Cylinder(BGKSim):
         cylinder = (xx - cx) ** 2 + (yy - cy) ** 2 <= (diam / 2.0) ** 2
         cylinder = coord[cylinder]
         implicit_distance = np.reshape((xx - cx) ** 2 + (yy - cy) ** 2 - (diam / 2.0) ** 2, (self.nx, self.ny))
-        self.BCs.append(InterpolatedBounceBackBouzidi(tuple(cylinder.T), implicit_distance, self.gridInfo, self.precisionPolicy))
+        self.BCs.append(InterpolatedBounceBackBouzidi(tuple(cylinder.T), implicit_distance, self.grid_info, self.precision_policy))
 
         # Outflow BC
-        outlet = self.boundingBoxIndices["right"]
-        rho_outlet = np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        self.BCs.append(ExtrapolationOutflow(tuple(outlet.T), self.gridInfo, self.precisionPolicy))
-        # self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
+        outlet = self.bounding_box_indices["right"]
+        rho_outlet = np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        self.BCs.append(ExtrapolationOutflow(tuple(outlet.T), self.grid_info, self.precision_policy))
+        # self.BCs.append(ZouHe(tuple(outlet.T), self.grid_info, self.precision_policy, 'pressure', rho_outlet))
 
         # Inlet BC
-        inlet = self.boundingBoxIndices["left"]
-        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        inlet = self.bounding_box_indices["left"]
+        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         yy_inlet = yy.reshape(self.nx, self.ny)[tuple(inlet.T)]
         vel_inlet[:, 0] = poiseuille_profile(yy_inlet, yy_inlet.min(), yy_inlet.max() - yy_inlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs.append(Regularized(tuple(inlet.T), self.gridInfo, self.precisionPolicy, "velocity", vel_inlet))
+        self.BCs.append(Regularized(tuple(inlet.T), self.grid_info, self.precision_policy, "velocity", vel_inlet))
 
         # No-slip BC for top and bottom
-        wall = np.concatenate([self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]])
-        vel_wall = np.zeros(wall.shape, dtype=self.precisionPolicy.compute_dtype)
-        self.BCs.append(Regularized(tuple(wall.T), self.gridInfo, self.precisionPolicy, "velocity", vel_wall))
+        wall = np.concatenate([self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]])
+        vel_wall = np.zeros(wall.shape, dtype=self.precision_policy.compute_dtype)
+        self.BCs.append(Regularized(tuple(wall.T), self.grid_info, self.precision_policy, "velocity", vel_wall))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using bounce-back)

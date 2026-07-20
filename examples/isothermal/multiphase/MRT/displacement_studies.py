@@ -37,8 +37,8 @@ class Droplet3D(MultiphaseMRT):
         rho_outside = rho_w_g
         rho = 0.5 * (rho_inside + rho_outside) - 0.5 * (rho_inside - rho_outside) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # CO2
@@ -46,13 +46,13 @@ class Droplet3D(MultiphaseMRT):
         rho_outside = rho_c_l
         rho = 0.5 * (rho_inside + rho_outside) - 0.5 * (rho_inside - rho_outside) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
@@ -130,8 +130,8 @@ class DropletOnWall3D(MultiphaseMRT):
         rho_outside = rho_w_g
         rho = 0.5 * (rho_inside + rho_outside) - 0.5 * (rho_inside - rho_outside) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # CO2
@@ -139,21 +139,21 @@ class DropletOnWall3D(MultiphaseMRT):
         rho_outside = rho_c_l
         rho = 0.5 * (rho_inside + rho_outside) - 0.5 * (rho_inside - rho_outside) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         self.BCs[0].append(
-            BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(ind.T)], phi_w[tuple(ind.T)], delta_rho_w[tuple(ind.T)])
+            BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_w[tuple(ind.T)], phi_w[tuple(ind.T)], delta_rho_w[tuple(ind.T)])
         )
         self.BCs[1].append(
-            BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_c[tuple(ind.T)], phi_c[tuple(ind.T)], delta_rho_c[tuple(ind.T)])
+            BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_c[tuple(ind.T)], phi_c[tuple(ind.T)], delta_rho_c[tuple(ind.T)])
         )
 
     def output_data(self, **kwargs):
@@ -211,8 +211,8 @@ class DropletOnWall3D(MultiphaseMRT):
 class DropletOnWall3DGeometric(DropletOnWall3D):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(ind.T)]))
-        self.BCs[1].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta_c[tuple(ind.T)]))
+        self.BCs[0].append(BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_w[tuple(ind.T)]))
+        self.BCs[1].append(BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_c[tuple(ind.T)]))
 
 
 class PorousMedia(MultiphaseMRT):
@@ -233,8 +233,8 @@ class PorousMedia(MultiphaseMRT):
         # )
         rho = rho_w_l * np.ones((self.nx, self.ny, self.nz, 1))
         # rho[tuple(idx.T)] = 1.0
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # CO2
@@ -247,75 +247,75 @@ class PorousMedia(MultiphaseMRT):
         #     2 * (x - buffer) / width
         # )
         # rho[..., 0] = rho_
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # apply inlet equilibrium boundary condition at the left
-        # inlet = self.boundingBoxIndices["left"]
+        # inlet = self.bounding_box_indices["left"]
         # rho_inlet = rho_w_l * np.ones(
-        #     (inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype
+        #     (inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype
         # )
         # vel_inlet = np.zeros(
-        #     (inlet.shape[0], 3), dtype=self.precisionPolicy.compute_dtype
+        #     (inlet.shape[0], 3), dtype=self.precision_policy.compute_dtype
         # )
         # vel_inlet[:, 0] = prescribed_vel
         # self.BCs[0].append(
         #     EquilibriumBC(
         #         tuple(inlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #         rho_inlet,
         #         vel_inlet,
         #     )
         # )
         # rho_inlet = rho_c_l * np.ones(
-        #     (inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype
+        #     (inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype
         # )
         # vel_inlet = np.zeros(
-        #     (inlet.shape[0], 3), dtype=self.precisionPolicy.compute_dtype
+        #     (inlet.shape[0], 3), dtype=self.precision_policy.compute_dtype
         # )
         # vel_inlet[:, 0] = prescribed_vel
         # self.BCs[1].append(
         #     EquilibriumBC(
         #         tuple(inlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #         rho_inlet,
         #         vel_inlet,
         #     )
         # )
         #
         # Same at the outlet
-        # outlet = self.boundingBoxIndices["right"]
+        # outlet = self.bounding_box_indices["right"]
         # rho_outlet = rho_w_l * np.ones(
-        #     (outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype
+        #     (outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype
         # )
         # vel_outlet = np.zeros(
-        #     (outlet.shape[0], 3), dtype=self.precisionPolicy.compute_dtype
+        #     (outlet.shape[0], 3), dtype=self.precision_policy.compute_dtype
         # )
         # self.BCs[0].append(
         #     ConvectiveOutflow(
         #         tuple(outlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #     )
         # )
         # rho_outlet = rho_c_g * np.ones(
-        #     (outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype
+        #     (outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype
         # )
         # self.BCs[1].append(
         #     ConvectiveOutflow(
         #         tuple(outlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #     )
         # )
 
@@ -323,16 +323,16 @@ class PorousMedia(MultiphaseMRT):
         # wall = np.concatenate(
         #     (
         #         idx,
-        #         self.boundingBoxIndices["top"],
-        #         self.boundingBoxIndices["bottom"],
-        #         self.boundingBoxIndices["front"],
-        #         self.boundingBoxIndices["back"],
+        #         self.bounding_box_indices["top"],
+        #         self.bounding_box_indices["bottom"],
+        #         self.bounding_box_indices["front"],
+        #         self.bounding_box_indices["back"],
         #     )
         # )
         wall = idx
         wall = tuple(wall.T)
-        self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_w[wall], phi_w[wall], delta_rho_w[wall]))
-        self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_c[wall], phi_c[wall], delta_rho_c[wall]))
+        self.BCs[0].append(BounceBack(wall, self.grid_info, self.precision_policy, theta_w[wall], phi_w[wall], delta_rho_w[wall]))
+        self.BCs[1].append(BounceBack(wall, self.grid_info, self.precision_policy, theta_c[wall], phi_c[wall], delta_rho_c[wall]))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
@@ -379,8 +379,8 @@ class PorousMediaGeometric(PorousMedia):
         # Wall boundary condition
         wall = idx
         wall = tuple(wall.T)
-        self.BCs[0].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_w[wall]))
-        self.BCs[1].append(BounceBack(wall, self.gridInfo, self.precisionPolicy, theta_c[wall]))
+        self.BCs[0].append(BounceBack(wall, self.grid_info, self.precision_policy, theta_w[wall]))
+        self.BCs[1].append(BounceBack(wall, self.grid_info, self.precision_policy, theta_c[wall]))
 
 
 if __name__ == "__main__":

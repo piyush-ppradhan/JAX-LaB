@@ -108,8 +108,8 @@ def test_rk4_diffusion_decay_2d():
 
 def test_rk4_applies_dirichlet_bc_at_intermediate_stages():
     solver = make_thermal(2, K=0.2)
-    left = solver.fluid_solver.boundingBoxIndices["left"]
-    right = solver.fluid_solver.boundingBoxIndices["right"]
+    left = solver.fluid_solver.bounding_box_indices["left"]
+    right = solver.fluid_solver.bounding_box_indices["right"]
     solver.thermal_BCs = [
         DirichletTemperature(tuple(left.T), prescribed=2.0),
         DirichletTemperature(tuple(right.T), prescribed=1.0),
@@ -212,8 +212,8 @@ def test_multiphase_step_uses_synchronized_macroscopic_fields():
 
 def test_dirichlet_and_neumann_bc():
     solver = make_thermal(2)
-    bottom = solver.fluid_solver.boundingBoxIndices["bottom"]
-    left = solver.fluid_solver.boundingBoxIndices["left"]
+    bottom = solver.fluid_solver.bounding_box_indices["bottom"]
+    left = solver.fluid_solver.bounding_box_indices["left"]
 
     T = jnp.array(np.random.default_rng(0).uniform(size=(NX, NY, 1)))
 

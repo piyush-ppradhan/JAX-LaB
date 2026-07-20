@@ -30,14 +30,14 @@ class Droplet2D(MultiphaseMRT):
         dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2)
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = []
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
@@ -85,21 +85,21 @@ class DropletOnSurface2D(MultiphaseMRT):
         dist = np.sqrt((x - self.nx / 2) ** 2 + (y + disp) ** 2)
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = []
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls], phi[walls], delta_rho[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls], phi[walls], delta_rho[walls]))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
@@ -117,9 +117,9 @@ class DropletOnSurface2D(MultiphaseMRT):
 class DropletOnSurface2DGeometric(DropletOnSurface2D):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls]))
 
 
 class CapillaryRise2D(MultiphaseMRT):
@@ -129,13 +129,13 @@ class CapillaryRise2D(MultiphaseMRT):
         rho = rho_g * np.ones((self.nx, self.ny, 1))
         rho[:, :, 0] = rho_profile.reshape((self.nx, 1))
 
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = [rho]
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
 
         return rho_tree, u_tree
@@ -151,7 +151,7 @@ class CapillaryRise2D(MultiphaseMRT):
         )
         walls = np.concatenate((top_wall, bottom_wall))
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls], phi[walls], delta_rho[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls], phi[walls], delta_rho[walls]))
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho_prev_tree"][0][0, ...])
@@ -185,7 +185,7 @@ class CapillaryRise2DGeometric(CapillaryRise2D):
         )
         walls = np.concatenate((top_wall, bottom_wall))
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls]))
 
 
 if __name__ == "__main__":

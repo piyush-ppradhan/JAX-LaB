@@ -34,22 +34,22 @@ class PoolFluid3D(MultiphaseMRT):
     def set_boundary_conditions(self):
         # No-slip z walls; periodic in x/y. Wetting is prescribed only on the
         # heated bottom wall.
-        bottom = tuple(self.boundingBoxIndices["bottom"].T)
-        top = tuple(self.boundingBoxIndices["top"].T)
+        bottom = tuple(self.bounding_box_indices["bottom"].T)
+        top = tuple(self.bounding_box_indices["top"].T)
         for i in range(self.n_components):
-            # self.BCs[i].append(BounceBackHalfway(bottom, self.gridInfo, self.precisionPolicy, theta=contact_angle))
-            self.BCs[i].append(BounceBackHalfway(bottom, self.gridInfo, self.precisionPolicy))
-            self.BCs[i].append(BounceBackHalfway(top, self.gridInfo, self.precisionPolicy))
+            # self.BCs[i].append(BounceBackHalfway(bottom, self.grid_info, self.precision_policy, theta=contact_angle))
+            self.BCs[i].append(BounceBackHalfway(bottom, self.grid_info, self.precision_policy))
+            self.BCs[i].append(BounceBackHalfway(top, self.grid_info, self.precision_policy))
 
     def initialize_macroscopic_fields(self):
         z = np.arange(self.nz).reshape(1, 1, self.nz, 1)
         rho = np.where(z < h_liquid, rho_l, rho_g)
         rho = np.broadcast_to(rho, (self.nx, self.ny, self.nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho_tree = [self.precisionPolicy.cast_to_output(rho)]
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho_tree = [self.precision_policy.cast_to_output(rho)]
 
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype)
-        u_tree = [self.precisionPolicy.cast_to_output(u)]
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype)
+        u_tree = [self.precision_policy.cast_to_output(u)]
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,))
@@ -66,10 +66,10 @@ class PoolFluid3D(MultiphaseMRT):
         pytree of jax.numpy.ndarray: Component buoyancy-force fields.
         """
         rho_average = self.compute_total_density(rho_tree).mean()
-        gravity_vector = jnp.array([0.0, 0.0, -gravity], dtype=self.precisionPolicy.compute_dtype)
+        gravity_vector = jnp.array([0.0, 0.0, -gravity], dtype=self.precision_policy.compute_dtype)
         gravity_active = jnp.asarray(
             timestep > gravity_relaxation_steps,
-            dtype=self.precisionPolicy.compute_dtype,
+            dtype=self.precision_policy.compute_dtype,
         )
         return tree_map(lambda rho: gravity_active * (rho - rho_average) * gravity_vector, rho_tree)
 
@@ -136,7 +136,7 @@ class PoolBoiling3D(MultiphaseThermal):
 
     def set_thermal_boundary_conditions(self):
         self.thermal_BCs = []
-        bbox = self.fluid_solver.boundingBoxIndices
+        bbox = self.fluid_solver.bounding_box_indices
         self.thermal_BCs.append(DirichletTemperature(tuple(bbox["bottom"].T), prescribed=T_bottom))
         self.thermal_BCs.append(DirichletTemperature(tuple(bbox["top"].T), prescribed=T_top))
 
@@ -155,16 +155,16 @@ class PoolBoiling3D(MultiphaseThermal):
         -------
         tuple: Temperature, post-streaming populations, and optional post-collision populations.
         """
-        T = self.precisionPolicy.cast_to_compute(T_prev)
+        T = self.precision_policy.cast_to_compute(T_prev)
         T = self.apply_bc(T, timestep)
-        f_compute_tree = tree_map(self.precisionPolicy.cast_to_compute, f_poststreaming_tree)
+        f_compute_tree = tree_map(self.precision_policy.cast_to_compute, f_poststreaming_tree)
         rho_tree, _ = self.fluid_solver.update_macroscopic(f_compute_tree)
         u_tree = self.fluid_solver.macroscopic_velocity(f_compute_tree, rho_tree, T=T, timestep=timestep)
 
         f_poststreaming_tree, f_postcollision_tree = self.fluid_solver.step(f_poststreaming_tree, timestep, return_fpost, T)
         T = self._advance_temperature(T, timestep, rho_tree, u_tree)
         T = self.apply_bc(T, timestep)
-        return (self.precisionPolicy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree)
+        return (self.precision_policy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree)
 
     @partial(jit, static_argnums=(0,), inline=True)
     def RHS(self, T, rho_tree, u_tree):

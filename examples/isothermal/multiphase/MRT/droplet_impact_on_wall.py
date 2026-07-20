@@ -41,32 +41,32 @@ class DropletOnWall3D(MultiphaseMRT):
 
         dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 5) ** 2 + (z - self.nz / 2) ** 2)
 
-        rho = jnp.zeros((self.nx, self.ny, self.nz, 1), dtype=self.precisionPolicy.compute_dtype)
+        rho = jnp.zeros((self.nx, self.ny, self.nz, 1), dtype=self.precision_policy.compute_dtype)
         rho = rho.at[..., 0].set(0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width))
 
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
-        u = jnp.zeros((self.nx, self.ny, self.nz, 3), dtype=self.precisionPolicy.compute_dtype)
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = jnp.zeros((self.nx, self.ny, self.nz, 3), dtype=self.precision_policy.compute_dtype)
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        walls = np.concatenate((self.boundingBoxIndices["front"], self.boundingBoxIndices["back"]))
+        walls = np.concatenate((self.bounding_box_indices["front"], self.bounding_box_indices["back"]))
         walls = tuple(walls.T)
         self.BCs[0].append(
-            BounceBackHalfway(walls, self.gridInfo, self.precisionPolicy, vel=None, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls])
+            BounceBackHalfway(walls, self.grid_info, self.precision_policy, vel=None, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls])
         )
 
         self.visualization_bc = jnp.zeros((self.nx, self.ny, self.nz), dtype=jnp.float32)
-        self.visualization_bc = self.visualization_bc.at[tuple(self.boundingBoxIndices["back"].T)].set(1.0)
+        self.visualization_bc = self.visualization_bc.at[tuple(self.bounding_box_indices["back"].T)].set(1.0)
 
     def output_data(self, **kwargs):
-        rho = jnp.array(kwargs["rho_tree"][0][0, ..., 0], dtype=self.precisionPolicy.compute_dtype)
+        rho = jnp.array(kwargs["rho_tree"][0][0, ..., 0], dtype=self.precision_policy.compute_dtype)
 
         red = pg.SolidColor(color=(1.0, 0.0, 0.0), opacity=1.0)
         grey = pg.SolidColor(color=(0.9607, 0.8941, 0.8313), opacity=1.0)
@@ -106,12 +106,12 @@ class DropletOnWall3D(MultiphaseMRT):
 class DropletOnWall3DGeometric(DropletOnWall3D):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        walls = np.concatenate((self.boundingBoxIndices["front"], self.boundingBoxIndices["back"]))
+        walls = np.concatenate((self.bounding_box_indices["front"], self.bounding_box_indices["back"]))
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBackHalfway(walls, self.gridInfo, self.precisionPolicy, vel=None, theta=theta[walls]))
+        self.BCs[0].append(BounceBackHalfway(walls, self.grid_info, self.precision_policy, vel=None, theta=theta[walls]))
 
         self.visualization_bc = jnp.zeros((self.nx, self.ny, self.nz), dtype=jnp.float32)
-        self.visualization_bc = self.visualization_bc.at[tuple(self.boundingBoxIndices["back"].T)].set(1.0)
+        self.visualization_bc = self.visualization_bc.at[tuple(self.bounding_box_indices["back"].T)].set(1.0)
 
 
 if __name__ == "__main__":

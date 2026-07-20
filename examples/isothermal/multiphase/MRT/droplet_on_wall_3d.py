@@ -27,19 +27,19 @@ class DropletOnWall3D(MultiphaseMRT):
         dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2 - 70) ** 2)
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
         rho = rho.reshape((nx, ny, nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = [rho]
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        self.BCs[0].append(BounceBack(ind, self.gridInfo, self.precisionPolicy, theta[ind], phi[ind], delta_rho[ind]))
+        self.BCs[0].append(BounceBack(ind, self.grid_info, self.precision_policy, theta[ind], phi[ind], delta_rho[ind]))
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho_tree"][0][0, ...])
@@ -61,7 +61,7 @@ class DropletOnWall3D(MultiphaseMRT):
 class DropletOnWall3DGeometric(DropletOnWall3D):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        self.BCs[0].append(BounceBack(ind, self.gridInfo, self.precisionPolicy, theta[ind]))
+        self.BCs[0].append(BounceBack(ind, self.grid_info, self.precision_policy, theta[ind]))
 
 
 if __name__ == "__main__":

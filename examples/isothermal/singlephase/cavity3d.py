@@ -43,15 +43,15 @@ class Cavity(KBCSim):
         # We have used halfway BB for Re=(1000, 3200) and regularized BC for Re=10,000
 
         # apply inlet boundary condition to the top wall
-        moving_wall = self.boundingBoxIndices["top"]
-        vel_wall = np.zeros(moving_wall.shape, dtype=self.precisionPolicy.compute_dtype)
+        moving_wall = self.bounding_box_indices["top"]
+        vel_wall = np.zeros(moving_wall.shape, dtype=self.precision_policy.compute_dtype)
         vel_wall[:, 0] = prescribed_vel
-        # self.BCs.append(BounceBackHalfway(tuple(moving_wall.T), self.gridInfo, self.precisionPolicy, vel_wall))
+        # self.BCs.append(BounceBackHalfway(tuple(moving_wall.T), self.grid_info, self.precision_policy, vel_wall))
         self.BCs.append(
             Regularized(
                 tuple(moving_wall.T),
-                self.gridInfo,
-                self.precisionPolicy,
+                self.grid_info,
+                self.precision_policy,
                 "velocity",
                 vel_wall,
             )
@@ -59,20 +59,20 @@ class Cavity(KBCSim):
 
         # concatenate the indices of the left, right, and bottom walls
         walls = np.concatenate((
-            self.boundingBoxIndices["left"],
-            self.boundingBoxIndices["right"],
-            self.boundingBoxIndices["front"],
-            self.boundingBoxIndices["back"],
-            self.boundingBoxIndices["bottom"],
+            self.bounding_box_indices["left"],
+            self.bounding_box_indices["right"],
+            self.bounding_box_indices["front"],
+            self.bounding_box_indices["back"],
+            self.bounding_box_indices["bottom"],
         ))
         # apply bounce back boundary condition to the walls
-        # self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
-        vel_wall = np.zeros(walls.shape, dtype=self.precisionPolicy.compute_dtype)
+        # self.BCs.append(BounceBackHalfway(tuple(walls.T), self.grid_info, self.precision_policy))
+        vel_wall = np.zeros(walls.shape, dtype=self.precision_policy.compute_dtype)
         self.BCs.append(
             Regularized(
                 tuple(walls.T),
-                self.gridInfo,
-                self.precisionPolicy,
+                self.grid_info,
+                self.precision_policy,
                 "velocity",
                 vel_wall,
             )

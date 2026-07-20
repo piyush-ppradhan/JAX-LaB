@@ -63,28 +63,28 @@ class LBMBase(object):
         self.nz = kwargs.get("nz")
 
         self.precision = kwargs.get("precision")
-        self.precisionPolicy = PrecisionPolicy.from_string(self.precision)
+        self.precision_policy = PrecisionPolicy.from_string(self.precision)
 
         self.lattice = kwargs.get("lattice")
-        self.checkpointRate = kwargs.get("checkpoint_rate", 0)
-        self.checkpointDir = kwargs.get("checkpoint_dir", "./checkpoints")
-        self.downsamplingFactor = kwargs.get("downsampling_factor", 1)
-        self.printInfoRate = kwargs.get("print_info_rate", 100)
-        self.ioRate = kwargs.get("io_rate", 0)
-        self.returnFpost = kwargs.get("return_fpost", False)
-        self.computeMLUPS = kwargs.get("compute_MLUPS", False)
+        self.checkpoint_rate = kwargs.get("checkpoint_rate", 0)
+        self.checkpoint_dir = kwargs.get("checkpoint_dir", "./checkpoints")
+        self.downsampling_factor = kwargs.get("downsampling_factor", 1)
+        self.print_info_rate = kwargs.get("print_info_rate", 100)
+        self.io_rate = kwargs.get("io_rate", 0)
+        self.return_fpost = kwargs.get("return_fpost", False)
+        self.compute_MLUPS = kwargs.get("compute_MLUPS", False)
         self.restore_checkpoint = kwargs.get("restore_checkpoint", False)
-        self.nDevices = jax.device_count()
+        self.n_devices = jax.device_count()
         self.backend = jax.default_backend()
 
-        if self.computeMLUPS:
+        if self.compute_MLUPS:
             self.restore_checkpoint = False
-            self.ioRate = 0
-            self.checkpointRate = 0
-            self.printInfoRate = 0
+            self.io_rate = 0
+            self.checkpoint_rate = 0
+            self.print_info_rate = 0
 
         # Check for distributed mode
-        if self.nDevices > jax.local_device_count():
+        if self.n_devices > jax.local_device_count():
             warnings.warn(
                 "Running in distributed mode. Call jax.distributed.initialize before performing JAX computations.",
                 RuntimeWarning,
@@ -97,10 +97,10 @@ class LBMBase(object):
         self.dim = self.lattice.d
 
         # Set the checkpoint manager
-        if self.checkpointRate > 0:
-            mngr_options = orb.CheckpointManagerOptions(save_interval_steps=self.checkpointRate, max_to_keep=1)
-            # self.mngr = orb.CheckpointManager(self.checkpointDir, orb.PyTreeCheckpointer(), options=mngr_options)
-            self.mngr = orb.CheckpointManager(self.checkpointDir, options=mngr_options)
+        if self.checkpoint_rate > 0:
+            mngr_options = orb.CheckpointManagerOptions(save_interval_steps=self.checkpoint_rate, max_to_keep=1)
+            # self.mngr = orb.CheckpointManager(self.checkpoint_dir, orb.PyTreeCheckpointer(), options=mngr_options)
+            self.mngr = orb.CheckpointManager(self.checkpoint_dir, options=mngr_options)
         else:
             self.mngr = None
 
@@ -112,8 +112,8 @@ class LBMBase(object):
         if None in {nx, ny, nz}:
             raise ValueError("nx, ny, and nz must be provided. For 2D examples, nz must be set to 0.")
         self.nx = nx
-        if nx % self.nDevices:
-            self.nx = nx + (self.nDevices - nx % self.nDevices)
+        if nx % self.n_devices:
+            self.nx = nx + (self.n_devices - nx % self.n_devices)
             warnings.warn(
                 f"nx increased from {nx} to {self.nx} to accommodate domain sharding per XLA device.",
                 RuntimeWarning,
@@ -125,7 +125,7 @@ class LBMBase(object):
         # self.show_simulation_parameters()
 
         # Store grid information
-        self.gridInfo = {
+        self.grid_info = {
             "nx": self.nx,
             "ny": self.ny,
             "nz": self.nz,
@@ -136,13 +136,13 @@ class LBMBase(object):
         P = PartitionSpec
 
         # Define the right permutation
-        self.rightPerm = [(i, (i + 1) % self.nDevices) for i in range(self.nDevices)]
+        self.right_perm = [(i, (i + 1) % self.n_devices) for i in range(self.n_devices)]
         # Define the left permutation
-        self.leftPerm = [((i + 1) % self.nDevices, i) for i in range(self.nDevices)]
+        self.left_perm = [((i + 1) % self.n_devices, i) for i in range(self.n_devices)]
 
         # Set up the sharding and streaming for 2D simulations
         if self.dim == 2:
-            self.devices = mesh_utils.create_device_mesh((self.nDevices, 1, 1))
+            self.devices = mesh_utils.create_device_mesh((self.n_devices, 1, 1))
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "value"))
             self.sharding = NamedSharding(self.mesh, P("x", "y", "value"))
 
@@ -158,7 +158,7 @@ class LBMBase(object):
 
         # Set up the sharding and streaming for 3D simulations
         elif self.dim == 3:
-            self.devices = mesh_utils.create_device_mesh((self.nDevices, 1, 1, 1))
+            self.devices = mesh_utils.create_device_mesh((self.n_devices, 1, 1, 1))
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "z", "value"))
             self.sharding = NamedSharding(self.mesh, P("x", "y", "z", "value"))
 
@@ -176,7 +176,7 @@ class LBMBase(object):
             raise ValueError(f"dim = {self.dim} not supported")
 
         # Compute the bounding box indices for boundary conditions
-        self.boundingBoxIndices = self.bounding_box_indices()
+        self.bounding_box_indices = self.compute_bounding_box_indices()
         # Create boundary data for the simulation
         self._create_boundary_data()
         self.force = self.get_force()
@@ -253,74 +253,74 @@ class LBMBase(object):
         self._precision = value
 
     @property
-    def checkpointRate(self):
-        return self._checkpointRate
+    def checkpoint_rate(self):
+        return self._checkpoint_rate
 
-    @checkpointRate.setter
-    def checkpointRate(self, value):
+    @checkpoint_rate.setter
+    def checkpoint_rate(self, value):
         if not isinstance(value, int):
-            raise TypeError("checkpointRate must be an integer")
-        self._checkpointRate = value
+            raise TypeError("checkpoint_rate must be an integer")
+        self._checkpoint_rate = value
 
     @property
-    def checkpointDir(self):
-        return self._checkpointDir
+    def checkpoint_dir(self):
+        return self._checkpoint_dir
 
-    @checkpointDir.setter
-    def checkpointDir(self, value):
+    @checkpoint_dir.setter
+    def checkpoint_dir(self, value):
         if not isinstance(value, str):
-            raise TypeError("checkpointDir must be a string")
-        self._checkpointDir = value
+            raise TypeError("checkpoint_dir must be a string")
+        self._checkpoint_dir = value
 
     @property
-    def downsamplingFactor(self):
-        return self._downsamplingFactor
+    def downsampling_factor(self):
+        return self._downsampling_factor
 
-    @downsamplingFactor.setter
-    def downsamplingFactor(self, value):
+    @downsampling_factor.setter
+    def downsampling_factor(self, value):
         if not isinstance(value, int):
-            raise TypeError("downsamplingFactor must be an integer")
-        self._downsamplingFactor = value
+            raise TypeError("downsampling_factor must be an integer")
+        self._downsampling_factor = value
 
     @property
-    def printInfoRate(self):
-        return self._printInfoRate
+    def print_info_rate(self):
+        return self._print_info_rate
 
-    @printInfoRate.setter
-    def printInfoRate(self, value):
+    @print_info_rate.setter
+    def print_info_rate(self, value):
         if not isinstance(value, int):
-            raise TypeError("printInfoRate must be an integer")
-        self._printInfoRate = value
+            raise TypeError("print_info_rate must be an integer")
+        self._print_info_rate = value
 
     @property
-    def ioRate(self):
-        return self._ioRate
+    def io_rate(self):
+        return self._io_rate
 
-    @ioRate.setter
-    def ioRate(self, value):
+    @io_rate.setter
+    def io_rate(self, value):
         if not isinstance(value, int):
-            raise TypeError("ioRate must be an integer")
-        self._ioRate = value
+            raise TypeError("io_rate must be an integer")
+        self._io_rate = value
 
     @property
-    def returnFpost(self):
-        return self._returnFpost
+    def return_fpost(self):
+        return self._return_fpost
 
-    @returnFpost.setter
-    def returnFpost(self, value):
+    @return_fpost.setter
+    def return_fpost(self, value):
         if not isinstance(value, bool):
-            raise TypeError("returnFpost must be a boolean")
-        self._returnFpost = value
+            raise TypeError("return_fpost must be a boolean")
+        self._return_fpost = value
 
     @property
-    def computeMLUPS(self):
-        return self._computeMLUPS
+    def compute_MLUPS(self):
+        return self._compute_MLUPS
 
-    @computeMLUPS.setter
-    def computeMLUPS(self, value):
+    @compute_MLUPS.setter
+    def compute_MLUPS(self, value):
         if not isinstance(value, bool):
-            raise TypeError("computeMLUPS must be a boolean")
-        self._computeMLUPS = value
+            raise TypeError("compute_MLUPS must be a boolean")
+        self._compute_MLUPS = value
 
     @property
     def restore_checkpoint(self):
@@ -333,91 +333,14 @@ class LBMBase(object):
         self._restore_checkpoint = value
 
     @property
-    def nDevices(self):
-        return self._nDevices
-
-    @nDevices.setter
-    def nDevices(self, value):
-        if not isinstance(value, int):
-            raise TypeError("nDevices must be an integer")
-        self._nDevices = value
-
-    @property
-    def precision_policy(self):
-        """Return the mixed-precision policy."""
-        return self.precisionPolicy
-
-    @precision_policy.setter
-    def precision_policy(self, value):
-        self.precisionPolicy = value
-
-    @property
-    def checkpoint_rate(self):
-        """Return the checkpoint interval."""
-        return self.checkpointRate
-
-    @checkpoint_rate.setter
-    def checkpoint_rate(self, value):
-        self.checkpointRate = value
-
-    @property
-    def checkpoint_dir(self):
-        """Return the checkpoint directory."""
-        return self.checkpointDir
-
-    @checkpoint_dir.setter
-    def checkpoint_dir(self, value):
-        self.checkpointDir = value
-
-    @property
-    def downsampling_factor(self):
-        """Return the spatial output downsampling factor."""
-        return self.downsamplingFactor
-
-    @downsampling_factor.setter
-    def downsampling_factor(self, value):
-        self.downsamplingFactor = value
-
-    @property
-    def print_info_rate(self):
-        """Return the progress-reporting interval."""
-        return self.printInfoRate
-
-    @print_info_rate.setter
-    def print_info_rate(self, value):
-        self.printInfoRate = value
-
-    @property
-    def io_rate(self):
-        """Return the output interval."""
-        return self.ioRate
-
-    @io_rate.setter
-    def io_rate(self, value):
-        self.ioRate = value
-
-    @property
-    def return_fpost(self):
-        """Return whether post-collision populations are returned."""
-        return self.returnFpost
-
-    @return_fpost.setter
-    def return_fpost(self, value):
-        self.returnFpost = value
-
-    @property
-    def compute_mlups(self):
-        """Return whether performance-measurement mode is enabled."""
-        return self.computeMLUPS
-
-    @compute_mlups.setter
-    def compute_mlups(self, value):
-        self.computeMLUPS = value
-
-    @property
     def n_devices(self):
-        """Return the global JAX device count."""
-        return self.nDevices
+        return self._n_devices
+
+    @n_devices.setter
+    def n_devices(self, value):
+        if not isinstance(value, int):
+            raise TypeError("n_devices must be an integer")
+        self._n_devices = value
 
     def show_simulation_parameters(self):
         attributes_to_show = [
@@ -428,15 +351,15 @@ class LBMBase(object):
             "dim",
             "precision",
             "lattice",
-            "checkpointRate",
-            "checkpointDir",
-            "downsamplingFactor",
-            "printInfoRate",
-            "ioRate",
-            "computeMLUPS",
+            "checkpoint_rate",
+            "checkpoint_dir",
+            "downsampling_factor",
+            "print_info_rate",
+            "io_rate",
+            "compute_MLUPS",
             "restore_checkpoint",
             "backend",
-            "nDevices",
+            "n_devices",
         ]
 
         descriptive_names = {
@@ -447,15 +370,15 @@ class LBMBase(object):
             "dim": "Dimensionality",
             "precision": "Precision Policy",
             "lattice": "Lattice Type",
-            "checkpointRate": "Checkpoint Rate",
-            "checkpointDir": "Checkpoint Directory",
-            "downsamplingFactor": "Downsampling Factor",
-            "printInfoRate": "Print Info Rate",
-            "ioRate": "I/O Rate",
-            "computeMLUPS": "Compute MLUPS",
+            "checkpoint_rate": "Checkpoint Rate",
+            "checkpoint_dir": "Checkpoint Directory",
+            "downsampling_factor": "Downsampling Factor",
+            "print_info_rate": "Print Info Rate",
+            "io_rate": "I/O Rate",
+            "compute_MLUPS": "Compute MLUPS",
             "restore_checkpoint": "Restore Checkpoint",
             "backend": "Backend",
-            "nDevices": "Number of Devices",
+            "n_devices": "Number of Devices",
         }
         simulation_name = self.__class__.__name__
 
@@ -480,7 +403,7 @@ class LBMBase(object):
         self.set_boundary_conditions()
         # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
         # stream into a boundary voxel.
-        solid_halo_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
+        solid_halo_list = [np.array(bc.indices).T for bc in self.BCs if bc.is_solid]
         solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
 
         # Create the grid mask on each process
@@ -490,7 +413,7 @@ class LBMBase(object):
 
         start = time.time()
         for bc in self.BCs:
-            assert bc.implementationStep in ["PostStreaming", "PostCollision"]
+            assert bc.implementation_step in ["PostStreaming", "PostCollision"]
             bc.create_local_mask_and_normal_arrays(grid_mask)
         logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
@@ -533,7 +456,7 @@ class LBMBase(object):
         A JAX array representing the grid mask of the grid.
         """
         # Halo width (hw_x is different to accommodate the domain sharding per XLA device)
-        hw_x = self.nDevices
+        hw_x = self.n_devices
         hw_y = hw_z = 1
         if self.dim == 2:
             grid_mask = self.distributed_array_init((self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.lattice.q), jnp.bool_, init_val=True)
@@ -573,7 +496,7 @@ class LBMBase(object):
             grid_mask = self.streaming(grid_mask)
             return lax.with_sharding_constraint(grid_mask, self.sharding)
 
-    def bounding_box_indices(self):
+    def compute_bounding_box_indices(self):
         """
         This function calculates the indices of the bounding box of a 2D or 3D grid.
         The bounding box is defined as the set of grid points on the outer edge of the grid.
@@ -672,7 +595,7 @@ class LBMBase(object):
             shape = (self.nx, self.ny, self.nz, self.lattice.q)
 
         if rho0 is None or u0 is None:
-            f = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=self.w)
+            f = self.distributed_array_init(shape, self.precision_policy.output_dtype, init_val=self.w)
         else:
             f = self.initialize_populations(rho0, u0)
 
@@ -711,7 +634,7 @@ class LBMBase(object):
         -------
         (jax.numpy.ndarray): The data after being sent to the right neighboring process.
         """
-        return lax.ppermute(x, perm=self.rightPerm, axis_name=axis_name)
+        return lax.ppermute(x, perm=self.right_perm, axis_name=axis_name)
 
     def send_left(self, x, axis_name):
         """
@@ -728,7 +651,7 @@ class LBMBase(object):
         -------
         The data after being sent to the left neighboring process.
         """
-        return lax.ppermute(x, perm=self.leftPerm, axis_name=axis_name)
+        return lax.ppermute(x, perm=self.left_perm, axis_name=axis_name)
 
     def streaming_m(self, f):
         """
@@ -827,17 +750,17 @@ class LBMBase(object):
         """
         # Cast the density and velocity to the compute precision if the cast_output flag is True
         if cast_output:
-            rho, u = self.precisionPolicy.cast_to_compute((rho, u))
+            rho, u = self.precision_policy.cast_to_compute((rho, u))
 
         # Cast c to compute precision so that XLA call FXX matmul,
         # which is faster (it is faster in some older versions of JAX, newer versions are smart enough to do this automatically)
-        c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype)
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
         cu = 3.0 * jnp.dot(u, c)
         usqr = 1.5 * jnp.sum(jnp.square(u), axis=-1, keepdims=True)
         feq = rho * self.w * (1.0 + cu * (1.0 + 0.5 * cu) - usqr)
 
         if cast_output:
-            return self.precisionPolicy.cast_to_output(feq)
+            return self.precision_policy.cast_to_output(feq)
         else:
             return feq
 
@@ -881,7 +804,7 @@ class LBMBase(object):
         u: (jax.numpy.ndarray): Computed velocity.
         """
         rho = jnp.sum(f, axis=-1, keepdims=True)
-        c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
         u = jnp.dot(f, c) / rho
 
         return rho, u
@@ -909,8 +832,8 @@ class LBMBase(object):
         """
         for bc in self.BCs:
             fout = bc.prepare_populations(fout, fin, implementation_step)
-            if bc.implementationStep == implementation_step:
-                if bc.isDynamic:
+            if bc.implementation_step == implementation_step:
+                if bc.is_dynamic:
                     fout = bc.apply(fout, fin, timestep)
                 else:
                     fout = fout.at[bc.indices].set(bc.apply(fout, fin))
@@ -993,25 +916,25 @@ class LBMBase(object):
                 start_step = latest_step + 1
                 if not (t_max > start_step):
                     raise ValueError(f"Simulation already exceeded maximum allowable steps (t_max = {t_max}). Consider increasing t_max.")
-        if self.computeMLUPS:
+        if self.compute_MLUPS:
             start = time.time()
         # Loop over all time steps
         for timestep in range(start_step, t_max + 1):
-            io_flag = self.ioRate > 0 and (timestep % self.ioRate == 0 or timestep == t_max)
-            print_iter_flag = self.printInfoRate > 0 and timestep % self.printInfoRate == 0
-            checkpoint_flag = self.checkpointRate > 0 and timestep % self.checkpointRate == 0
+            io_flag = self.io_rate > 0 and (timestep % self.io_rate == 0 or timestep == t_max)
+            print_iter_flag = self.print_info_rate > 0 and timestep % self.print_info_rate == 0
+            checkpoint_flag = self.checkpoint_rate > 0 and timestep % self.checkpoint_rate == 0
 
             if io_flag:
                 # Update the macroscopic variables and save the previous values (for error computation)
                 rho_prev, u_prev = self.update_macroscopic(f)
-                rho_prev = downsample_field(rho_prev, self.downsamplingFactor)
-                u_prev = downsample_field(u_prev, self.downsamplingFactor)
+                rho_prev = downsample_field(rho_prev, self.downsampling_factor)
+                u_prev = downsample_field(u_prev, self.downsampling_factor)
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho_prev = process_allgather(rho_prev)
                 u_prev = process_allgather(u_prev)
 
             # Perform one time-step (collision, streaming, and boundary conditions)
-            f, fstar = self.step(f, timestep, return_fpost=self.returnFpost)
+            f, fstar = self.step(f, timestep, return_fpost=self.return_fpost)
             # Print the progress of the simulation
             if print_iter_flag:
                 logger.info(
@@ -1026,8 +949,8 @@ class LBMBase(object):
                 # Save the simulation data
                 logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho, u = self.update_macroscopic(f)
-                rho = downsample_field(rho, self.downsamplingFactor)
-                u = downsample_field(u, self.downsamplingFactor)
+                rho = downsample_field(rho, self.downsampling_factor)
+                u = downsample_field(u, self.downsampling_factor)
 
                 # Gather the data from all processes and convert it to numpy arrays (move to host memory)
                 rho = process_allgather(rho)
@@ -1044,11 +967,11 @@ class LBMBase(object):
                 self.mngr.save(timestep, args=orb.args.StandardSave(state))
 
             # Start the timer for the MLUPS computation after the first timestep (to remove compilation overhead)
-            if self.computeMLUPS and timestep == 1:
+            if self.compute_MLUPS and timestep == 1:
                 jax.block_until_ready(f)
                 start = time.time()
 
-        if self.computeMLUPS:
+        if self.compute_MLUPS:
             # Compute and print the performance of the simulation in MLUPS
             jax.block_until_ready(f)
             end = time.time()

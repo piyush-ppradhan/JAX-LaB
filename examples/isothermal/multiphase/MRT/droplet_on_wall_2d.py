@@ -28,20 +28,20 @@ class DropletOnWall2D(MultiphaseMRT):
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
         # rho[ind[:, 0], ind[:, 1]] = 1.0
         rho = rho.reshape((nx, ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = [rho]
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(
-            BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta[tuple(ind.T)], phi[tuple(ind.T)], delta_rho[tuple(ind.T)])
+            BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta[tuple(ind.T)], phi[tuple(ind.T)], delta_rho[tuple(ind.T)])
         )
 
     def output_data(self, **kwargs):
@@ -62,7 +62,7 @@ class DropletOnWall2D(MultiphaseMRT):
 class DropletOnWall2DGeometric(DropletOnWall2D):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        self.BCs[0].append(BounceBack(tuple(ind.T), self.gridInfo, self.precisionPolicy, theta[tuple(ind.T)]))
+        self.BCs[0].append(BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta[tuple(ind.T)]))
 
 
 if __name__ == "__main__":

@@ -26,15 +26,15 @@ class DropletContactAngleHysteresis3D(MultiphaseMRT):
         dist = np.sqrt((x - droplet_center[0]) ** 2 + (y - droplet_center[1]) ** 2 + (z - droplet_center[2]) ** 2)
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - droplet_radius) / interface_width)
         rho = rho.reshape((nx, ny, nz, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, self.nz, 3), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         return [rho], [u]
 
     def set_boundary_conditions(self):
-        self.BCs[0].append(BounceBack(wall_indices, self.gridInfo, self.precisionPolicy, theta[wall_indices]))
+        self.BCs[0].append(BounceBack(wall_indices, self.grid_info, self.precision_policy, theta[wall_indices]))
 
     def output_data(self, **kwargs):
         rho = np.array(kwargs["rho_tree"][0][0, ...])

@@ -30,19 +30,19 @@ class PoreDoublet(MultiphaseMRT):
 
         # Invading fluid
         rho = (1 - fraction) * rho_t * np.ones((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # Displaced fluid
         rho = fraction * rho_t * np.ones((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
@@ -53,35 +53,35 @@ class PoreDoublet(MultiphaseMRT):
 
         # apply bounce back boundary condition to the walls
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_i[walls], phi_i[walls], delta_rho_i[walls]))
-        self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_d[walls], phi_d[walls], delta_rho_d[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_i[walls], phi_i[walls], delta_rho_i[walls]))
+        self.BCs[1].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_d[walls], phi_d[walls], delta_rho_d[walls]))
 
         # apply inlet equilibrium boundary condition at the left
         yy_inlet = yy.reshape(self.nx, self.ny)[tuple(inlet.T)]
-        rho_inlet = fraction * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_inlet = fraction * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_inlet[:, 0] = poiseuille_profile(
             yy_inlet,
             yy_inlet.min(),
             yy_inlet.max() - yy_inlet.min(),
             3.0 / 2.0 * prescribed_vel,
         )
-        self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
-        rho_inlet = (1 - fraction) * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_inlet, vel_inlet))
+        rho_inlet = (1 - fraction) * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_inlet[:, 0] = poiseuille_profile(yy_inlet, yy_inlet.min(), yy_inlet.max() - yy_inlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
+        self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_inlet, vel_inlet))
 
         # Same at the outlet
         yy_outlet = yy.reshape(self.nx, self.ny)[tuple(outlet.T)]
-        rho_outlet = fraction * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_outlet = fraction * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_outlet = np.zeros(outlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_outlet[:, 0] = poiseuille_profile(yy_outlet, yy_outlet.min(), yy_outlet.max() - yy_outlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel_outlet))
-        rho_outlet = (1 - fraction) * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.grid_info, self.precision_policy, rho_outlet, vel_outlet))
+        rho_outlet = (1 - fraction) * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_outlet = np.zeros(outlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_outlet[:, 0] = poiseuille_profile(yy_outlet, yy_outlet.min(), yy_outlet.max() - yy_outlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel_outlet))
+        self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.grid_info, self.precision_policy, rho_outlet, vel_outlet))
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
@@ -140,35 +140,35 @@ class PoreDoubletGeometric(PoreDoublet):
         poiseuille_profile = lambda x, x0, d, umax: np.maximum(0.0, 4.0 * umax / (d**2) * ((x - x0) * d - (x - x0) ** 2))
 
         # apply bounce back boundary condition to the walls
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_i[walls]))
-        self.BCs[1].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta_d[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_i[walls]))
+        self.BCs[1].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_d[walls]))
 
         # apply inlet equilibrium boundary condition at the left
         yy_inlet = yy.reshape(self.nx, self.ny)[tuple(inlet.T)]
-        rho_inlet = fraction * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_inlet = fraction * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_inlet[:, 0] = poiseuille_profile(
             yy_inlet,
             yy_inlet.min(),
             yy_inlet.max() - yy_inlet.min(),
             3.0 / 2.0 * prescribed_vel,
         )
-        self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
-        rho_inlet = (1 - fraction) * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        self.BCs[0].append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_inlet, vel_inlet))
+        rho_inlet = (1 - fraction) * rho_t * np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_inlet[:, 0] = poiseuille_profile(yy_inlet, yy_inlet.min(), yy_inlet.max() - yy_inlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
+        self.BCs[1].append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_inlet, vel_inlet))
 
         # Same at the outlet
         yy_outlet = yy.reshape(self.nx, self.ny)[tuple(outlet.T)]
-        rho_outlet = fraction * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_outlet = fraction * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_outlet = np.zeros(outlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_outlet[:, 0] = poiseuille_profile(yy_outlet, yy_outlet.min(), yy_outlet.max() - yy_outlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel_outlet))
-        rho_outlet = (1 - fraction) * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        self.BCs[0].append(EquilibriumBC(tuple(outlet.T), self.grid_info, self.precision_policy, rho_outlet, vel_outlet))
+        rho_outlet = (1 - fraction) * rho_t * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_outlet = np.zeros(outlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_outlet[:, 0] = poiseuille_profile(yy_outlet, yy_outlet.min(), yy_outlet.max() - yy_outlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.gridInfo, self.precisionPolicy, rho_outlet, vel_outlet))
+        self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.grid_info, self.precision_policy, rho_outlet, vel_outlet))
 
 
 if __name__ == "__main__":

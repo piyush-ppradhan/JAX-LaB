@@ -32,22 +32,22 @@ class Cavity(BGKSim):
     def set_boundary_conditions(self):
         # concatenate the indices of the left, right, and bottom walls
         walls = np.concatenate((
-            self.boundingBoxIndices["left"],
-            self.boundingBoxIndices["right"],
-            self.boundingBoxIndices["bottom"],
-            self.boundingBoxIndices["front"],
-            self.boundingBoxIndices["back"],
+            self.bounding_box_indices["left"],
+            self.bounding_box_indices["right"],
+            self.bounding_box_indices["bottom"],
+            self.bounding_box_indices["front"],
+            self.bounding_box_indices["back"],
         ))
         # apply bounce back boundary condition to the walls
-        self.BCs.append(BounceBack(tuple(walls.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBack(tuple(walls.T), self.grid_info, self.precision_policy))
 
         # apply inlet equilibrium boundary condition to the top wall
-        moving_wall = self.boundingBoxIndices["top"]
+        moving_wall = self.bounding_box_indices["top"]
 
-        rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_wall = np.zeros(moving_wall.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_wall = np.zeros(moving_wall.shape, dtype=self.precision_policy.compute_dtype)
         vel_wall[:, 0] = u_wall
-        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall))
+        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.grid_info, self.precision_policy, rho_wall, vel_wall))
 
 
 if __name__ == "__main__":

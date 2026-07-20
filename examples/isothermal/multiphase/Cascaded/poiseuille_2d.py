@@ -31,20 +31,20 @@ class Poiseuille2D(MultiphaseCascade):
         rho_tree = []
 
         rho = np.ones((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         walls = tuple(walls.T)
-        self.BCs[0].append(BounceBack(walls, self.gridInfo, self.precisionPolicy, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls]))
+        self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls]))
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):

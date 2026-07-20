@@ -30,13 +30,13 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
 
         rho = rho.reshape((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
@@ -47,7 +47,7 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
         ind_2 = np.array(np.where(sphere_2 <= 0)).T
         ind = np.concatenate((ind_1, ind_2))
         ind = tuple(ind.T)
-        self.BCs[0].append(BounceBack(ind, self.gridInfo, self.precisionPolicy, theta[ind], phi[ind], delta_rho[ind]))
+        self.BCs[0].append(BounceBack(ind, self.grid_info, self.precision_policy, theta[ind], phi[ind], delta_rho[ind]))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
@@ -88,7 +88,7 @@ class DropletOnCurvedSurface2DGeometric(DropletOnCurvedSurface2D):
         ind_2 = np.array(np.where(sphere_2 <= 0)).T
         ind = np.concatenate((ind_1, ind_2))
         ind = tuple(ind.T)
-        self.BCs[0].append(BounceBack(ind, self.gridInfo, self.precisionPolicy, theta[ind]))
+        self.BCs[0].append(BounceBack(ind, self.grid_info, self.precision_policy, theta[ind]))
 
 
 if __name__ == "__main__":

@@ -43,8 +43,8 @@ class Droplet2D(MultiphaseMRT):
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
 
         rho = rho.reshape((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         rho_l = fraction * rho_t
@@ -54,13 +54,13 @@ class Droplet2D(MultiphaseMRT):
         rho = 0.5 * (rho_l + rho_g) - 0.5 * (rho_l - rho_g) * np.tanh(2 * (dist - r) / width)
 
         rho = rho.reshape((self.nx, self.ny, 1))
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
 
         return rho_tree, u_tree
@@ -112,20 +112,20 @@ class CapillaryFingering(MultiphaseMRT):
         # Invading fluid
         rho = (1 - fraction) * rho_t * np.ones((self.nx, self.ny, 1))
         rho[0:Lx, :, :] = fraction * rho_t
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # Displaced fluid
         rho = fraction * rho_t * np.ones((self.nx, self.ny, 1))
         rho[0:Lx, :, :] = (1 - fraction) * rho_t
-        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 2), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u, u]
         return rho_tree, u_tree
 
@@ -137,29 +137,29 @@ class CapillaryFingering(MultiphaseMRT):
         # )
 
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         # apply bounce back boundary condition to the walls
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         self.BCs[0].append(
             BounceBack(
-                tuple(walls.T), self.gridInfo, self.precisionPolicy, theta_1[tuple(walls.T)], phi_1[tuple(walls.T)], delta_rho_1[tuple(walls.T)]
+                tuple(walls.T), self.grid_info, self.precision_policy, theta_1[tuple(walls.T)], phi_1[tuple(walls.T)], delta_rho_1[tuple(walls.T)]
             )
         )
         self.BCs[1].append(
             BounceBack(
-                tuple(walls.T), self.gridInfo, self.precisionPolicy, theta_2[tuple(walls.T)], phi_2[tuple(walls.T)], delta_rho_2[tuple(walls.T)]
+                tuple(walls.T), self.grid_info, self.precision_policy, theta_2[tuple(walls.T)], phi_2[tuple(walls.T)], delta_rho_2[tuple(walls.T)]
             )
         )
 
         # # apply inlet equilibrium boundary condition at the left
-        # inlet = self.boundingBoxIndices["left"]
+        # inlet = self.bounding_box_indices["left"]
         # yy_inlet = yy.reshape(self.nx, self.ny)[tuple(inlet.T)]
         # rho_inlet = (
         #     fraction
         #     * rho_t
-        #     * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        #     * np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
         # )
-        # vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        # vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         # vel_inlet[:, 0] = poiseuille_profile(
         #     yy_inlet,
         #     yy_inlet.min(),
@@ -169,8 +169,8 @@ class CapillaryFingering(MultiphaseMRT):
         # self.BCs[0].append(
         #     EquilibriumBC(
         #         tuple(inlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #         rho_inlet,
         #         vel_inlet
         #     )
@@ -178,9 +178,9 @@ class CapillaryFingering(MultiphaseMRT):
         # rho_inlet = (
         #     (1 - fraction)
         #     * rho_t
-        #     * np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        #     * np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
         # )
-        # vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        # vel_inlet = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         # vel_inlet[:, 0] = poiseuille_profile(
         #     yy_inlet,
         #     yy_inlet.min(),
@@ -190,22 +190,22 @@ class CapillaryFingering(MultiphaseMRT):
         # self.BCs[1].append(
         #     EquilibriumBC(
         #         tuple(inlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #         rho_inlet,
         #         vel_inlet
         #     )
         # )
         #
         # # Same at the outlet
-        # outlet = self.boundingBoxIndices["right"]
+        # outlet = self.bounding_box_indices["right"]
         # yy_outlet = yy.reshape(self.nx, self.ny)[tuple(outlet.T)]
         # rho_outlet = (
         #     fraction
         #     * rho_t
-        #     * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        #     * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
         # )
-        # vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        # vel_outlet = np.zeros(outlet.shape, dtype=self.precision_policy.compute_dtype)
         # vel_outlet[:, 0] = poiseuille_profile(
         #     yy_outlet,
         #     yy_outlet.min(),
@@ -215,8 +215,8 @@ class CapillaryFingering(MultiphaseMRT):
         # self.BCs[0].append(
         #     EquilibriumBC(
         #         tuple(outlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #         rho_outlet,
         #         vel_outlet
         #     )
@@ -224,9 +224,9 @@ class CapillaryFingering(MultiphaseMRT):
         # rho_outlet = (
         #     (1 - fraction)
         #     * rho_t
-        #     * np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        #     * np.ones((outlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
         # )
-        # vel_outlet = np.zeros(outlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        # vel_outlet = np.zeros(outlet.shape, dtype=self.precision_policy.compute_dtype)
         # vel_outlet[:, 0] = poiseuille_profile(
         #     yy_outlet,
         #     yy_outlet.min(),
@@ -236,8 +236,8 @@ class CapillaryFingering(MultiphaseMRT):
         # self.BCs[1].append(
         #     EquilibriumBC(
         #         tuple(outlet.T),
-        #         self.gridInfo,
-        #         self.precisionPolicy,
+        #         self.grid_info,
+        #         self.precision_policy,
         #         rho_outlet,
         #         vel_outlet
         #     )
@@ -291,11 +291,11 @@ class CapillaryFingeringGeometric(CapillaryFingering):
     def set_boundary_conditions(self):
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
         wall_indices = tuple(walls.T)
         # apply bounce back boundary condition to the walls
-        self.BCs[0].append(BounceBack(wall_indices, self.gridInfo, self.precisionPolicy, theta_1[wall_indices]))
-        self.BCs[1].append(BounceBack(wall_indices, self.gridInfo, self.precisionPolicy, theta_2[wall_indices]))
+        self.BCs[0].append(BounceBack(wall_indices, self.grid_info, self.precision_policy, theta_1[wall_indices]))
+        self.BCs[1].append(BounceBack(wall_indices, self.grid_info, self.precision_policy, theta_2[wall_indices]))
 
 
 if __name__ == "__main__":

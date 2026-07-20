@@ -945,7 +945,7 @@ def live_volume_randering(timestep, field):
     return live_volume_rendering(timestep, field)
 
 
-def save_BCs_vtk(timestep, BCs, gridInfo, output_dir="."):
+def save_BCs_vtk(timestep, BCs, grid_info, output_dir="."):
     """
     Save boundary conditions as VTK format to the specified directory.
 
@@ -968,12 +968,12 @@ def save_BCs_vtk(timestep, BCs, gridInfo, output_dir="."):
     pv = _import_optional("pyvista", "save_BCs_vtk")
 
     # Create a uniform grid
-    if gridInfo["nz"] == 0:
-        gridDimensions = (gridInfo["nx"] + 1, gridInfo["ny"] + 1, 1)
-        fieldDimensions = (gridInfo["nx"], gridInfo["ny"], 1)
+    if grid_info["nz"] == 0:
+        gridDimensions = (grid_info["nx"] + 1, grid_info["ny"] + 1, 1)
+        fieldDimensions = (grid_info["nx"], grid_info["ny"], 1)
     else:
-        gridDimensions = (gridInfo["nx"] + 1, gridInfo["ny"] + 1, gridInfo["nz"] + 1)
-        fieldDimensions = (gridInfo["nx"], gridInfo["ny"], gridInfo["nz"])
+        gridDimensions = (grid_info["nx"] + 1, grid_info["ny"] + 1, grid_info["nz"] + 1)
+        fieldDimensions = (grid_info["nx"], grid_info["ny"], grid_info["nz"])
 
     grid = pv.ImageData(dimensions=gridDimensions)
 
@@ -988,13 +988,13 @@ def save_BCs_vtk(timestep, BCs, gridInfo, output_dir="."):
             bcNamesCount[bcName] = 0
         bcName += f"_{bcNamesCount[bcName]}"
 
-        if bc.isDynamic:
+        if bc.is_dynamic:
             bcIndices, _ = bc.update_function(timestep)
         else:
             bcIndices = bc.indices
 
         # Convert indices to 1D indices
-        if gridInfo["dim"] == 2:
+        if grid_info["dim"] == 2:
             bcIndices = np.ravel_multi_index(bcIndices, fieldDimensions[:-1], order="F")
         else:
             bcIndices = np.ravel_multi_index(bcIndices, fieldDimensions, order="F")

@@ -50,45 +50,45 @@ class DropletOnWall(MultiphaseCascade):
         rho = np.ones((self.nx, self.ny, self.nz, 1))
         rho[..., 0] = 0.5 * (rho_w_l + rho_w_g) - 0.5 * (rho_w_l - rho_w_g) * np.tanh(2 * (dist - r) / width)
         rho[..., 0, 0] = 1.0
-        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precisionPolicy.compute_dtype, init_val=rho)
-        rho = self.precisionPolicy.cast_to_output(rho)
+        rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
+        rho = self.precision_policy.cast_to_output(rho)
         rho_tree = [rho]
 
         u = np.zeros((self.nx, self.ny, self.nz, 3))
-        u = self.distributed_array_init((self.nx, self.ny, 1), self.precisionPolicy.compute_dtype, init_val=u)
-        u = self.precisionPolicy.cast_to_output(u)
+        u = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=u)
+        u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
 
     def set_boundary_conditions(self):
         # open_idx = np.concatenate((
-        #     self.boundingBoxIndices["top"],
-        #     self.boundingBoxIndices["left"],
-        #     self.boundingBoxIndices["right"],
-        #     self.boundingBoxIndices["front"],
-        #     self.boundingBoxIndices["back"],
+        #     self.bounding_box_indices["top"],
+        #     self.bounding_box_indices["left"],
+        #     self.bounding_box_indices["right"],
+        #     self.bounding_box_indices["front"],
+        #     self.bounding_box_indices["back"],
         # ))
 
-        # top = self.boundingBoxIndices["top"]
+        # top = self.bounding_box_indices["top"]
         # left = np.array([[0, y, z] for y in range(self.ny) for z in range(1, self.nz)], dtype=int)
         # right = np.array([[self.nx - 1, y, z] for y in range(self.ny) for z in range(1, self.nz)], dtype=int)
         # front = np.array([[x, 0, z] for x in range(self.ny) for z in range(1, self.nz)], dtype=int)
         # back = np.array([[x, self.ny - 1, z] for x in range(self.nx) for z in range(1, self.nz)], dtype=int)
         # open_idx = np.concatenate((top, left, right, front, back))
 
-        open_idx = self.boundingBoxIndices["top"]
-        self.BCs[0].append(ExtrapolationOutflowMultiphase(tuple(open_idx.T), self.gridInfo, self.precisionPolicy))
+        open_idx = self.bounding_box_indices["top"]
+        self.BCs[0].append(ExtrapolationOutflowMultiphase(tuple(open_idx.T), self.grid_info, self.precision_policy))
 
-        wall = self.boundingBoxIndices["bottom"]
+        wall = self.bounding_box_indices["bottom"]
         # Only theta is used for geometric wetting scheme so other parameters (phi, delta_rho) do not need to be passed as they will be ignored.
         # wall = np.array([[x, y, buffer] for x in range(self.nx) for y in range(self.ny)], dtype=int)
         self.BCs[0].append(
-            BounceBack(tuple(wall.T), self.gridInfo, self.precisionPolicy, theta_w[tuple(wall.T)], phi_w[tuple(wall.T)], delta_rho_w[tuple(wall.T)])
+            BounceBack(tuple(wall.T), self.grid_info, self.precision_policy, theta_w[tuple(wall.T)], phi_w[tuple(wall.T)], delta_rho_w[tuple(wall.T)])
         )
 
     @partial(jit, static_argnums=(0,))
     def compute_fluid_fluid_force(self, psi_tree, U_tree):
-        c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
         psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
         # U_s_tree = tree_map(lambda U: self.streaming(jnp.repeat(U, axis=-1, repeats=self.q)), U_tree)
 
@@ -99,7 +99,7 @@ class DropletOnWall(MultiphaseCascade):
 
     @partial(jit, static_argnums=(0,))
     def compute_potential(self, rho_tree):
-        rho_tree = tree_map(lambda rho: self.precisionPolicy.cast_to_compute(rho), rho_tree)
+        rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         p_tree = self.compute_pressure(rho_tree)
         # Shan-Chen potential using modified pressure
         psi_tree = tree_map(lambda p, rho, G: jnp.sqrt(2 * (p - self.lattice.cs2 * rho) / G), p_tree, rho_tree, self.g_kkprime.diagonal().tolist())
@@ -120,7 +120,7 @@ class DropletOnWall(MultiphaseCascade):
     @partial(jit, static_argnums=(0,))
     def compute_force_central_moments(self, F_tree, F_intra_tree, psi_tree):
         def f(F, F_intra, sigma, psi, s_b):
-            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             Fx = F_intra[..., 0]
             Fy = F_intra[..., 1]
             Fz = F_intra[..., 2]
@@ -170,8 +170,8 @@ class DropletOnWall(MultiphaseCascade):
             exit()
 
         if timestep == 3600:
-            self.ioRate = 10
-            self.printInfoRate = 10
+            self.io_rate = 10
+            self.print_info_rate = 10
 
         file.write(f"{timestep},{radius}\n")
         file.flush()

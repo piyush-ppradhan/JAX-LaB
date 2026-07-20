@@ -86,22 +86,22 @@ class Airfoil(KBCSim):
         airfoil_mask = np.repeat(airfoil_mask[:, :, np.newaxis], self.nz, axis=2)
 
         airfoil_indices = np.argwhere(airfoil_mask)
-        wall = np.concatenate((airfoil_indices, self.boundingBoxIndices["bottom"], self.boundingBoxIndices["top"]))
-        self.BCs.append(BounceBack(tuple(wall.T), self.gridInfo, self.precisionPolicy))
+        wall = np.concatenate((airfoil_indices, self.bounding_box_indices["bottom"], self.bounding_box_indices["top"]))
+        self.BCs.append(BounceBack(tuple(wall.T), self.grid_info, self.precision_policy))
 
         # Store airfoil boundary for visualization
         self.visualization_bc = jnp.zeros((self.nx, self.ny, self.nz), dtype=jnp.float32)
         self.visualization_bc = self.visualization_bc.at[tuple(airfoil_indices.T)].set(1.0)
 
-        doNothing = self.boundingBoxIndices["right"]
-        self.BCs.append(DoNothing(tuple(doNothing.T), self.gridInfo, self.precisionPolicy))
+        doNothing = self.bounding_box_indices["right"]
+        self.BCs.append(DoNothing(tuple(doNothing.T), self.grid_info, self.precision_policy))
 
-        inlet = self.boundingBoxIndices["left"]
-        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet = np.zeros((inlet.shape), dtype=self.precisionPolicy.compute_dtype)
+        inlet = self.bounding_box_indices["left"]
+        rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_inlet = np.zeros((inlet.shape), dtype=self.precision_policy.compute_dtype)
 
         vel_inlet[:, 0] = prescribed_vel
-        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
+        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_inlet, vel_inlet))
 
     def output_data(self, **kwargs):
         # Compute q-criterion and vorticity using finite differences

@@ -29,20 +29,20 @@ class Cavity(BGKSim):
     def set_boundary_conditions(self):
         # No-slip walls (all faces except the moving lid at the top, z = nz-1)
         walls = np.concatenate((
-            self.boundingBoxIndices["left"],
-            self.boundingBoxIndices["right"],
-            self.boundingBoxIndices["front"],
-            self.boundingBoxIndices["back"],
-            self.boundingBoxIndices["bottom"],
+            self.bounding_box_indices["left"],
+            self.bounding_box_indices["right"],
+            self.bounding_box_indices["front"],
+            self.bounding_box_indices["back"],
+            self.bounding_box_indices["bottom"],
         ))
-        self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBackHalfway(tuple(walls.T), self.grid_info, self.precision_policy))
 
         # Moving lid (top)
-        moving_wall = self.boundingBoxIndices["top"]
-        rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_wall = np.zeros(moving_wall.shape, dtype=self.precisionPolicy.compute_dtype)
+        moving_wall = self.bounding_box_indices["top"]
+        rho_wall = np.ones((moving_wall.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_wall = np.zeros(moving_wall.shape, dtype=self.precision_policy.compute_dtype)
         vel_wall[:, 0] = prescribed_vel
-        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall))
+        self.BCs.append(EquilibriumBC(tuple(moving_wall.T), self.grid_info, self.precision_policy, rho_wall, vel_wall))
 
 
 class ThermalCavity(Thermal):
@@ -54,7 +54,7 @@ class ThermalCavity(Thermal):
 
     def set_thermal_boundary_conditions(self):
         self.thermal_BCs = []
-        bbox = self.fluid_solver.boundingBoxIndices
+        bbox = self.fluid_solver.bounding_box_indices
         # Adiabatic side walls (applied first so the Dirichlet edges win)
         self.thermal_BCs.append(NeumannTemperature(tuple(bbox["left"].T), normal=(-1, 0, 0)))
         self.thermal_BCs.append(NeumannTemperature(tuple(bbox["right"].T), normal=(1, 0, 0)))

@@ -25,18 +25,18 @@ class Couette(BGKSim):
         super().__init__(**kwargs)
 
     def set_boundary_conditions(self):
-        walls = np.concatenate((self.boundingBoxIndices["top"], self.boundingBoxIndices["bottom"]))
-        self.BCs.append(BounceBack(tuple(walls.T), self.gridInfo, self.precisionPolicy))
+        walls = np.concatenate((self.bounding_box_indices["top"], self.bounding_box_indices["bottom"]))
+        self.BCs.append(BounceBack(tuple(walls.T), self.grid_info, self.precision_policy))
 
-        outlet = self.boundingBoxIndices["right"]
-        inlet = self.boundingBoxIndices["left"]
+        outlet = self.bounding_box_indices["right"]
+        inlet = self.bounding_box_indices["left"]
 
-        rho_wall = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        vel_wall = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        rho_wall = np.ones((inlet.shape[0], 1), dtype=self.precision_policy.compute_dtype)
+        vel_wall = np.zeros(inlet.shape, dtype=self.precision_policy.compute_dtype)
         vel_wall[:, 0] = prescribed_vel
-        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_wall, vel_wall))
+        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.grid_info, self.precision_policy, rho_wall, vel_wall))
 
-        self.BCs.append(DoNothing(tuple(outlet.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(DoNothing(tuple(outlet.T), self.grid_info, self.precision_policy))
 
     def output_data(self, **kwargs):
         # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)

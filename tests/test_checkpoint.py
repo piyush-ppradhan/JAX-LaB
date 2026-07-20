@@ -42,9 +42,9 @@ class SinusoidalBGK(BGKSim):
 
     def initialize_macroscopic_fields(self):
         spatial_shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
-        phase = _sinusoidal_phase(spatial_shape, self.precisionPolicy.compute_dtype)
+        phase = _sinusoidal_phase(spatial_shape, self.precision_policy.compute_dtype)
         density = (1.0 + 0.01 * phase)[..., None]
-        velocity = jnp.zeros((*spatial_shape, self.dim), dtype=self.precisionPolicy.compute_dtype)
+        velocity = jnp.zeros((*spatial_shape, self.dim), dtype=self.precision_policy.compute_dtype)
         for axis in range(self.dim):
             velocity = velocity.at[..., axis].set(0.005 * jnp.roll(phase, shift=axis, axis=axis))
         return density, velocity
@@ -55,8 +55,8 @@ class SinusoidalMultiphaseBGK(MultiphaseBGK):
 
     def initialize_macroscopic_fields(self):
         spatial_shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
-        first_phase = _sinusoidal_phase(spatial_shape, self.precisionPolicy.compute_dtype)
-        second_phase = _sinusoidal_phase(spatial_shape, self.precisionPolicy.compute_dtype, phase=jnp.pi / 3.0)
+        first_phase = _sinusoidal_phase(spatial_shape, self.precision_policy.compute_dtype)
+        second_phase = _sinusoidal_phase(spatial_shape, self.precision_policy.compute_dtype, phase=jnp.pi / 3.0)
         density_tree = [
             (1.0 + 0.01 * first_phase)[..., None],
             (0.8 + 0.01 * second_phase)[..., None],
@@ -66,7 +66,7 @@ class SinusoidalMultiphaseBGK(MultiphaseBGK):
         for phase, direction in ((first_phase, 1.0), (second_phase, -1.0)):
             velocity = jnp.zeros(
                 (*spatial_shape, self.dim),
-                dtype=self.precisionPolicy.compute_dtype,
+                dtype=self.precision_policy.compute_dtype,
             )
             for axis in range(self.dim):
                 velocity = velocity.at[..., axis].set(direction * 0.005 * jnp.roll(phase, shift=axis, axis=axis))
@@ -77,7 +77,7 @@ class SinusoidalMultiphaseBGK(MultiphaseBGK):
         return [
             jnp.zeros(
                 (*density.shape[:-1], self.dim),
-                dtype=self.precisionPolicy.compute_dtype,
+                dtype=self.precision_policy.compute_dtype,
             )
             for density in rho_tree
         ]

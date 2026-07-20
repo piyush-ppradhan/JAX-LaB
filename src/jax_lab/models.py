@@ -28,14 +28,14 @@ class BGKSim(LBMBase):
         The collision step is where the main physics of the LBM is applied. In the BGK approximation,
         the distribution function is relaxed towards the equilibrium distribution function.
         """
-        f = self.precisionPolicy.cast_to_compute(f)
+        f = self.precision_policy.cast_to_compute(f)
         rho, u = self.update_macroscopic(f)
         feq = self.equilibrium(rho, u, cast_output=False)
         fneq = f - feq
         fout = f - self.omega * fneq
         if self.force is not None:
             fout = self.apply_force(fout, feq, rho, u)
-        return self.precisionPolicy.cast_to_output(fout)
+        return self.precision_policy.cast_to_output(fout)
 
 
 class KBCSim(LBMBase):
@@ -55,7 +55,7 @@ class KBCSim(LBMBase):
         """
         KBC collision step for lattice.
         """
-        f = self.precisionPolicy.cast_to_compute(f)
+        f = self.precision_policy.cast_to_compute(f)
         tiny = 1e-32
         beta = self.omega * 0.5
         rho, u = self.update_macroscopic(f)
@@ -76,7 +76,7 @@ class KBCSim(LBMBase):
         # add external force
         if self.force is not None:
             fout = self.apply_force(fout, feq, rho, u)
-        return self.precisionPolicy.cast_to_output(fout)
+        return self.precision_policy.cast_to_output(fout)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision_modified(self, f):
@@ -90,7 +90,7 @@ class KBCSim(LBMBase):
         Overall the following alternative collision is more reliable and may replace the original
         implementation. The issue at the moment is that it is about 60-80% slower than the above method.
         """
-        f = self.precisionPolicy.cast_to_compute(f)
+        f = self.precision_policy.cast_to_compute(f)
         tiny = 1e-32
         beta = self.omega * 0.5
         rho, u = self.update_macroscopic(f)
@@ -119,7 +119,7 @@ class KBCSim(LBMBase):
         # add external force
         if self.force is not None:
             fout = self.apply_force(fout, feq, rho, u)
-        return self.precisionPolicy.cast_to_output(fout)
+        return self.precision_policy.cast_to_output(fout)
 
     @partial(jit, static_argnums=(0,), inline=True)
     def entropic_scalar_product(self, x, y, feq):
@@ -262,12 +262,12 @@ class AdvectionDiffusionBGK(LBMBase):
         """
         BGK collision step for lattice.
         """
-        f = self.precisionPolicy.cast_to_compute(f)
+        f = self.precision_policy.cast_to_compute(f)
         rho = jnp.sum(f, axis=-1, keepdims=True)
         feq = self.equilibrium(rho, self.vel, cast_output=False)
         fneq = f - feq
         fout = f - self.omega * fneq
-        return self.precisionPolicy.cast_to_output(fout)
+        return self.precision_policy.cast_to_output(fout)
 
 
 class MRTSim(LBMBase):
@@ -286,13 +286,13 @@ class MRTSim(LBMBase):
         self.s_v = self.omega
         self.M_inv = jnp.array(
             np.transpose(np.linalg.inv(kwargs.get("M"))),
-            dtype=self.precisionPolicy.compute_dtype,
+            dtype=self.precision_policy.compute_dtype,
         )
-        self.M = jnp.array(np.transpose(kwargs.get("M")), dtype=self.precisionPolicy.compute_dtype)
+        self.M = jnp.array(np.transpose(kwargs.get("M")), dtype=self.precision_policy.compute_dtype)
         if isinstance(self.lattice, LatticeD2Q9):
             self.S = jnp.array(
                 np.diag([self.s_rho, self.s_e, self.s_eta, self.s_j, self.s_q, self.s_j, self.s_q, self.s_v, self.s_v]),
-                dtype=self.precisionPolicy.compute_dtype,
+                dtype=self.precision_policy.compute_dtype,
             )
         elif isinstance(self.lattice, LatticeD3Q19):
             self.s_pi = kwargs.get("s_pi")
@@ -319,7 +319,7 @@ class MRTSim(LBMBase):
                     self.s_m,
                     self.s_m,
                 ]),
-                dtype=self.precisionPolicy.compute_dtype,
+                dtype=self.precision_policy.compute_dtype,
             )
         else:
             NotImplementedError(f"Lattice type {self.lattice.name} has not been implemented")
@@ -329,7 +329,7 @@ class MRTSim(LBMBase):
         """
         MRT collision step for lattice.
         """
-        f = self.precisionPolicy.cast_to_compute(f)
+        f = self.precision_policy.cast_to_compute(f)
         m = jnp.dot(f, self.M)
         rho, u = self.update_macroscopic(f)
         feq = self.equilibrium(rho, u)
@@ -337,7 +337,7 @@ class MRTSim(LBMBase):
         mout = -jnp.dot(m - meq, self.S)
         if self.force is not None:
             mout = self.apply_force(mout, meq, rho, u)
-        return self.precisionPolicy.cast_to_output(f + jnp.dot(mout, self.M_inv))
+        return self.precision_policy.cast_to_output(f + jnp.dot(mout, self.M_inv))
 
 
 class CLBMSim(LBMBase):
@@ -350,9 +350,9 @@ class CLBMSim(LBMBase):
         super().__init__(**kwargs)
         self.M_inv = jnp.array(
             np.transpose(np.linalg.inv(kwargs.get("M"))),
-            dtype=self.precisionPolicy.compute_dtype,
+            dtype=self.precision_policy.compute_dtype,
         )
-        self.M = jnp.array(np.transpose(kwargs.get("M")), dtype=self.precisionPolicy.compute_dtype)
+        self.M = jnp.array(np.transpose(kwargs.get("M")), dtype=self.precision_policy.compute_dtype)
         self.s_0 = kwargs.get("s_0")
         self.s_1 = kwargs.get("s_1")
         self.s_b = kwargs.get("s_b")
@@ -363,7 +363,7 @@ class CLBMSim(LBMBase):
         if isinstance(self.lattice, LatticeD2Q9):
             self.S = jnp.array(
                 np.diag([self.s_0, self.s_1, self.s_1, self.s_b, self.s_2, self.s_2, self.s_3, self.s_3, self.s_4]),
-                dtype=self.precisionPolicy.compute_dtype,
+                dtype=self.precision_policy.compute_dtype,
             )
         elif isinstance(self.lattice, LatticeD3Q19):
             self.s_plus = (self.s_b + 2 * self.s_2) / 3
@@ -396,7 +396,7 @@ class CLBMSim(LBMBase):
             S[8, 9] = self.s_minus
             S[9, 7] = self.s_minus
             S[9, 8] = self.s_minus
-            self.S = jnp.array(S, dtype=self.precisionPolicy.compute_dtype)
+            self.S = jnp.array(S, dtype=self.precision_policy.compute_dtype)
 
         elif isinstance(self.lattice, LatticeD3Q27):
             self.s_plus = (self.s_b + 2 * self.s_2) / 3
@@ -441,7 +441,7 @@ class CLBMSim(LBMBase):
             S[8, 9] = self.s_minus
             S[9, 7] = self.s_minus
             S[9, 8] = self.s_minus
-            self.S = jnp.array(S, dtype=self.precisionPolicy.compute_dtype)
+            self.S = jnp.array(S, dtype=self.precision_policy.compute_dtype)
 
     @partial(jit, static_argnums=(0,), inline=True)
     def macroscopic_velocity(self, f, rho):
@@ -462,7 +462,7 @@ class CLBMSim(LBMBase):
             Velocity fields.
         """
         # rho_tree = map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
-        c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
         u = jnp.dot(f, c) / rho
         if self.force is not None:
             return u + 0.5 * self.force / rho
@@ -1155,7 +1155,7 @@ class CLBMSim(LBMBase):
         """
 
         if isinstance(self.lattice, LatticeD2Q9):
-            T_eq = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            T_eq = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             T_eq = T_eq.at[..., 0].set(rho[..., 0])
             T_eq = T_eq.at[..., 3].set(2 * rho[..., 0] * self.lattice.cs2)
             T_eq = T_eq.at[..., 8].set(rho[..., 0] * self.lattice.cs**4)
@@ -1163,7 +1163,7 @@ class CLBMSim(LBMBase):
             return T_eq
 
         elif isinstance(self.lattice, LatticeD3Q19):
-            T_eq = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            T_eq = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             T_eq = T_eq.at[..., 0].set(rho[..., 0])
             T_eq = T_eq.at[..., 7].set(rho[..., 0] * self.lattice.cs2)
             T_eq = T_eq.at[..., 8].set(rho[..., 0] * self.lattice.cs2)
@@ -1175,7 +1175,7 @@ class CLBMSim(LBMBase):
             return T_eq
 
         elif isinstance(self.lattice, LatticeD3Q27):
-            T_eq = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            T_eq = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             T_eq = T_eq.at[..., 0].set(rho[..., 0])
             T_eq = T_eq.at[..., 7].set(rho[..., 0] * self.lattice.cs2)
             T_eq = T_eq.at[..., 8].set(rho[..., 0] * self.lattice.cs2)
@@ -1204,7 +1204,7 @@ class CLBMSim(LBMBase):
         """
 
         if isinstance(self.lattice, LatticeD2Q9):
-            C = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            C = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             Fx = F[..., 0]
             Fy = F[..., 1]
             C = C.at[..., 1].set(Fx)
@@ -1214,7 +1214,7 @@ class CLBMSim(LBMBase):
 
             return C
         elif isinstance(self.lattice, LatticeD3Q19):
-            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             Fx = F[..., 0]
             Fy = F[..., 1]
             Fz = F[..., 2]
@@ -1230,7 +1230,7 @@ class CLBMSim(LBMBase):
 
             return C
         elif isinstance(self.lattice, LatticeD3Q27):
-            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precisionPolicy.compute_dtype)
+            C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
             Fx = F[..., 0]
             Fy = F[..., 1]
             Fz = F[..., 2]
@@ -1276,7 +1276,7 @@ class CLBMSim(LBMBase):
         """
         Cascaded LBM collision step for lattice.
         """
-        fin = self.precisionPolicy.cast_to_compute(fin)
+        fin = self.precision_policy.cast_to_compute(fin)
         rho, _ = self.update_macroscopic(fin)
         u = self.macroscopic_velocity(fin, rho)
         T = jnp.dot(fin, self.M)
@@ -1286,4 +1286,4 @@ class CLBMSim(LBMBase):
         Tout = self.apply_force(Tout, rho, u)
         Tout = self.compute_central_moment_inverse(Tout, u)
         fout = jnp.dot(T, self.M_inv)
-        return self.precisionPolicy.cast_to_output(fout)
+        return self.precision_policy.cast_to_output(fout)
