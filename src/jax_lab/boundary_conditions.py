@@ -513,6 +513,9 @@ class BounceBackHalfway(BoundaryCondition):
 
     isSolid (bool): Whether the boundary condition represents a solid boundary. For this class, it is True.
 
+    solid_indices (tuple): Original solid-node indices, stored by configure before self.indices is shifted to the
+    adjacent fluid nodes. Used by multiphase wetting schemes.
+
     vel (array-like): The prescribed value of velocity vector for the boundary condition. No-slip BC is assumed if vel=None (default).
 
     theta (jax.numpy.ndarray; Default: None): Contact angle, applied for multiphase flows and only set for wall boundary conditions.
@@ -550,6 +553,9 @@ class BounceBackHalfway(BoundaryCondition):
         This method performs an index shift for the halfway bounce-back boundary condition. It updates the indices of
         the boundary nodes to be the indices of fluid nodes adjacent of the solid nodes.
         """
+        # Keep the original solid-node indices; multiphase wetting schemes need them
+        # after self.indices is shifted to the adjacent fluid nodes below.
+        self.solid_indices = self.indices
         # Perform index shift for halfway BB.
         hasFluidNeighbour = ~boundaryMask[:, self.lattice.opp_indices]
         nbd_orig = len(self.indices[0])
@@ -570,6 +576,32 @@ class BounceBackHalfway(BoundaryCondition):
             )
 
         return
+
+    @partial(jit, static_argnums=(0, 3), inline=True)
+    def prepare_populations(self, fout, fin, implementation_step):
+        """
+        Pin solid-node populations to the rest equilibrium (rho = 1, u = 0).
+
+        Halfway bounce-back never constrains the populations at the solid nodes, so they evolve freely and can diverge.
+        This is harmless in single phase simulations but multiphase wetting schemes read wall densities, so the solid
+        nodes are reset after every streaming step. The wetted wall density used in the force computation is overwritten
+        by apply_contact_angle, so the pinned value never enters the wetting force directly.
+
+        Parameters
+        ----------
+        fout (jax.numpy.ndarray): The post-streaming or post-collision distribution functions.
+
+        fin (jax.numpy.ndarray): The pre-collision or post-collision distribution functions.
+
+        implementation_step (str): The step at which the preparation is applied.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): The distribution functions with solid nodes reset after streaming.
+        """
+        if implementation_step == "PostStreaming":
+            return fout.at[self.solid_indices].set(self.precisionPolicy.cast_to_output(self.lattice.w))
+        return fout
 
     @partial(jit, static_argnums=(0,))
     def impose_boundary_vel(self, fbd, bindex):

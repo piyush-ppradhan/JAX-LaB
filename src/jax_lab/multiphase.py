@@ -196,6 +196,23 @@ class Multiphase(LBMBase):
         """
         return isinstance(bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable))
 
+    def _get_solid_indices(self, bc):
+        """
+        Return the solid-node indices of a boundary condition.
+
+        BounceBackHalfway (and subclasses) shift bc.indices to the adjacent fluid nodes during configure and keep the
+        original solid nodes in bc.solid_indices. Wetting data must be built on the solid nodes.
+
+        Parameters
+        ----------
+        bc (BoundaryCondition): Boundary condition object.
+
+        Returns
+        -------
+        (tuple): Solid-node index tuple.
+        """
+        return getattr(bc, "solid_indices", bc.indices)
+
     def _create_component_solid_mask(self, BC):
         """
         Create a solid mask for computing wall normals in geometric wetting.
@@ -212,7 +229,7 @@ class Multiphase(LBMBase):
         solid_mask = np.zeros(shape, dtype=bool)
         for bc in BC:
             if self._is_wetting_boundary_condition(bc):
-                indices = np.array(bc.indices, dtype=np.int64)
+                indices = np.array(self._get_solid_indices(bc), dtype=np.int64)
                 if self.dim == 2:
                     bounds = [(self.nx, indices[0]), (self.ny, indices[1])]
                 else:
@@ -237,10 +254,12 @@ class Multiphase(LBMBase):
         -------
         normals (numpy.ndarray): Unit normals pointing from wall nodes toward fluid nodes.
         """
-        indices = np.array(bc.indices, dtype=np.int64).T
+        indices = np.array(self._get_solid_indices(bc), dtype=np.int64).T
         normals = np.zeros((indices.shape[0], self.dim), dtype=np.float64)
 
-        if bc.isSolid and hasattr(bc, "normals"):
+        # bc.normals rows correspond to bc.indices; for halfway bounce-back those are the shifted
+        # fluid nodes, not the solid nodes used here, so fall back to the neighbor-based normals.
+        if bc.isSolid and hasattr(bc, "normals") and not hasattr(bc, "solid_indices"):
             bc_normals = np.asarray(bc.normals, dtype=np.float64)
             if bc_normals.shape == normals.shape:
                 normal_norm = np.linalg.norm(bc_normals, axis=1, keepdims=True)
@@ -644,7 +663,7 @@ class Multiphase(LBMBase):
                 if bc.theta is None:
                     continue
 
-                indices = np.array(bc.indices, dtype=np.int64).T
+                indices = np.array(self._get_solid_indices(bc), dtype=np.int64).T
                 theta = np.asarray(bc.theta, dtype=np.float64).reshape(-1)
                 if theta.size == 1:
                     theta = np.full((indices.shape[0],), theta.item(), dtype=np.float64)
@@ -717,7 +736,7 @@ class Multiphase(LBMBase):
         for i in range(self.n_components):
             for bc in self.BCs[i]:
                 if isinstance(bc, BounceBack) or isinstance(bc, BounceBackHalfway) or isinstance(bc, BounceBackMoving):
-                    solid_indices[i].append(np.array(bc.indices).T)
+                    solid_indices[i].append(np.array(self._get_solid_indices(bc)).T)
         for i in range(self.n_components):
             index = None
             if not len(solid_indices[i]) == 0:
@@ -860,9 +879,9 @@ class Multiphase(LBMBase):
                         bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable)
                     ):
                         if bc.theta is not None:
-                            rho = rho.at[bc.indices].set(
-                                (bc.theta <= jnp.pi / 2) * (bc.phi * rho_ave[bc.indices])
-                                + (bc.theta > jnp.pi / 2) * (rho_ave[bc.indices] - bc.delta_rho)
+                            indices = self._get_solid_indices(bc)
+                            rho = rho.at[indices].set(
+                                (bc.theta <= jnp.pi / 2) * (bc.phi * rho_ave[indices]) + (bc.theta > jnp.pi / 2) * (rho_ave[indices] - bc.delta_rho)
                             )
                         rho = jnp.clip(rho, min=rho_min, max=rho_max)
                 return rho
