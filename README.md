@@ -113,7 +113,7 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
 
 ## Documentation
 
-The API documentation is available at [piyush-ppradhan.github.io/JAX-LaB](https://piyush-ppradhan.github.io/JAX-LaB/). It is built with [Zensical](https://zensical.org/) and deployed automatically on every push to the main branch.
+The API documentation is available at [piyush-ppradhan.github.io/JAX-LaB](https://piyush-ppradhan.github.io/JAX-LaB/). 
 
 To build and preview the documentation locally:
 ```bash
@@ -172,7 +172,7 @@ python3 examples/singlephase/cavity2d.py
 ```
 
 ## Citation
-
+If you use this software, please cite it as follows:
 ```bibtex
 @article{pradhan_jax-lab_2026,
     title = {{JAX}-{LaB}: {A} {High}-{Performance}, {Differentiable} {Lattice} {Boltzmann} {Library} for {Modeling} {Multiphase} {Fluid} {Dynamics} in {Geosciences} and {Engineering}},
