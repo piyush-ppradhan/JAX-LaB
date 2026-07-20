@@ -161,14 +161,11 @@ class Thermal(object):
         """
         This function sets the boundary conditions for the temperature field.
 
-        It is intended to be overwritten by the user to specify the boundary
-        conditions according to the specific problem being solved, by appending
-        ThermalBoundaryCondition instances (DirichletTemperature,
-        NeumannTemperature) to self.thermal_BCs. Conditions are applied in
-        list order, so later entries win on shared nodes (e.g. corners).
+        It is intended to be overwritten by the user to specify the boundary conditions according to the specific problem being solved, by appending
+        ThermalBoundaryCondition instances (DirichletTemperature, NeumannTemperature) to self.thermal_BCs. Conditions are applied in list order, so
+        later entries win on shared nodes (e.g. corners).
 
-        By default no thermal boundary condition is applied, which corresponds
-        to a fully periodic temperature field.
+        By default no thermal boundary condition is applied, which corresponds to a fully periodic temperature field.
         """
         self.thermal_BCs = []
         return
@@ -178,8 +175,7 @@ class Thermal(object):
         """
         This function applies the boundary conditions to the temperature field.
 
-        It iterates over all thermal boundary conditions and applies them in
-        list order.
+        It iterates over all thermal boundary conditions and applies them in list order.
 
         Parameters
         ----------
@@ -200,8 +196,7 @@ class Thermal(object):
         """
         Return the initial temperature field.
 
-        The default implementation returns ``None``, which
-        :meth:`assign_fields_sharded` interprets as a uniform temperature of 1.
+        The default implementation returns ``None``, which :meth:`assign_fields_sharded` interprets as a uniform temperature of 1.
         Override this method to provide a scalar or spatially varying field.
 
         Returns
@@ -219,8 +214,7 @@ class Thermal(object):
     @partial(jit, static_argnums=(0, 1, 2, 4))
     def distributed_array_init(self, shape, ttype, init_val=0, sharding=None):
         """
-        Initialize a distributed array using JAX, with a specified shape, data type, and initial value.
-        Optionally, provide a custom sharding strategy.
+        Initialize a distributed array using JAX, with a specified shape, data type, and initial value. Optionally, provide a custom sharding strategy.
 
         Parameters
         ----------
@@ -245,8 +239,7 @@ class Thermal(object):
         """
         This function initializes the temperature field of the simulation.
 
-        It calls initialize_temperature_field, which can return a scalar or an
-        array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D. If it
+        It calls initialize_temperature_field, which can return a scalar or an array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D. If it
         returns None, a uniform temperature of 1 is assumed.
 
         Returns
@@ -268,12 +261,10 @@ class Thermal(object):
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force_thermal(self, f_postcollision, feq, rho, u):
         """
-        Modified version of the single phase apply_force function that adds a
-        density variation based buoyancy force to any user defined fluid force,
+        Modified version of the single phase apply_force function that adds a density variation based buoyancy force to any user defined fluid force,
         using the exact-difference method due to Kupershtokh.
 
-        Note: the buoyancy force is computed from the local density deviation
-        relative to the mean density, not from the temperature field, since the
+        Note: the buoyancy force is computed from the local density deviation relative to the mean density, not from the temperature field, since the
         fluid collision does not have access to the temperature.
 
         Parameters

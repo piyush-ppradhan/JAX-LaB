@@ -87,11 +87,11 @@ Computations use *pytrees* to **model any number of components**, each with its 
 - Mixed-Precision support (store vs compute)
 
 ### Output
-- Binary and ASCII VTK output (based on [PyVista](https://docs.pyvista.org/) library)
-- HDF5/XDMF output (based on [h5py](https://docs.h5py.org/)) to maximize I/O speed and minimize storage requirement
-- In-situ rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze) library
-- [Orbax](https://github.com/google/orbax)-based distributed asynchronous checkpointing
-- Image Output
+- Binary and ASCII VTK output using [PyVista](https://docs.pyvista.org/)
+- HDF5/XDMF output using [h5py](https://docs.h5py.org/))
+- In-situ rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze)
+- Distributed asynchronous checkpointing using [orbax](https://github.com/google/orbax) 
+- Image output
 - 3D mesh voxelizer using [trimesh](https://trimesh.org/)
 
 ### Boundary Conditions
@@ -164,7 +164,8 @@ cd JAX-LaB
 pip install -e ".[dev,io]"
 ```
 
-**Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly.
+<!-- **Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly. -->
+**Note:** Due to lack of support for certain operations in the Metal backend of jax, consider using the CPU backend on Mac OS. 
 
 Run an example:
 ```bash
