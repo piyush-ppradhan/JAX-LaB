@@ -164,7 +164,7 @@ cd JAX-LaB
 pip install -e ".[dev,io]"
 ```
 
-**Note for macOS:** Use the standard CPU installation command, as JAX does not support GPU acceleration on macOS.
+**Note for macOS:** Use the standard CPU installation, as JAX does not support GPU acceleration on macOS.
 
 Run an example:
 ```bash
