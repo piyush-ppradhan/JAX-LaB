@@ -38,8 +38,7 @@ class Multiphase(LBMBase):
     """
     Multiphase model based on the Shan-Chen method.
 
-    The user supplies an equation of state (EOS). Pressure is evaluated from
-    density and temperature before the effective mass. Both single-component
+    The user supplies an equation of state (EOS). Pressure is evaluated from density and temperature before the effective mass. Both single-component
     multiphase and multicomponent multiphase systems are supported.
 
     Parameters
@@ -631,15 +630,13 @@ class Multiphase(LBMBase):
         -------
         geometric_wetting_data (list): Component-wise interpolation data for wetted boundary nodes.
 
-        geometric_fluid_mask (list): Component-wise boolean masks (jax.numpy.ndarray) with True on fluid nodes,
-        used to clamp wall densities to the fluid density range.
+        geometric_fluid_mask (list): Component-wise boolean masks (jax.numpy.ndarray) with True on fluid nodes, used to clamp wall densities to the fluid density range.
 
         Notes
         -----
-        Assumes theta is prescribed in radians for each wetted boundary node. Boundary conditions without theta are
-        included in the solid mask but skipped for contact-angle interpolation. The 2D implementation keeps the
-        original two-characteristic construction. The 3D implementation samples multiple characteristic directions on
-        the contact-angle cone around each wall normal and stores interpolation data for every sample.
+        Assumes theta is prescribed in radians for each wetted boundary node. Boundary conditions without theta are included in the solid mask but skipped for contact-angle
+        interpolation. The 2D implementation keeps the original two-characteristic construction. The 3D implementation samples multiple characteristic directions on the
+        contact-angle cone around each wall normal and stores interpolation data for every sample.
 
         References
         ----------
@@ -845,10 +842,9 @@ class Multiphase(LBMBase):
         """
         Apply prescribed contact angles to wall-node densities.
 
-        For the geometric scheme, only theta is used. The 2D path interpolates two characteristic samples and chooses
-        the appropriate extrema. The 3D path interpolates multiple samples on the contact-angle cone and chooses the
-        maximum density for theta <= pi / 2 or the minimum density for theta > pi / 2. For improved virtual density,
-        theta is used with phi and delta_rho according to the selected wettability branch.
+        For the geometric scheme, only theta is used. The 2D path interpolates two characteristic samples and chooses the appropriate extrema.
+        The 3D path interpolates multiple samples on the contact-angle cone and chooses the maximum density for theta <= pi / 2 or the minimum
+        density for theta > pi / 2. For improved virtual density, theta is used with phi and delta_rho according to the selected wettability branch.
 
         Parameters
         ----------
