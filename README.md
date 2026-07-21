@@ -42,7 +42,7 @@
 - **Differentiable LBM:** Provides differentiable kernels for physics and deep learning applications.
 - **Scalable and Portable:** Runs on multi-core CPUs, GPUs, and TPUs, with distributed support for simulations spanning hundreds of GPUs and billions of cells.
 - **Broad LBM Support:** Includes several boundary conditions and collision kernels, along with Shan-Chen multiphase, multiphysics, and multicomponent flow modeling.
-- **User-Friendly Python Interface:** Makes simulations easy to configure and the library straightforward to extend.
+- **User-Friendly Python Interface:** Written entirely in Python, simplifying simulation setup and making library easy to extend.
 - **JAX Array and Shardmap:** Offers a NumPy-like interface while leaving performance optimization to the compiler.
 - **Visualization:** Supports multiple output options, including in-situ GPU rendering with [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze).
 
@@ -88,7 +88,7 @@ Computations use *pytrees* to **model any number of components**, each with its 
 
 ### Output
 - Binary and ASCII VTK output using [PyVista](https://docs.pyvista.org/)
-- HDF5/XDMF output using [h5py](https://docs.h5py.org/))
+- HDF5/XDMF output using [h5py](https://docs.h5py.org/)
 - In-situ rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze)
 - Distributed asynchronous checkpointing using [orbax](https://github.com/google/orbax) 
 - Image output
@@ -164,8 +164,7 @@ cd JAX-LaB
 pip install -e ".[dev,io]"
 ```
 
-<!-- **Note:** We encountered challenges when executing JAX-LaB on Apple GPUs due to the lack of support for certain operations in the Metal backend. We advise using the CPU backend on Mac OS. We will be testing JAX-LaB on Apple's GPUs in the future and will update this section accordingly. -->
-**Note:** Due to lack of support for certain operations in the Metal backend of jax, consider using the CPU backend on Mac OS. 
+**Note for macOS:** Use the standard CPU installation command, as JAX does not support GPU acceleration on macOS.
 
 Run an example:
 ```bash
