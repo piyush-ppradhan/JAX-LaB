@@ -147,7 +147,7 @@ The I/O and visualization utilities load their dependencies lazily (at call time
 | [PyVista](https://docs.pyvista.org/) | `save_fields_vtk`, `save_BCs_vtk`, `live_volume_rendering` |
 | [h5py](https://docs.h5py.org/) | `save_fields_hdf5_xdmf` |
 | [matplotlib](https://matplotlib.org/) | `save_image`, `live_volume_rendering` |
-| [trimesh](https://trimesh.org/) + Rtree | `voxelize_stl` |
+| [trimesh](https://trimesh.org/) + [Rtree](https://rtree.readthedocs.io/en/stable/) | `voxelize_stl` |
 
 Calling one of these functions without its dependency installed raises an `ImportError` naming the missing package. The `io` extra installs all of them at once (recommended for running the examples, most of which write VTK or image output):
 ```bash
@@ -164,7 +164,8 @@ cd JAX-LaB
 pip install -e ".[dev,io]"
 ```
 
-**Note for macOS:** Use the standard CPU installation, as JAX does not support GPU acceleration on macOS.
+> [!NOTE]
+> On macOS, please use the standard CPU installation, as JAX does not support GPU acceleration on this platform.
 
 Run an example:
 ```bash
