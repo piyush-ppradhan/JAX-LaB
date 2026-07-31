@@ -6,7 +6,6 @@ pyvista
 Rtree
 trimesh
 orbax-checkpoint
-termcolor
 h5py
 PhantomGaze @ git+https://github.com/loliverhennigh/PhantomGaze.git
 pytest

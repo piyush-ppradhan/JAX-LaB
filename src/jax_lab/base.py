@@ -14,10 +14,9 @@ from jax import jit, lax, vmap, shard_map
 from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
-from termcolor import colored
 
 from .precision_policy import PrecisionPolicy
-from .utils import downsample_field
+from .utils import colored, downsample_field
 
 logger = logging.getLogger(__name__)
 

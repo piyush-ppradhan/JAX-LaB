@@ -19,14 +19,13 @@ from jax.experimental.multihost_utils import process_allgather
 # Third-party libraries
 from jax.tree import map as tree_map
 from jax.tree import reduce
-from termcolor import colored
 
 from .base import LBMBase
 
 # User-defined libraries
 from .boundary_conditions import BounceBack, BounceBackHalfway, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
-from .utils import downsample_field
+from .utils import colored, downsample_field
 
 logger = logging.getLogger(__name__)
 

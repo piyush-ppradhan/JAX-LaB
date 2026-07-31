@@ -25,7 +25,6 @@ dependencies = [
   "jax>=0.9",
   "numpy",
   "orbax-checkpoint",
-  "termcolor",
 ]
 
 [project.optional-dependencies]

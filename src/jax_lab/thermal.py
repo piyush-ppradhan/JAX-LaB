@@ -22,9 +22,8 @@ from jax import jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 from jax.experimental.multihost_utils import process_allgather
-from termcolor import colored
 
-from .utils import downsample_field
+from .utils import colored, downsample_field
 
 logger = logging.getLogger(__name__)
 

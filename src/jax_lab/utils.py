@@ -2,8 +2,9 @@ import importlib
 import logging
 import os
 import re
+import sys
 import warnings
-from functools import partial
+from functools import cache, partial
 from time import time
 
 import jax.numpy as jnp
@@ -11,9 +12,72 @@ import numpy as np
 from jax import jit
 from jax.image import resize
 from pathlib import Path
-from termcolor import colored
 
 logger = logging.getLogger(__name__)
+
+_ANSI_COLORS = {
+    "black": 30,
+    "grey": 30,
+    "red": 31,
+    "green": 32,
+    "yellow": 33,
+    "blue": 34,
+    "magenta": 35,
+    "cyan": 36,
+    "light_grey": 37,
+    "dark_grey": 90,
+    "light_red": 91,
+    "light_green": 92,
+    "light_yellow": 93,
+    "light_blue": 94,
+    "light_magenta": 95,
+    "light_cyan": 96,
+    "white": 97,
+}
+_ANSI_RESET = "\033[0m"
+
+
+@cache
+def _can_colorize(no_color=None, force_color=None):
+    if no_color:
+        return False
+    if force_color:
+        return True
+    if os.environ.get("ANSI_COLORS_DISABLED") or os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    if os.environ.get("TERM") == "dumb" or not hasattr(sys.stdout, "fileno"):
+        return False
+
+    try:
+        return os.isatty(sys.stdout.fileno())
+    except OSError:
+        return sys.stdout.isatty()
+
+
+def colored(text, color, *, no_color=None, force_color=None):
+    """
+    Wrap text in an ANSI foreground color when the terminal supports it.
+
+    Parameters
+    ----------
+    text (object): Value to convert to a string and colorize.
+
+    color (str): ANSI color name. Standard and light foreground colors are supported.
+
+    no_color (bool, optional): Disable ANSI colors explicitly.
+
+    force_color (bool, optional): Enable ANSI colors explicitly.
+
+    Returns
+    -------
+    str: Colored text, or plain text when colors are disabled or unsupported.
+    """
+    text = str(text)
+    if not _can_colorize(no_color, force_color):
+        return text
+    return f"\033[{_ANSI_COLORS[color]}m{text}{_ANSI_RESET}"
 
 
 def _import_optional(module_name, feature):

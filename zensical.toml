@@ -30,6 +30,7 @@ nav = [
 
 [project.theme]
 variant = "modern"
+palette.scheme = "slate"
 
 [project.markdown_extensions.admonition]
 [project.markdown_extensions.attr_list]
