@@ -442,10 +442,3 @@ class CarnahanStarling(EOS):
         x_tree = tree_map(lambda b, rho: 0.25 * b * rho, self.b, rho_tree)
         dpeos_dT = lambda x, R, rho: (rho * R) * (1.0 + x + x**2 - x**3) / ((1.0 - x) ** 3)
         return tree_map(lambda x, R, rho: dpeos_dT(x, R, rho), x_tree, self.R, rho_tree)
-
-
-# Backward-compatible aliases for the original public class names.
-Redlich_Kwong = RedlichKwong
-Redlich_Kwong_Soave = RedlichKwongSoave
-Peng_Robinson = PengRobinson
-Carnahan_Starling = CarnahanStarling

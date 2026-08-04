@@ -16,17 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jax_lab.eos import (
-    CarnahanStarling,
-    Carnahan_Starling,
-    PengRobinson,
-    Peng_Robinson,
-    RedlichKwong,
-    RedlichKwongSoave,
-    Redlich_Kwong,
-    Redlich_Kwong_Soave,
-    VanderWaals,
-)
+from jax_lab.eos import CarnahanStarling, PengRobinson, RedlichKwong, RedlichKwongSoave, VanderWaals
 
 
 EOS_DATA_DIRECTORY = Path(__file__).parent / "eos_data"
@@ -46,14 +36,6 @@ PRECISION_CASES = (
     pytest.param(jnp.float32, 2e-5, 2e-5, id="float32"),
     pytest.param(jnp.float64, 2e-7, 2e-7, id="float64"),
 )
-
-
-def test_legacy_eos_names_are_aliases():
-    """Keep the original underscored EOS names backward compatible."""
-    assert Carnahan_Starling is CarnahanStarling
-    assert Peng_Robinson is PengRobinson
-    assert Redlich_Kwong is RedlichKwong
-    assert Redlich_Kwong_Soave is RedlichKwongSoave
 
 
 @pytest.mark.parametrize("eos_class, _, a, b, extra_parameters, __", EOS_CASES)

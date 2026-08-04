@@ -11,18 +11,7 @@ except PackageNotFoundError:
     # Package is not installed (e.g. running from a source checkout)
     __version__ = "0.0.0"
 
-from .eos import (
-    CarnahanStarling,
-    EOS,
-    Carnahan_Starling,
-    PengRobinson,
-    Peng_Robinson,
-    RedlichKwong,
-    RedlichKwongSoave,
-    Redlich_Kwong,
-    Redlich_Kwong_Soave,
-    VanderWaals,
-)
+from .eos import CarnahanStarling, EOS, PengRobinson, RedlichKwong, RedlichKwongSoave, VanderWaals
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .models import AdvectionDiffusionBGK, BGKSim, CLBMSim, KBCSim, MRTSim
 from .multiphase import Multiphase, MultiphaseBGK, MultiphaseCascade, MultiphaseMRT
@@ -39,13 +28,9 @@ __all__ = [
     "__version__",
     "EOS",
     "CarnahanStarling",
-    "Carnahan_Starling",
     "PengRobinson",
-    "Peng_Robinson",
     "RedlichKwong",
     "RedlichKwongSoave",
-    "Redlich_Kwong",
-    "Redlich_Kwong_Soave",
     "VanderWaals",
     "LatticeD2Q9",
     "LatticeD3Q19",
