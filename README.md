@@ -1,18 +1,44 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 # JAX-LaB: A Python-based, Accelerated, Differentiable Massively Parallel Lattice Boltzmann Library for Modeling Multiphase and Multiphysics Flows & Physics-Based Machine Learning
 
-<div align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="" width="49%" title="Evaporation in Fontainebleau sandstone">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="" width="49%" title="Drainage Simulation">
-</div>
-<div align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/rayleigh_taylor_2d.gif" alt="" width="49%" title="Rayleigh-Taylor instability">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="" width="49%" title="Two-dimensional pool boiling">
-</div>
-<div align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="" width="49%" title="Contact Angle Hysteresis">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="" width="49%" title="Droplet Evaporation">
-</div>
+<table width="100%" cellspacing="0" cellpadding="0">
+  <tr>
+    <td width="50%" align="center">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/3D_evaporation_fontainebleau.gif" alt="Evaporation in Fontainebleau sandstone" width="105%">
+      <br>
+      Evaporation in Fontainebleau sandstone.
+    </td>
+    <td width="50%" align="center">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="Drainage through a porous geometry" width="105%">
+      <br>
+      Drainage through a porous geometry.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/rayleigh_taylor_2d.gif" alt="Rayleigh-Taylor instability" width="105%">
+      <br>
+      Rayleigh-Taylor instability.
+    </td>
+    <td width="50%" align="center">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="Two-dimensional pool boiling" width="105%">
+      <br>
+      Vapor generation and departure during two-dimensional pool boiling.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/contact_angle_hysteresis.gif" alt="Droplet impingement on an inclined surface" width="105%">
+      <br>
+      Droplet impingement on an inclined surface.
+    </td>
+    <td width="50%" align="center">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
+      <br>
+      Droplet evaporation with contact-angle hysteresis.
+    </td>
+  </tr>
+</table>
 <div align="center">
   <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/predicted.png" alt="" width="98.5%">
 </div>
@@ -52,7 +78,7 @@
 - Support for **high density ratio flows** (tested for density ratios > 10<sup>8</sup>) using improved forcing scheme.
 - Incorporates **Equation of State (EOS)** to model multiphase flows. Currently implemented EOS include **Carnahan-Starling**, **Peng-Robinson**, **Redlich-Kwong**, **Redlich-Kwong-Soave**
 and **VanderWaals**.
-- **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model only).
+- **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model).
 
 ### Multicomponent Flow Support
 Computations use *pytrees* to **model any number of components**, each with its own equation of state, initial condition, and boundary conditions, without requiring library modifications.
