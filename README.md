@@ -66,7 +66,7 @@
 ### In-Situ Rendering
 JAX-LaB includes an accelerated ray tracer for rapidly visualizing JAX arrays. Rendered images can be used to create animations or quickly diagnose large simulations running on clusters and HPC systems without any post-processing.
 <div width="50%" align="center">
-  <img src="./assets/stanford_bunny_render.gif" alt="Stanford bunny-shaped droplet falling on a surface" width="50%">
+  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/stanford_bunny_render.gif" alt="Stanford bunny-shaped droplet falling on a surface" width="50%">
   <br>
   Stanford bunny-shaped droplet falling on a surface
 </div>
