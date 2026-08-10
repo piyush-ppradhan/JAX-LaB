@@ -11,14 +11,33 @@ except PackageNotFoundError:
     # Package is not installed (e.g. running from a source checkout)
     __version__ = "0.0.0"
 
-from .eos import CarnahanStarling, EOS, PengRobinson, RedlichKwong, RedlichKwongSoave, VanderWaals
-from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
-from .models import AdvectionDiffusionBGK, BGKSim, CLBMSim, KBCSim, MRTSim
-from .multiphase import Multiphase, MultiphaseBGK, MultiphaseCascade, MultiphaseMRT
-from .boundary_conditions import DirichletTemperature, NeumannTemperature
-from .precision_policy import Precision, PrecisionPolicy
-from .thermal import MultiphaseThermal, Thermal
-from .unit import Unit
+from .core import (
+    AdvectionDiffusionBGK,
+    BGKSim,
+    CLBMSim,
+    CarnahanStarling,
+    DirichletTemperature,
+    EOS,
+    KBCSim,
+    LatticeD2Q9,
+    LatticeD3Q19,
+    LatticeD3Q27,
+    MRTSim,
+    Multiphase,
+    MultiphaseBGK,
+    MultiphaseCascade,
+    MultiphaseMRT,
+    MultiphaseThermal,
+    NeumannTemperature,
+    PengRobinson,
+    Precision,
+    PrecisionPolicy,
+    RedlichKwong,
+    RedlichKwongSoave,
+    Thermal,
+    Unit,
+    VanderWaals,
+)
 
 __all__ = [
     "DirichletTemperature",

@@ -10,10 +10,10 @@ import subprocess
 
 import numpy as np
 
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.utils import save_fields_vtk
-from jax_lab.multiphase import MultiphaseCascade
-from jax_lab.boundary_conditions import BounceBack
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.multiphase import MultiphaseCascade
+from jax_lab.core.boundary_conditions import BounceBack
 
 import operator
 from functools import partial

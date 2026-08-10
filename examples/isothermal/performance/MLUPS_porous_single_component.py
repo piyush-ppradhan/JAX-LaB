@@ -6,10 +6,10 @@ os.environ["JAX_ENABLE_X64"] = "1"
 import operator
 import numpy as np
 
-from jax_lab.lattice import LatticeD3Q19
+from jax_lab.core.lattice import LatticeD3Q19
 
-from jax_lab.multiphase import MultiphaseBGK
-from jax_lab.boundary_conditions import BounceBack, Regularized
+from jax_lab.core.multiphase import MultiphaseBGK
+from jax_lab.core.boundary_conditions import BounceBack, Regularized
 
 from functools import partial
 from jax import jit, vmap, config

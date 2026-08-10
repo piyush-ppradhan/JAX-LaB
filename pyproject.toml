@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# I/O, visualization and geometry utilities (imported lazily in jax_lab.utils)
+# I/O, visualization and geometry utilities (imported lazily in jax_lab.core.utils)
 io = ["pyvista", "matplotlib", "Rtree", "trimesh", "h5py"]
 # Accelerator backends; the jax extra manages the compiled runtime packages
 cuda13 = ["jax[cuda13]>=0.9"]

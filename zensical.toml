@@ -14,7 +14,7 @@ extra_javascript = [
 ]
 nav = [
   { "Home" = "index.md" },
-  { "API" = [
+  { "Core API" = [
     { "Base" = "base.md" },
     { "Boundary Conditions" = "boundary_conditions.md" },
     { "Models" = "models.md" },
@@ -26,6 +26,7 @@ nav = [
     { "Unit Conversion" = "unit.md" },
     { "Utilities" = "utils.md" },
   ] },
+  { "Rendering" = "rendering.md" },
 ]
 
 [project.theme]

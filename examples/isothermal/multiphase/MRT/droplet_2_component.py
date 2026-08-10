@@ -9,9 +9,9 @@ import os
 import operator
 import numpy as np
 
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.utils import save_fields_vtk
-from jax_lab.multiphase import MultiphaseMRT
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.multiphase import MultiphaseMRT
 
 from functools import partial
 from jax import jit, vmap, config
@@ -102,7 +102,7 @@ class Droplet2D(MultiphaseMRT):
         pressure_difference = p_2[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         print(f"Pressure difference for radius = {r}: {pressure_difference}")
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
 

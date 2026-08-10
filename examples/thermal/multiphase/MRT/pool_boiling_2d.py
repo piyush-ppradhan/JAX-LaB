@@ -20,14 +20,14 @@ from jax import config, jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from jax_lab.boundary_conditions import BounceBack, DirichletTemperature
-from jax_lab.eos import PengRobinson
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.thermal import MultiphaseThermal
-from jax_lab.utils import save_fields_hdf5_xdmf
+from jax_lab.core.boundary_conditions import BounceBack, DirichletTemperature
+from jax_lab.core.eos import PengRobinson
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.thermal import MultiphaseThermal
+from jax_lab.core.utils import save_fields_hdf5_xdmf
 
-# from jax_lab.utils import save_fields_vtk
+# from jax_lab.core.utils import save_fields_vtk
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_pool_boiling_2d")
 

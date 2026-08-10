@@ -1,3 +1,3 @@
-::: jax_lab.thermal.Thermal
+::: jax_lab.core.thermal.Thermal
 
-::: jax_lab.thermal.MultiphaseThermal
+::: jax_lab.core.thermal.MultiphaseThermal

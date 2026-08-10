@@ -16,11 +16,11 @@ import numpy as np
 from jax import config, jit
 from jax.tree import map as tree_map
 
-from jax_lab.boundary_conditions import BounceBack, ExtrapolationOutflowMultiphase
-from jax_lab.eos import PengRobinson
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.multiphase import MultiphaseCascade
-from jax_lab.utils import save_fields_hdf5_xdmf
+from jax_lab.core.boundary_conditions import BounceBack, ExtrapolationOutflowMultiphase
+from jax_lab.core.eos import PengRobinson
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.multiphase import MultiphaseCascade
+from jax_lab.core.utils import save_fields_hdf5_xdmf
 
 config.update("jax_default_matmul_precision", "float32")
 

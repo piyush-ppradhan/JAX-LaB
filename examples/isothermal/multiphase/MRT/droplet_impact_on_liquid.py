@@ -13,14 +13,13 @@ import subprocess
 
 import numpy as np
 
-from jax_lab.boundary_conditions import BounceBackHalfway
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.eos import PengRobinson
-from jax_lab.utils import save_fields_vtk
+from jax_lab.core.boundary_conditions import BounceBackHalfway
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.eos import PengRobinson
+from jax_lab.core.utils import save_fields_vtk
 
-import matplotlib.pyplot as plt
-import phantomgaze as pg
+from jax_lab.render import Light, Scene, SurfaceRendering
 
 import jax
 import jax.numpy as jnp
@@ -70,32 +69,32 @@ class DropletOnLiquid3D(MultiphaseMRT):
 
     def output_data(self, **kwargs):
         rho = jnp.array(kwargs["rho_tree"][0][0, ..., 0], dtype=self.precision_policy.compute_dtype)
-
-        red = pg.SolidColor(color=(1.0, 0.0, 0.0), opacity=1.0)
-
         dx, dy, dz = (0.01, 0.01, 0.01)
-        origin = (0.0, 0.0, 0.0)
-
-        rho_volume = pg.objects.Volume(rho, spacing=(dx, dy, dz), origin=origin)
-        boundary_volume = pg.objects.Volume(self.visualization_bc, spacing=(dx, dy, dz), origin=origin)
-
-        # Get camera parameters
         focal_point = (self.nx * dx / 2, self.ny * dy / 2, self.nz * dz)
         camera_position = (self.nx * dx / 2, self.ny * dy / 2, -1.2 * self.nz * dz)
-
-        # Rotate camera
-        camera = pg.Camera(
+        scene = Scene(
+            {
+                "density": SurfaceRendering(
+                    value_range=(7.6, rho_l),
+                    color=(1.0, 0.0, 0.0),
+                    metallic=0.0,
+                    roughness=0.35,
+                    spacing=(dx, dy, dz),
+                )
+            },
             position=camera_position,
-            focal_point=focal_point,
-            view_up=(0.0, -1.0, 0.0),
-            height=2160,
-            width=3840,
-            background=pg.SolidBackground(color=(1.0, 1.0, 1.0)),
+            target=focal_point,
+            up=(0.0, -1.0, 0.0),
+            resolution=(1920, 1080),
+            background_color=(1.0, 1.0, 1.0),
+            lights=(Light(position=(0.0, -1.0, -1.0), intensity=5.0),),
+            output_dir=".",
         )
-
-        screen_buffer = pg.render.contour(rho_volume, threshold=7.6, colormap=red, camera=camera)
-
-        plt.imsave("droplet_impact_liquid" + str(kwargs["timestep"]).zfill(7) + ".png", np.minimum(screen_buffer.image.get(), 1.0))
+        scene.render(
+            {"density": rho},
+            timestep=kwargs["timestep"],
+            filename=f"droplet_impact_liquid{kwargs['timestep']:07d}.png",
+        )
 
         rho = np.array(kwargs["rho_tree"][0][0, ...])
         p = np.array(kwargs["p_tree"][0][...])
@@ -109,7 +108,7 @@ class DropletOnLiquid3D(MultiphaseMRT):
             "uz": u[..., 2],
         }
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(
         #     timestep,
         #     fields,

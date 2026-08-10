@@ -14,11 +14,11 @@ import os
 
 import numpy as np
 
-from jax_lab.boundary_conditions import BounceBackHalfway, DirichletTemperature, EquilibriumBC, NeumannTemperature
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.models import BGKSim
-from jax_lab.thermal import Thermal
-from jax_lab.utils import save_fields_vtk
+from jax_lab.core.boundary_conditions import BounceBackHalfway, DirichletTemperature, EquilibriumBC, NeumannTemperature
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.models import BGKSim
+from jax_lab.core.thermal import Thermal
+from jax_lab.core.utils import save_fields_vtk
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_2d")
 

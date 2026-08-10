@@ -11,7 +11,7 @@
     <td width="50%" align="center">
       <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/drainage.gif" alt="Drainage through a porous geometry" width="105%">
       <br>
-      Drainage through a porous geometry.
+      Drainage through a beadpack geometry.
     </td>
   </tr>
   <tr>
@@ -47,7 +47,7 @@
   Temporal evolution of the density field determined using neural network for the inverse multiphase flow control problem of forming a droplet at t = 900. The MLP output is used as the initial condition for LBM and the backpropagation step during training leverages the auto-differentiation capabilities of JAX-LaB (see <a href="https://doi.org/10.1029/2025MS005313">paper</a> for details).
 </div>
 <!-- <p align="center">
-  On GPU in-situ rendering using <a href="https://github.com/loliverhennigh/PhantomGaze">PhantomGaze</a> library (no I/O). Droplet impact on dry surface using MRT collision model with ~16 million cells.
+  On GPU in-situ rendering using JAX-LaB's JAX-native renderer (no field I/O). Droplet impact on dry surface using MRT collision model with ~16 million cells.
   (single component, multiphase simulation, density ratio: 350, fluid modeled using Peng-Robinson EOS).
 </p> -->
 <!-- <p align="center">
@@ -63,6 +63,14 @@
     Vapor generation and departure during a two-dimensional pool-boiling simulation.
 </p> -->
 
+### In-Situ Rendering
+JAX-LaB includes an accelerated ray tracer for rapidly visualizing JAX arrays. Rendered images can be used to create animations or quickly diagnose large simulations running on clusters and HPC systems without any post-processing.
+<div width="50%" align="center">
+  <img src="./assets/stanford_bunny_render.gif" alt="Stanford bunny-shaped droplet falling on a surface" width="50%">
+  <br>
+  Stanford bunny-shaped droplet falling on a surface
+</div>
+
 ## Key Features
 - **JAX Ecosystem Integration:** Works with machine learning libraries such as [Equinox](https://github.com/patrick-kidger/equinox), [Flax](https://github.com/google/flax), [Haiku](https://github.com/deepmind/dm-haiku), and [Optax](https://github.com/google-deepmind/optax).
 - **Differentiable LBM:** Provides differentiable kernels for physics and deep learning applications.
@@ -70,7 +78,7 @@
 - **Broad LBM Support:** Includes several boundary conditions and collision kernels, along with Shan-Chen multiphase, multiphysics, and multicomponent flow modeling.
 - **User-Friendly Python Interface:** Written entirely in Python, simplifying simulation setup and making library easy to extend.
 - **JAX Array and Shardmap:** Offers a NumPy-like interface while leaving performance optimization to the compiler.
-- **Visualization:** Supports multiple output options, including in-situ GPU rendering with [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze).
+- **Visualization:** Supports multiple output options, including JAX-native in-situ surface, volume, and vector-field rendering.
 
 ## Capabilities
 ### Multiphase Flow Modeling
@@ -115,9 +123,8 @@ Computations use *pytrees* to **model any number of components**, each with its 
 ### Output
 - Binary and ASCII VTK output using [PyVista](https://docs.pyvista.org/)
 - HDF5/XDMF output using [h5py](https://docs.h5py.org/)
-- In-situ rendering using [PhantomGaze](https://github.com/loliverhennigh/PhantomGaze)
+- JAX-native in-situ surface, refractive volume, and vector-field rendering and image output
 - Distributed asynchronous checkpointing using [orbax](https://github.com/google/orbax) 
-- Image output
 - 3D mesh voxelizer using [trimesh](https://trimesh.org/)
 
 ### Boundary Conditions
@@ -195,7 +202,16 @@ pip install -e ".[dev,io]"
 
 Run an example:
 ```bash
-python3 examples/singlephase/cavity2d.py
+python3 examples/isothermal/singlephase/cavity2d.py
+```
+
+Solver components live under `jax_lab.core`, while the JAX-native rendering API
+lives under `jax_lab.render`. For example:
+
+```python
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.models import BGKSim
+from jax_lab.render import Scene, SurfaceRendering
 ```
 
 ## Citation

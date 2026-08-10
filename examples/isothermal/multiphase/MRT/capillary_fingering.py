@@ -12,10 +12,10 @@ import subprocess
 import operator
 import numpy as np
 
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.utils import save_fields_vtk
-from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.boundary_conditions import BounceBack
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.boundary_conditions import BounceBack
 
 from functools import partial
 from jax import jit, vmap, config
@@ -95,7 +95,7 @@ class Droplet2D(MultiphaseMRT):
         pressure_difference = p_i[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         print(f"Pressure difference: {pressure_difference}")
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
         file.write(f"{r},{pressure_difference}\n")
@@ -282,7 +282,7 @@ class CapillaryFingering(MultiphaseMRT):
             "uy": u[..., 1],
         }
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_fx_{fx}_visc_ratio_{visc_ratio}", "data")
         save_fields_vtk(timestep, fields, f"output_fx_{fx}_visc_ratio_{visc_ratio}", "data")
 

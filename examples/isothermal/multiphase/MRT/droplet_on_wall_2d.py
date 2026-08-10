@@ -13,11 +13,11 @@ import subprocess
 import numpy as np
 from jax import config
 
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.eos import PengRobinson
-from jax_lab.boundary_conditions import BounceBack
-from jax_lab.utils import save_fields_vtk
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.eos import PengRobinson
+from jax_lab.core.boundary_conditions import BounceBack
+from jax_lab.core.utils import save_fields_vtk
 
 # config.update("jax_default_matmul_precision", "float32")
 
@@ -52,7 +52,7 @@ class DropletOnWall2D(MultiphaseMRT):
         u_sp = np.sqrt(np.sum(np.square(u), axis=-1))
         print(f"Max spurious velocity: {np.max(u_sp)}")
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)

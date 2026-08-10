@@ -14,10 +14,10 @@ from time import time
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 # config.update("jax_enable_x64", True)
-from jax_lab.utils import save_fields_vtk
-from jax_lab.boundary_conditions import BounceBack, EquilibriumBC
-from jax_lab.models import BGKSim
-from jax_lab.lattice import LatticeD3Q19
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.boundary_conditions import BounceBack, EquilibriumBC
+from jax_lab.core.models import BGKSim
+from jax_lab.core.lattice import LatticeD3Q19
 
 
 class Cavity(BGKSim):

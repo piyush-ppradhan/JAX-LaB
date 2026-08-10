@@ -27,6 +27,8 @@ output*/
 !building.png
 !XLB_diff.png
 !predicted.png
+!rendered_examples/*.png
+!rendered_examples/**/*.png
 
 # Geometry file
 assets/*.mat

@@ -1,7 +1,7 @@
 """
 Single component droplet impact on wall simulation, where liquid droplet is suspended in its vapor. The density of each region is computed using Maxwell's
 Construction. The density profile is initialized with smooth profile with specified interface width. Boundary conditions is BounceBack at the top and
-bottom, periodic everywhere else. This example demonstrates how to do in-situ GPU rendering using PhantomGaze
+bottom, periodic everywhere else. This example demonstrates JAX-native in-situ GPU rendering.
 
 The collision matrix is based on:
 1. Coveney, P. V. et al. Multiple–relaxation–time lattice Boltzmann models in three dimensions. Philosophical Transactions of the Royal Society of London.
@@ -13,13 +13,12 @@ import subprocess
 
 import numpy as np
 
-from jax_lab.boundary_conditions import BounceBackHalfway
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.eos import PengRobinson
+from jax_lab.core.boundary_conditions import BounceBackHalfway
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.eos import PengRobinson
 
-import matplotlib.pyplot as plt
-import phantomgaze as pg
+from jax_lab.render import Light, Scene, SurfaceRendering
 
 from jax import config
 import jax.numpy as jnp
@@ -67,40 +66,45 @@ class DropletOnWall3D(MultiphaseMRT):
 
     def output_data(self, **kwargs):
         rho = jnp.array(kwargs["rho_tree"][0][0, ..., 0], dtype=self.precision_policy.compute_dtype)
-
-        red = pg.SolidColor(color=(1.0, 0.0, 0.0), opacity=1.0)
-        grey = pg.SolidColor(color=(0.9607, 0.8941, 0.8313), opacity=1.0)
-
         dx, dy, dz = (0.01, 0.01, 0.01)
-        origin = (0.0, 0.0, 0.0)
-
-        rho_volume = pg.objects.Volume(rho, spacing=(dx, dy, dz), origin=origin)
-        boundary_volume = pg.objects.Volume(self.visualization_bc, spacing=(dx, dy, dz), origin=origin)
-
-        # Get camera parameters
         focal_point = (self.nx * dx / 2, self.ny * dy / 2, self.nz * dz)
         camera_position = (self.nx * dx / 2, self.ny * dy / 2, -1.2 * self.nz * dz)
-
-        # Rotate camera
-        camera = pg.Camera(
+        scene = Scene(
+            {
+                "density": SurfaceRendering(
+                    value_range=(7.6, rho_l),
+                    color=(1.0, 0.0, 0.0),
+                    metallic=0.0,
+                    roughness=0.35,
+                    spacing=(dx, dy, dz),
+                ),
+                "wall": SurfaceRendering(
+                    value_range=(0.95, 1.0),
+                    color=(0.9607, 0.8941, 0.8313),
+                    metallic=0.0,
+                    roughness=0.7,
+                    spacing=(dx, dy, dz),
+                ),
+            },
             position=camera_position,
-            focal_point=focal_point,
-            view_up=(0.0, -1.0, 0.0),
-            height=2160,
-            width=3840,
-            background=pg.SolidBackground(color=(1.0, 1.0, 1.0)),
+            target=focal_point,
+            up=(0.0, -1.0, 0.0),
+            resolution=(1920, 1080),
+            background_color=(1.0, 1.0, 1.0),
+            lights=(Light(position=(0.0, -1.0, -1.0), intensity=5.0),),
+            output_dir=".",
+        )
+        scene.render(
+            {"density": rho, "wall": self.visualization_bc},
+            timestep=kwargs["timestep"],
+            filename=f"droplet_impact{kwargs['timestep']:07d}.png",
         )
 
-        screen_buffer = pg.render.contour(rho_volume, threshold=7.6, colormap=red, camera=camera)
-        screen_buffer = pg.render.contour(boundary_volume, camera, threshold=0.95, colormap=grey, screen_buffer=screen_buffer)
-
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # fields = {"rho": np.array(rho)}
         # static_fields = {"flag": np.array(self.visualization_bc)}
         # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output", "data", static_fields=static_fields)
-
-        plt.imsave("droplet_impact" + str(kwargs["timestep"]).zfill(7) + ".png", np.minimum(screen_buffer.image.get(), 1.0))
 
 
 class DropletOnWall3DGeometric(DropletOnWall3D):

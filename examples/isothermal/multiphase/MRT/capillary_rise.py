@@ -8,11 +8,11 @@ import subprocess
 
 import numpy as np
 
-from jax_lab.lattice import LatticeD2Q9
-from jax_lab.multiphase import MultiphaseMRT
-from jax_lab.boundary_conditions import BounceBack
-from jax_lab.utils import save_fields_vtk
-from jax_lab.eos import VanderWaals
+from jax_lab.core.lattice import LatticeD2Q9
+from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.boundary_conditions import BounceBack
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.eos import VanderWaals
 
 from jax import config
 
@@ -69,7 +69,7 @@ class Droplet2D(MultiphaseMRT):
         if timestep == 60000:
             file.write(f"{1 / r},{pressure_difference}\n")
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
 
@@ -109,7 +109,7 @@ class DropletOnSurface2D(MultiphaseMRT):
         timestep = kwargs["timestep"]
         fields = {"p": p[..., 0], "rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1]}
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{disp}", "data")
         save_fields_vtk(timestep, fields, f"output_{disp}", "data")
 
@@ -160,7 +160,7 @@ class CapillaryRise2D(MultiphaseMRT):
         timestep = kwargs["timestep"]
         fields = {"flag": self.solid_mask_streamed[0][..., 0], "p": p[..., 0], "rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1]}
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output_", "data", static_fields=static_fields)

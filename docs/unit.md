@@ -1,1 +1,1 @@
-::: jax_lab.unit.Unit
+::: jax_lab.core.unit.Unit

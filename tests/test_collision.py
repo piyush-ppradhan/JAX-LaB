@@ -14,10 +14,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jax_lab.eos import VanderWaals
-from jax_lab.lattice import LatticeD2Q9, LatticeD3Q19
-from jax_lab.models import BGKSim, MRTSim
-from jax_lab.multiphase import MultiphaseBGK, MultiphaseMRT
+from jax_lab.core.eos import VanderWaals
+from jax_lab.core.lattice import LatticeD2Q9, LatticeD3Q19
+from jax_lab.core.models import BGKSim, MRTSim
+from jax_lab.core.multiphase import MultiphaseBGK, MultiphaseMRT
 
 
 DOMAIN_CASES = (

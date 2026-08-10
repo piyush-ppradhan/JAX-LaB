@@ -28,10 +28,10 @@ from jax import config
 import numpy as np
 import jax.numpy as jnp
 
-from jax_lab.utils import save_fields_vtk
-from jax_lab.boundary_conditions import InterpolatedBounceBackBouzidi, ExtrapolationOutflow, Regularized
-from jax_lab.models import BGKSim, KBCSim
-from jax_lab.lattice import LatticeD2Q9
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.boundary_conditions import InterpolatedBounceBackBouzidi, ExtrapolationOutflow, Regularized
+from jax_lab.core.models import BGKSim, KBCSim
+from jax_lab.core.lattice import LatticeD2Q9
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -100,7 +100,7 @@ class Cylinder(BGKSim):
             self.CD_max = max(self.CD_max, cd)
             print("error= {:07.6f}, CL = {:07.6f}, CD = {:07.6f}".format(err, cl, cd))
             # HDF5/XDMF output option:
-            # from jax_lab.utils import save_fields_hdf5_xdmf
+            # from jax_lab.core.utils import save_fields_hdf5_xdmf
             # fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
             # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
             # save_image(timestep, u)

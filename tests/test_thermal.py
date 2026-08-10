@@ -8,12 +8,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jax_lab.boundary_conditions import DirichletTemperature, NeumannTemperature
-from jax_lab.eos import VanderWaals
-from jax_lab.lattice import LatticeD2Q9, LatticeD3Q19
-from jax_lab.models import BGKSim
-from jax_lab.multiphase import MultiphaseBGK
-from jax_lab.thermal import MultiphaseThermal, Thermal
+from jax_lab.core.boundary_conditions import DirichletTemperature, NeumannTemperature
+from jax_lab.core.eos import VanderWaals
+from jax_lab.core.lattice import LatticeD2Q9, LatticeD3Q19
+from jax_lab.core.models import BGKSim
+from jax_lab.core.multiphase import MultiphaseBGK
+from jax_lab.core.thermal import MultiphaseThermal, Thermal
 
 PRECISION = "f64/f64"
 NX = NY = NZ = 32

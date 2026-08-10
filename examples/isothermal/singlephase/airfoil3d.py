@@ -21,19 +21,18 @@ In this example you'll be introduced to the following concepts:
 4. Simulation Parameters: The example allows for the setting of various simulation parameters,
     including the Reynolds number, inlet velocity, and characteristic length.
 
-5. In-situ visualization: The example outputs rendering images of the q-criterion using
-     PhantomGaze library (https://github.com/loliverhennigh/PhantomGaze) without any I/O overhead
-     while the data is still on the GPU.
+5. In-situ visualization: The example renders q-criterion surfaces with JAX-LaB's
+    JAX-native renderer while the field is still on the accelerator.
 """
 
 import numpy as np
 
 # from IPython import display
-import matplotlib.pylab as plt
-from jax_lab.models import BGKSim, KBCSim
-from jax_lab.lattice import LatticeD3Q19, LatticeD3Q27
-from jax_lab.boundary_conditions import DoNothing, BounceBack, EquilibriumBC
-from jax_lab.utils import save_fields_vtk, q_criterion
+from jax_lab.core.models import BGKSim, KBCSim
+from jax_lab.core.lattice import LatticeD3Q19, LatticeD3Q27
+from jax_lab.core.boundary_conditions import DoNothing, BounceBack, EquilibriumBC
+from jax_lab.core.utils import save_fields_vtk, q_criterion
+from jax_lab.render import Light, Scene, SurfaceRendering
 from jax import config
 import jax.numpy as jnp
 import subprocess
@@ -41,10 +40,6 @@ import subprocess
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 import jax
 import scipy
-
-# PhantomGaze for in-situ rendering
-import phantomgaze as pg
-
 
 # config.update("jax_default_matmul_precision", "float32")
 
@@ -110,57 +105,55 @@ class Airfoil(KBCSim):
         # vorticity and q-criterion
         norm_mu, q = q_criterion(u)
 
-        # Make phantomgaze volume
         dx = 0.01
-        origin = (0.0, 0.0, 0.0)
-        upper_bound = (self.visualization_bc.shape[0] * dx, self.visualization_bc.shape[1] * dx, self.visualization_bc.shape[2] * dx)
-        q_volume = pg.objects.Volume(q, spacing=(dx, dx, dx), origin=origin)
-        norm_mu_volume = pg.objects.Volume(norm_mu, spacing=(dx, dx, dx), origin=origin)
-        boundary_volume = pg.objects.Volume(self.visualization_bc, spacing=(dx, dx, dx), origin=origin)
-
-        # Make colormap for norm_mu
-        colormap = pg.Colormap("jet", vmin=0.0, vmax=0.05)
-
-        # Get camera parameters
         focal_point = (self.visualization_bc.shape[0] * dx / 2, self.visualization_bc.shape[1] * dx / 2, self.visualization_bc.shape[2] * dx / 2)
         radius = 5.0
         angle = kwargs["timestep"] * 0.0001
         camera_position = (focal_point[0] + radius * np.sin(angle), focal_point[1], focal_point[2] + radius * np.cos(angle))
-
-        # Rotate camera
-        camera = pg.Camera(
+        scene = Scene(
+            {
+                "q_criterion": SurfaceRendering(
+                    value_range=(0.00003, 1.0),
+                    color=(0.1, 0.45, 1.0),
+                    metallic=0.15,
+                    roughness=0.3,
+                    spacing=(dx, dx, dx),
+                    color_field="vorticity_magnitude",
+                    color_range=(0.0, 0.05),
+                    colormap="jet",
+                ),
+                "airfoil": SurfaceRendering(
+                    value_range=(0.95, 1.0),
+                    color=(0.8, 0.82, 0.86),
+                    metallic=0.5,
+                    roughness=0.25,
+                    spacing=(dx, dx, dx),
+                ),
+            },
             position=camera_position,
-            focal_point=focal_point,
-            view_up=(0.0, 1.0, 0.0),
-            max_depth=30.0,
-            height=1080,
-            width=1920,
-            background=pg.SolidBackground(color=(0.0, 0.0, 0.0)),
+            target=focal_point,
+            up=(0.0, 1.0, 0.0),
+            resolution=(1920, 1080),
+            background_color=(0.0, 0.0, 0.0),
+            lights=(Light(position=(0.0, 4.0, -2.0), intensity=12.0),),
+            output_dir=".",
         )
-
-        # Make wireframe
-        screen_buffer = pg.render.wireframe(lower_bound=origin, upper_bound=upper_bound, thickness=0.01, camera=camera)
-
-        # Render axes
-        screen_buffer = pg.render.axes(size=0.1, center=(0.0, 0.0, 1.1), camera=camera, screen_buffer=screen_buffer)
-
-        # Render q-criterion
-        screen_buffer = pg.render.contour(
-            q_volume, threshold=0.00003, color=norm_mu_volume, colormap=colormap, camera=camera, screen_buffer=screen_buffer
-        )
-
-        # Render boundary
-        boundary_colormap = pg.Colormap("bone_r", vmin=0.0, vmax=3.0, opacity=np.linspace(0.0, 6.0, 256))
-        screen_buffer = pg.render.volume(boundary_volume, camera=camera, colormap=boundary_colormap, screen_buffer=screen_buffer)
 
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # fields = {"q": np.array(q), "vorticity_magnitude": np.array(norm_mu)}
         # static_fields = {"flag": np.array(self.visualization_bc)}
         # save_fields_hdf5_xdmf(kwargs["timestep"], fields, "output", "airfoil", static_fields=static_fields)
 
-        # Show the rendered image
-        plt.imsave("q_criterion_" + str(kwargs["timestep"]).zfill(7) + ".png", np.minimum(screen_buffer.image.get(), 1.0))
+        scene.render(
+            {
+                "q_criterion": q,
+                "vorticity_magnitude": norm_mu,
+                "airfoil": self.visualization_bc,
+            },
+            timestep=kwargs["timestep"],
+            filename=f"q_criterion_{kwargs['timestep']:07d}.png",
+        )
 
 
 if __name__ == "__main__":

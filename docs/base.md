@@ -1,1 +1,1 @@
-::: jax_lab.base.LBMBase
+::: jax_lab.core.base.LBMBase

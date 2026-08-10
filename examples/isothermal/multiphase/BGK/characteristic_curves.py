@@ -6,14 +6,13 @@ The spherepack geometry used here is taken from Digital Rocks Portal and has por
 1. https://digitalporousmedia.org/published-datasets/tapis/projects/drp.project.published/drp.project.published.DRP-372/374_05_03/374_05_03_256/
 """
 
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.multiphase import MultiphaseBGK
-from jax_lab.boundary_conditions import BounceBack, EquilibriumBC
-from jax_lab.utils import save_fields_vtk
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.multiphase import MultiphaseBGK
+from jax_lab.core.boundary_conditions import BounceBack, EquilibriumBC
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.render import Light, Scene, SurfaceRendering
 
 import h5py
-import phantomgaze as pg
-import matplotlib.pyplot as plt
 
 from functools import partial
 import os
@@ -114,7 +113,7 @@ class Droplet3D(MultiphaseBGK):
         print(f"rho_l: {rho_l_pred}, rho_g: {rho_g_pred}")
 
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")
         save_fields_vtk(timestep, fields, f"output_{r}", "data")
         if timestep == 20000:
@@ -195,7 +194,7 @@ class DropletOnWall3D(MultiphaseBGK):
             "flag": self.solid_mask_streamed[0][..., 0],
         }
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, "output", "data", static_fields=static_fields)
@@ -359,7 +358,7 @@ class PorousMedia(MultiphaseBGK):
             "flag": self.solid_mask_streamed[0][:, 1:-1, 1:-1, 0],
         }
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}
         # static_fields = {"flag": fields["flag"]}
         # save_fields_hdf5_xdmf(timestep, dynamic_fields, f"output_{simulation}", "data", static_fields=static_fields)
@@ -382,35 +381,18 @@ class PorousMedia(MultiphaseBGK):
         S = v_w / (v_w + v_nw)
         file.write(f"{P_c},{S}\n")
 
-        red = pg.SolidColor(color=(1.0, 0.0, 0.0), opacity=1.0)
-        grey = pg.SolidColor(color=(0.439, 0.475, 0.757), opacity=0.04)
-
         dx, dy, dz = (0.01, 0.01, 0.01)
-        origin = (0.0, 0.0, 0.0)
-
         if simulation == "imbibition":
-            rho_volume = pg.objects.Volume(
-                jnp.array(
-                    rho_water[0 : self.nx - 2 * buffer, ..., 0],
-                    dtype=self.precision_policy.compute_dtype,
-                ),
-                spacing=(dx, dy, dz),
-                origin=origin,
+            rendered_density = jnp.array(
+                rho_water[0 : self.nx - 2 * buffer, ..., 0],
+                dtype=self.precision_policy.compute_dtype,
             )
         else:
-            rho_volume = pg.objects.Volume(
-                jnp.array(
-                    rho_air[0 : self.nx - 2 * buffer, ..., 0],
-                    dtype=self.precision_policy.compute_dtype,
-                ),
-                spacing=(dx, dy, dz),
-                origin=origin,
+            rendered_density = jnp.array(
+                rho_air[0 : self.nx - 2 * buffer, ..., 0],
+                dtype=self.precision_policy.compute_dtype,
             )
-        boundary_volume = pg.objects.Volume(
-            jnp.array(porous[0 : self.nx - 2 * buffer, ...], dtype=jnp.float32),
-            spacing=(dx, dy, dz),
-            origin=origin,
-        )
+        rendered_boundary = jnp.array(porous[0 : self.nx - 2 * buffer, ...], dtype=jnp.float32)
 
         # Get camera parameters
         radius = 80
@@ -422,30 +404,36 @@ class PorousMedia(MultiphaseBGK):
             -self.nz * dz + radius * np.sin(angle) * dz,
         )
 
-        # Rotate camera
-        camera = pg.Camera(
+        scene = Scene(
+            {
+                "density": SurfaceRendering(
+                    value_range=(0.95, 1.2),
+                    color=(1.0, 0.0, 0.0),
+                    metallic=0.0,
+                    roughness=0.4,
+                    spacing=(dx, dy, dz),
+                ),
+                "porous_medium": SurfaceRendering(
+                    value_range=(0.95, 1.0),
+                    color=(0.439, 0.475, 0.757),
+                    metallic=0.0,
+                    roughness=0.75,
+                    opacity=0.04,
+                    spacing=(dx, dy, dz),
+                ),
+            },
             position=camera_position,
-            focal_point=focal_point,
-            view_up=(0.0, -1.0, 0.0),
-            height=2160,
-            width=3840,
-            background=pg.SolidBackground(color=(1.0, 1.0, 1.0)),
+            target=focal_point,
+            up=(0.0, -1.0, 0.0),
+            resolution=(1920, 1080),
+            background_color=(1.0, 1.0, 1.0),
+            lights=(Light(position=(0.0, -1.0, -1.0), intensity=5.0),),
+            output_dir="images",
         )
-
-        screen_buffer = pg.render.contour(rho_volume, threshold=0.95, colormap=red, camera=camera)
-        screen_buffer = pg.render.contour(boundary_volume, camera, threshold=0.95, colormap=grey, screen_buffer=screen_buffer)
-        screen_buffer = pg.render.wireframe(
-            lower_bound=(0, 0, 0),
-            upper_bound=((self.nx - 2 * buffer) * dx, self.ny * dy, self.nz * dz),
-            color=pg.SolidColor(color=(0.0, 0.0, 0.0)),
-            thickness=0.0025,
-            camera=camera,
-            screen_buffer=screen_buffer,
-        )
-
-        plt.imsave(
-            f"images/porous_{simulation}" + str(kwargs["timestep"]).zfill(7) + ".png",
-            np.minimum(screen_buffer.image.get(), 1.0),
+        scene.render(
+            {"density": rendered_density, "porous_medium": rendered_boundary},
+            timestep=kwargs["timestep"],
+            filename=f"porous_{simulation}{kwargs['timestep']:07d}.png",
         )
 
 

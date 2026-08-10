@@ -13,8 +13,8 @@ os.environ["JAX_ENABLE_X64"] = "1"
 
 import numpy as np
 
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.multiphase import MultiphaseBGK
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.multiphase import MultiphaseBGK
 
 from jax import config
 import operator

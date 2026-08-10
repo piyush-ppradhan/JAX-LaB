@@ -11,10 +11,10 @@ import numpy as np
 import jax.numpy as jnp
 from jax import config
 
-from jax_lab.utils import save_fields_vtk
-from jax_lab.models import CLBMSim
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.boundary_conditions import EquilibriumBC, DoNothing, BounceBack
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.models import CLBMSim
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.boundary_conditions import EquilibriumBC, DoNothing, BounceBack
 
 # config.update("jax_default_matmul_precision", "float32")
 
@@ -60,7 +60,7 @@ class Rectangle(CLBMSim):
 
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, "output")
         save_fields_vtk(timestep, fields, "output")
 

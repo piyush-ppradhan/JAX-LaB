@@ -9,10 +9,10 @@ import subprocess
 import operator
 import numpy as np
 
-from jax_lab.lattice import LatticeD3Q19
-from jax_lab.utils import save_fields_vtk
-from jax_lab.multiphase import MultiphaseBGK
-from jax_lab.boundary_conditions import BounceBack, Regularized
+from jax_lab.core.lattice import LatticeD3Q19
+from jax_lab.core.utils import save_fields_vtk
+from jax_lab.core.multiphase import MultiphaseBGK
+from jax_lab.core.boundary_conditions import BounceBack, Regularized
 
 from functools import partial
 from jax import jit, vmap, config
@@ -100,7 +100,7 @@ class PorousMedia(MultiphaseBGK):
         timestep = kwargs["timestep"]
         fields = {"p": p[..., 0], "rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1]}
         # HDF5/XDMF output option:
-        # from jax_lab.utils import save_fields_hdf5_xdmf
+        # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         save_fields_vtk(timestep, fields, "output", "data")
 
