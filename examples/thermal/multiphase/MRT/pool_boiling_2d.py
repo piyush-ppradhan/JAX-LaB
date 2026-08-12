@@ -1,13 +1,10 @@
-"""Two-dimensional saturated pool-boiling simulation.
+"""
+Two-dimensional saturated pool-boiling simulation.
 
-The thermal and buoyancy parameters follow Fei et al., "Mesoscopic simulation
-of three-dimensional pool boiling based on a phase-change cascaded lattice
-Boltzmann method", Physics of Fluids 32, 103312 (2020). A saturated
-Peng-Robinson liquid pool is heated from below at Ja = 0.22. Conductivity is
-proportional to density and buoyancy acts on the local density deviation from
-the domain average after a 1000-step gravity-free relaxation. A Gaussian
-temperature disturbance triggers nucleation at the first fluid layer. The top
-and bottom are no-slip isothermal walls, while x is periodic.
+The thermal and buoyancy parameters follow Fei et al., "Mesoscopic simulation of three-dimensional pool boiling based on a phase-change cascaded lattice Boltzmann method", 
+Physics of Fluids 32, 103312 (2020). A saturated Peng-Robinson liquid pool is heated from below at Ja = 0.22. Conductivity is proportional to density and buoyancy acts on 
+the local density deviation from the domain average after a 1000-step gravity-free relaxation. A Gaussian temperature disturbance triggers nucleation at the first fluid layer. 
+The top and bottom are no-slip isothermal walls, while x is periodic.
 """
 
 import operator
@@ -16,7 +13,7 @@ from functools import partial
 
 import jax.numpy as jnp
 import numpy as np
-from jax import config, jit
+from jax import jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
@@ -30,8 +27,6 @@ from jax_lab.core.utils import save_fields_hdf5_xdmf
 # from jax_lab.core.utils import save_fields_vtk
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_pool_boiling_2d")
-
-config.update("jax_enable_x64", True)
 
 
 class PoolFluid(MultiphaseMRT):
@@ -64,7 +59,8 @@ class PoolFluid(MultiphaseMRT):
 
     @partial(jit, static_argnums=(0,))
     def compute_buoyancy_force(self, rho_tree, timestep):
-        """Compute density-relative buoyancy after interface relaxation.
+        """
+        Compute density-relative buoyancy after interface relaxation.
 
         Parameters
         ----------
@@ -103,7 +99,8 @@ class PoolFluid(MultiphaseMRT):
 
     @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
     def step(self, f_poststreaming_tree, timestep, return_fpost=False, T=None):
-        """Advance the fluid and apply buoyancy only after relaxation.
+        """
+        Advance the fluid and apply buoyancy only after relaxation.
 
         Parameters
         ----------
@@ -127,6 +124,11 @@ class PoolFluid(MultiphaseMRT):
             f_postcollision_tree,
             feq_forced_tree,
             feq_tree,
+        )
+        f_postcollision_tree = tree_map(
+            lambda f, rho: f.at[..., 0].set(rho[..., 0] - jnp.sum(f[..., 1:], axis=-1)),
+            f_postcollision_tree,
+            rho_tree,
         )
         f_postcollision_tree = self.apply_bc(f_postcollision_tree, f_poststreaming_tree, timestep, "PostCollision")
         f_poststreaming_tree = tree_map(self.streaming, f_postcollision_tree)
@@ -155,7 +157,8 @@ class PoolBoiling(MultiphaseThermal):
 
     @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
     def step(self, T_prev, f_poststreaming_tree, timestep, return_fpost=False):
-        """Advance the coupled fields with timestep-aware buoyancy.
+        """
+        Advance the coupled fields with timestep-aware buoyancy.
 
         Parameters
         ----------
@@ -181,7 +184,8 @@ class PoolBoiling(MultiphaseThermal):
 
     @partial(jit, static_argnums=(0,), inline=True)
     def RHS(self, T, rho_tree, u_tree):
-        """Evaluate the phase-change energy equation with K = rho c_v chi.
+        """
+        Evaluate the phase-change energy equation with K = rho c_v chi.
 
         Parameters
         ----------
@@ -235,7 +239,7 @@ class PoolBoiling(MultiphaseThermal):
 
 
 if __name__ == "__main__":
-    precision = "f64/f64"
+    precision = "f32/f32"
     nx = 400
     ny = 200
 

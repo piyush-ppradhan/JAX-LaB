@@ -1,11 +1,5 @@
-"""Three-dimensional saturated pool-boiling simulation.
-
-The thermal, buoyancy, boundary, and initial conditions match
-``pool_boiling_2d.py``. Saturated liquid fills z < 0.6H, saturated vapor fills
-the remainder, and a Gaussian temperature disturbance is applied to the first
-fluid layer above the heated wall. Gravity is disabled for the first 1000
-steps. The bottom and top are no-slip isothermal walls, the bottom contact
-angle is 60 degrees, and x/y are periodic.
+"""
+Three-dimensional version of the stable MRT pool-boiling example.
 """
 
 import operator
@@ -18,7 +12,7 @@ from jax import config, jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from jax_lab.core.boundary_conditions import BounceBackHalfway, DirichletTemperature
+from jax_lab.core.boundary_conditions import BounceBack, DirichletTemperature
 from jax_lab.core.eos import PengRobinson
 from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.multiphase import MultiphaseMRT
@@ -27,24 +21,19 @@ from jax_lab.core.utils import save_fields_hdf5_xdmf
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_pool_boiling_3d")
 
-# config.update("jax_enable_x64", True)
-
-
 class PoolFluid3D(MultiphaseMRT):
     def set_boundary_conditions(self):
-        # No-slip z walls; periodic in x/y. Wetting is prescribed only on the
-        # heated bottom wall.
         bottom = tuple(self.bounding_box_indices["bottom"].T)
         top = tuple(self.bounding_box_indices["top"].T)
-        for i in range(self.n_components):
-            # self.BCs[i].append(BounceBackHalfway(bottom, self.grid_info, self.precision_policy, theta=contact_angle))
-            self.BCs[i].append(BounceBackHalfway(bottom, self.grid_info, self.precision_policy))
-            self.BCs[i].append(BounceBackHalfway(top, self.grid_info, self.precision_policy))
+        for component in range(self.n_components):
+            # self.BCs[component].append(BounceBack(bottom, self.grid_info, self.precision_policy, theta=contact_angle))
+            self.BCs[component].append(BounceBack(bottom, self.grid_info, self.precision_policy))
+            self.BCs[component].append(BounceBack(top, self.grid_info, self.precision_policy))
 
     def initialize_macroscopic_fields(self):
-        z = np.arange(self.nz).reshape(1, 1, self.nz, 1)
+        z = np.arange(self.nz)[None, None, :]
         rho = np.where(z < h_liquid, rho_l, rho_g)
-        rho = np.broadcast_to(rho, (self.nx, self.ny, self.nz, 1))
+        rho = np.broadcast_to(rho[..., None], (self.nx, self.ny, self.nz, 1))
         rho = self.distributed_array_init((self.nx, self.ny, self.nz, 1), self.precision_policy.compute_dtype, init_val=rho)
         rho_tree = [self.precision_policy.cast_to_output(rho)]
 
@@ -59,7 +48,7 @@ class PoolFluid3D(MultiphaseMRT):
         Parameters
         ----------
         rho_tree (pytree of jax.numpy.ndarray): Component density fields.
-        timestep (int): Current simulation timestep.
+        timestep (int): Current timestep.
 
         Returns
         -------
@@ -67,10 +56,7 @@ class PoolFluid3D(MultiphaseMRT):
         """
         rho_average = self.compute_total_density(rho_tree).mean()
         gravity_vector = jnp.array([0.0, 0.0, -gravity], dtype=self.precision_policy.compute_dtype)
-        gravity_active = jnp.asarray(
-            timestep > gravity_relaxation_steps,
-            dtype=self.precision_policy.compute_dtype,
-        )
+        gravity_active = jnp.asarray(timestep > gravity_relaxation_steps, dtype=self.precision_policy.compute_dtype)
         return tree_map(lambda rho: gravity_active * (rho - rho_average) * gravity_vector, rho_tree)
 
     @partial(jit, static_argnums=(0,))
@@ -81,8 +67,8 @@ class PoolFluid3D(MultiphaseMRT):
         ----------
         f_tree (pytree of jax.numpy.ndarray): Component populations.
         rho_tree (pytree of jax.numpy.ndarray): Component density fields.
-        T (jax.numpy.ndarray, optional): Temperature field for the thermal EOS.
-        timestep (int, optional): Current timestep; defaults to active gravity.
+        T (jax.numpy.ndarray, optional): Temperature field.
+        timestep (int, optional): Current timestep.
 
         Returns
         -------
@@ -96,18 +82,18 @@ class PoolFluid3D(MultiphaseMRT):
 
     @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
     def step(self, f_poststreaming_tree, timestep, return_fpost=False, T=None):
-        """Advance the fluid and apply buoyancy only after relaxation.
+        """Advance the fluid with delayed buoyancy.
 
         Parameters
         ----------
         f_poststreaming_tree (pytree of jax.numpy.ndarray): Component populations.
-        timestep (int): Current simulation timestep.
+        timestep (int): Current timestep.
         return_fpost (bool, optional): Whether to return post-collision populations.
-        T (jax.numpy.ndarray, optional): Temperature field for the thermal EOS.
+        T (jax.numpy.ndarray, optional): Temperature field.
 
         Returns
         -------
-        tuple: Post-streaming populations and optional post-collision populations.
+        tuple: Post-streaming and optional post-collision populations.
         """
         f_postcollision_tree = self.collision(f_poststreaming_tree, T=T)
         rho_tree, u_tree = self.update_macroscopic(f_poststreaming_tree)
@@ -115,7 +101,17 @@ class PoolFluid3D(MultiphaseMRT):
         u_forced_tree = tree_map(lambda u, force, rho: u + force / rho, u_tree, buoyancy_tree, rho_tree)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
         feq_forced_tree = self.equilibrium(rho_tree, u_forced_tree, cast_output=False)
-        f_postcollision_tree = tree_map(lambda f, feq_forced, feq: f + feq_forced - feq, f_postcollision_tree, feq_forced_tree, feq_tree)
+        f_postcollision_tree = tree_map(
+            lambda f, feq_forced, feq: f + feq_forced - feq,
+            f_postcollision_tree,
+            feq_forced_tree,
+            feq_tree,
+        )
+        f_postcollision_tree = tree_map(
+            lambda f, rho: f.at[..., 0].set(rho[..., 0] - jnp.sum(f[..., 1:], axis=-1)),
+            f_postcollision_tree,
+            rho_tree,
+        )
         f_postcollision_tree = self.apply_bc(f_postcollision_tree, f_poststreaming_tree, timestep, "PostCollision")
         f_poststreaming_tree = tree_map(self.streaming, f_postcollision_tree)
         f_poststreaming_tree = self.apply_bc(f_poststreaming_tree, f_postcollision_tree, timestep, "PostStreaming")
@@ -146,14 +142,14 @@ class PoolBoiling3D(MultiphaseThermal):
 
         Parameters
         ----------
-        T_prev (jax.numpy.ndarray): Temperature field from the previous step.
+        T_prev (jax.numpy.ndarray): Previous temperature field.
         f_poststreaming_tree (pytree of jax.numpy.ndarray): Component populations.
-        timestep (int): Current simulation timestep.
+        timestep (int): Current timestep.
         return_fpost (bool, optional): Whether to return post-collision populations.
 
         Returns
         -------
-        tuple: Temperature, post-streaming populations, and optional post-collision populations.
+        tuple: Temperature, post-streaming, and post-collision populations.
         """
         T = self.precision_policy.cast_to_compute(T_prev)
         T = self.apply_bc(T, timestep)
@@ -164,11 +160,11 @@ class PoolBoiling3D(MultiphaseThermal):
         f_poststreaming_tree, f_postcollision_tree = self.fluid_solver.step(f_poststreaming_tree, timestep, return_fpost, T)
         T = self._advance_temperature(T, timestep, rho_tree, u_tree)
         T = self.apply_bc(T, timestep)
-        return (self.precision_policy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree)
+        return self.precision_policy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree
 
     @partial(jit, static_argnums=(0,), inline=True)
     def RHS(self, T, rho_tree, u_tree):
-        """Evaluate the phase-change energy equation with K = rho c_v chi.
+        """Evaluate the phase-change energy equation.
 
         Parameters
         ----------
@@ -183,8 +179,6 @@ class PoolBoiling3D(MultiphaseThermal):
         grad_T = self.grad_x(T)
         rho = self.fluid_solver.compute_total_density(rho_tree)
         u = self.fluid_solver.compute_total_velocity(rho_tree, u_tree)
-        # Force-corrected velocities on solid wall nodes are not fluid
-        # velocities and must not enter advection or the phase-change source.
         u = u.at[:, :, (0, -1), :].set(0.0)
         conductivity = rho * self.thermal_diffusivity_factor
 
@@ -199,9 +193,9 @@ class PoolBoiling3D(MultiphaseThermal):
         timestep = kwargs["timestep"]
         rho = np.array(kwargs["rho"][0][0, ..., 0])
         u = np.array(kwargs["u"][0][0, ...])
-        T = np.array(kwargs["T"][0, ..., 0])
+        temperature = np.array(kwargs["T"][0, ..., 0])
         u[:, :, (0, -1), :] = 0.0
-        if not np.isfinite(rho).all() or not np.isfinite(T).all():
+        if not np.isfinite(rho).all() or not np.isfinite(temperature).all():
             print(f"Simulation diverged at timestep {timestep}.")
             self.stop_simulation = True
             return
@@ -211,11 +205,17 @@ class PoolBoiling3D(MultiphaseThermal):
             self.initial_mass = mass
         relative_mass_error = abs(mass - self.initial_mass) / self.initial_mass
         vapor_fraction = float(np.mean(rho < 0.5 * (rho_l + rho_g)))
-        fields = {"rho": rho, "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], "T": T}
-        save_fields_hdf5_xdmf(timestep, fields, output_dir, prefix="pool_boiling_3d")
+        fields = {
+            "rho": rho,
+            "u_x": u[..., 0],
+            "u_y": u[..., 1],
+            "u_z": u[..., 2],
+            "T": temperature,
+        }
+        save_fields_hdf5_xdmf(timestep, fields, output_dir, prefix="pool_boiling")
         print(
             f"timestep {timestep}: vapor fraction = {vapor_fraction:.4f}, "
-            f"T/Tc = {T.min() / Tc:.4f}/{T.max() / Tc:.4f}, "
+            f"T/Tc = {temperature.min() / Tc:.4f}/{temperature.max() / Tc:.4f}, "
             f"mass error = {relative_mass_error:.2e}"
         )
 
@@ -224,13 +224,13 @@ if __name__ == "__main__":
     precision = "f32/f32"
     nx = 256
     ny = 256
-    nz = 256
+    nz = 128
 
     h_liquid = int(0.6 * nz)
     temperature_disturbance_seed = 0
     temperature_disturbance_std = 0.07
     gravity_relaxation_steps = 1000
-    contact_angle = np.deg2rad(45.0)
+    contact_angle = np.deg2rad(60.0)
 
     a = 2 / 49
     b = 2 / 21
@@ -240,7 +240,7 @@ if __name__ == "__main__":
     T_sat = 0.86 * Tc
     latent_heat = 0.3813
     specific_heat = 6.0
-    jacob_number = 0.2
+    jacob_number = 0.22
     T_bottom = T_sat + jacob_number * latent_heat / specific_heat
     T_top = T_sat
 
@@ -275,13 +275,7 @@ if __name__ == "__main__":
     M[17, :] = (e[:, 2] ** 2 - e[:, 0] ** 2) * e[:, 1]
     M[18, :] = (e[:, 0] ** 2 - e[:, 1] ** 2) * e[:, 2]
 
-    eos = PengRobinson(
-        a=[a],
-        b=[b],
-        R=[R],
-        pr_omega=[pr_omega],
-        temperature_field_type="thermal",
-    )
+    eos = PengRobinson(a=[a], b=[b], R=[R], pr_omega=[pr_omega], temperature_field_type="thermal")
     fluid = PoolFluid3D(
         n_components=1,
         lattice=LatticeD3Q19(precision),
@@ -307,7 +301,7 @@ if __name__ == "__main__":
         io_rate=1000,
         print_info_rate=1000,
         checkpoint_rate=0,
-        wetting_formulation="geometric",
+        # wetting_formulation="geometric",
     )
     sim = PoolBoiling3D(
         fluid_solver=fluid,

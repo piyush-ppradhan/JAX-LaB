@@ -18,15 +18,6 @@ from jax_lab.render import Light, Scene, SurfaceRendering, VolumeRendering
 from jax_lab.render.render_utils import smooth_scalar_field
 
 
-liquid_density = 6.764470400
-vapor_density = 0.838834226
-interface_width = 4.0
-liquid_render_threshold = 4.6
-render_clip = 2
-bunny_extent = 96
-slab_thickness = 6
-
-
 def voxelize_filled_bunny(filename, target_extent):
     """Voxelize the Stanford bunny as a filled binary body.
 
@@ -193,7 +184,7 @@ class BunnyDropletImpactMRT(MultiphaseMRT):
 
         render_density = jnp.where(self.render_fluid_mask, density, vapor_density)
         render_density = render_density[render_clip:-render_clip, render_clip:-render_clip, render_clip:-render_clip]
-        render_density = smooth_scalar_field(render_density, iterations=2)
+        # render_density = smooth_scalar_field(render_density, iterations=2)
         render_fluid_mask = self.render_fluid_mask[render_clip:-render_clip, render_clip:-render_clip, render_clip:-render_clip]
         render_density = jnp.where(render_fluid_mask, render_density, vapor_density)
         fluid_speed = jnp.where(self.fluid_mask, jnp.linalg.norm(velocity, axis=-1), 0.0)
@@ -211,6 +202,14 @@ class BunnyDropletImpactMRT(MultiphaseMRT):
 
 
 if __name__ == "__main__":
+    liquid_density = 6.764470400
+    vapor_density = 0.838834226
+    interface_width = 4.0
+    liquid_render_threshold = 4.6
+    render_clip = 2
+    bunny_extent = 96
+    slab_thickness = 6
+
     precision = "f32/f32"
     lattice = LatticeD3Q19(precision)
 

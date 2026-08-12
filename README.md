@@ -21,9 +21,9 @@
       Rayleigh-Taylor instability.
     </td>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/2d_pool_boiling.gif" alt="Two-dimensional pool boiling" width="105%">
+      <img src="assets/pool_boiling_3D.gif" alt="Two-dimensional pool boiling" width="105%">
       <br>
-      Vapor generation and departure during two-dimensional pool boiling.
+      Three-dimensional pool boiling.
     </td>
   </tr>
   <tr>

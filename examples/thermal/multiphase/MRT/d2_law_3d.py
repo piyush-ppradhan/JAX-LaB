@@ -1,4 +1,5 @@
-"""Three-dimensional D^2-law droplet evaporation benchmark.
+"""
+Three-dimensional D^2-law droplet evaporation benchmark.
 
 The setup follows Huang et al., "An efficient thermal lattice Boltzmann method for simulating three-dimensional liquid-vapor phase change", arXiv:2206.00946:
 a radius-25 droplet at 0.86 Tc evaporates in a 100^3 domain whose far-field temperature is Tc. The flow uses a D3Q19 MRT model with a temperature-coupled
