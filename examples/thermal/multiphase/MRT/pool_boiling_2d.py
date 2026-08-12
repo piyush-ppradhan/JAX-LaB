@@ -1,9 +1,9 @@
 """
 Two-dimensional saturated pool-boiling simulation.
 
-The thermal and buoyancy parameters follow Fei et al., "Mesoscopic simulation of three-dimensional pool boiling based on a phase-change cascaded lattice Boltzmann method", 
-Physics of Fluids 32, 103312 (2020). A saturated Peng-Robinson liquid pool is heated from below at Ja = 0.22. Conductivity is proportional to density and buoyancy acts on 
-the local density deviation from the domain average after a 1000-step gravity-free relaxation. A Gaussian temperature disturbance triggers nucleation at the first fluid layer. 
+The thermal and buoyancy parameters follow Fei et al., "Mesoscopic simulation of three-dimensional pool boiling based on a phase-change cascaded lattice Boltzmann method",
+Physics of Fluids 32, 103312 (2020). A saturated Peng-Robinson liquid pool is heated from below at Ja = 0.22. Conductivity is proportional to density and buoyancy acts on
+the local density deviation from the domain average after a 1000-step gravity-free relaxation. A Gaussian temperature disturbance triggers nucleation at the first fluid layer.
 The top and bottom are no-slip isothermal walls, while x is periodic.
 """
 

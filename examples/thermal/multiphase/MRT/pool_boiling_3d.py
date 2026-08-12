@@ -21,6 +21,7 @@ from jax_lab.core.utils import save_fields_hdf5_xdmf
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_pool_boiling_3d")
 
+
 class PoolFluid3D(MultiphaseMRT):
     def set_boundary_conditions(self):
         bottom = tuple(self.bounding_box_indices["bottom"].T)
