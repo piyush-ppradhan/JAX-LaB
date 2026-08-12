@@ -1,5 +1,12 @@
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-# JAX-LaB: A Python-based, Accelerated, Differentiable Massively Parallel Lattice Boltzmann Library for Modeling Multiphase and Multiphysics Flows & Physics-Based Machine Learning
+<h1 align="center">JAX-LaB</h1>
+
+<div align="center">
+
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [![Documentation](https://img.shields.io/badge/Documentation-blue.svg?logo=readthedocs&logoColor=white)](https://piyush-ppradhan.github.io/JAX-LaB)
+
+</div>
+
+A Python-based, differentiable, massively parallel lattice Boltzmann library for modeling multiphase and multiphysics flows & physics-based machine learning
 
 <table width="100%" cellspacing="0" cellpadding="0">
   <tr>
@@ -86,7 +93,7 @@ JAX-LaB includes an accelerated ray tracer for rapidly visualizing JAX arrays. R
 - Support for **high density ratio flows** (tested for density ratios > 10<sup>8</sup>) using improved forcing scheme.
 - Incorporates **Equation of State (EOS)** to model multiphase flows. Currently implemented EOS include **Carnahan-Starling**, **Peng-Robinson**, **Redlich-Kwong**, **Redlich-Kwong-Soave**
 and **VanderWaals**.
-- **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT collision model).
+- **Density ratio independent surface tension** control by directly modifying pressure tensor (MRT model).
 
 ### Multicomponent Flow Support
 Computations use *pytrees* to **model any number of components**, each with its own equation of state, initial condition, and boundary conditions, without requiring library modifications.
@@ -146,9 +153,7 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
 
 ## Documentation
 
-The API documentation is available at [piyush-ppradhan.github.io/JAX-LaB](https://piyush-ppradhan.github.io/JAX-LaB/). 
-
-To build and preview the documentation locally:
+Complete API documentation is available at [piyush-ppradhan.github.io/JAX-LaB](https://piyush-ppradhan.github.io/JAX-LaB/), or you can build and preview it locally:
 ```bash
 pip install -e ".[docs]"
 zensical serve
