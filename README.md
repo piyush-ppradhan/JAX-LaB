@@ -33,7 +33,7 @@
       Droplet impingement on an inclined surface.
     </td>
     <td width="50%" align="center">
-      <img src="assets/bubble_rising.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
+      <img src=" https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/bubble_rising.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
       <br>
       Bubble rising in a column.
     </td>
