@@ -21,7 +21,7 @@
       Rayleigh-Taylor instability.
     </td>
     <td width="50%" align="center">
-      <img src="assets/pool_boiling_3D.gif" alt="Two-dimensional pool boiling" width="105%">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/pool_boiling_3D.gif" alt="Two-dimensional pool boiling" width="105%">
       <br>
       Three-dimensional pool boiling.
     </td>
@@ -33,9 +33,9 @@
       Droplet impingement on an inclined surface.
     </td>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_evap_hysteresis.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
+      <img src="assets/bubble_rising.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
       <br>
-      Droplet evaporation with contact-angle hysteresis.
+      Bubble rising in a column.
     </td>
   </tr>
 </table>

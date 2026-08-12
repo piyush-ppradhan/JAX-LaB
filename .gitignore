@@ -1,7 +1,6 @@
 # Editors
 .vscode/
 .idea/
-misc/
 pyrightconfig.json
 tasks.json
 *.sublime-build

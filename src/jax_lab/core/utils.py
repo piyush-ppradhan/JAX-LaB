@@ -227,6 +227,7 @@ def save_fields_hdf5_xdmf(
     multi_timestep_file=None,
     static_fields=None,
     static_fields_file=None,
+    libver="earliest",
 ):
     """
     Save 2D/3D cell-centered fields (dict of arrays) as HDF5/XDMF.
@@ -397,7 +398,7 @@ def save_fields_hdf5_xdmf(
         with h5py.File(
             h5_path,
             "a",
-            libver="latest",
+            libver=libver,
             rdcc_nbytes=max(int(target_chunk_bytes) * max(8, len(field_names)), 8 * 1024 * 1024),
         ) as h5_file:
             if "layout" not in h5_file.attrs:
@@ -636,7 +637,7 @@ def save_fields_hdf5_xdmf(
                 with h5py.File(
                     static_h5_path,
                     "w",
-                    libver="latest",
+                    libver=libver,
                     rdcc_nbytes=max(int(target_chunk_bytes) * max(8, len(static_field_names)), 8 * 1024 * 1024),
                 ) as static_file:
                     static_file.attrs["layout"] = "single_timestep_static"
@@ -658,7 +659,7 @@ def save_fields_hdf5_xdmf(
                     static_file.flush()
                     fsync_if_possible(static_file)
 
-            with h5py.File(static_h5_path, "a", libver="latest") as static_file:
+            with h5py.File(static_h5_path, "a", libver=libver) as static_file:
                 if int(static_file.attrs.get("ndim")) != int(ndim):
                     raise ValueError("Static file ndim does not match dynamic fields.")
                 if tuple(int(v) for v in static_file.attrs.get("shape")) != tuple(int(v) for v in shape):
@@ -698,7 +699,7 @@ def save_fields_hdf5_xdmf(
         with h5py.File(
             h5_path,
             "w",
-            libver="latest",
+            libver=libver,
             rdcc_nbytes=max(int(target_chunk_bytes) * max(8, len(field_names)), 8 * 1024 * 1024),
         ) as h5_file:
             h5_file.attrs["layout"] = "single_timestep_dense"
