@@ -22,7 +22,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-  "jax>=0.9",
+  "jax==0.10.0",
   "numpy",
   "orbax-checkpoint",
 ]
@@ -31,12 +31,12 @@ dependencies = [
 # I/O, visualization and geometry utilities (imported lazily in jax_lab.core.utils)
 io = ["pyvista", "matplotlib", "Rtree", "trimesh", "h5py"]
 # Accelerator backends; the jax extra manages the compiled runtime packages
-cuda13 = ["jax[cuda13]>=0.9"]
-cuda12 = ["jax[cuda12]>=0.9"]
-cuda13-local = ["jax[cuda13-local]>=0.9"]
-cuda12-local = ["jax[cuda12-local]>=0.9"]
-tpu = ["jax[tpu]>=0.9"]
-rocm = ["jax[rocm7-local]>=0.9"]
+cuda13 = ["jax[cuda13]==0.10.0"]
+cuda12 = ["jax[cuda12]==0.10.0"]
+cuda13-local = ["jax[cuda13-local]==0.10.0"]
+cuda12-local = ["jax[cuda12-local]==0.10.0"]
+tpu = ["jax[tpu]==0.10.0"]
+rocm = ["jax[rocm7-local]==0.10.0"]
 # Development and documentation tooling
 dev = ["build", "twine", "ruff", "pytest"]
 docs = ["zensical", "mkdocstrings-python"]

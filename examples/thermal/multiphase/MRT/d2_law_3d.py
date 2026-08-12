@@ -26,8 +26,6 @@ from jax_lab.core.utils import save_fields_hdf5_xdmf
 
 # from jax_lab.core.utils import save_fields_vtk
 
-output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_d2_law_3d")
-
 config.update("jax_enable_x64", True)
 
 
@@ -217,6 +215,8 @@ if __name__ == "__main__":
     T_liq = 0.86 * Tc
     T_vap = Tc
     specific_heat = 5.0
+
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_d2_law_3d")
 
     # Maxwell construction densities at T = 0.86 Tc.
     rho_l = 6.499210784
