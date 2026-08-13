@@ -1,5 +1,12 @@
 <h1 align="center">JAX-LaB</h1>
 
+<div align="center">
+<h3>
+
+[Documentation](https://piyush-ppradhan.github.io/JAX-LaB/)  |  [Paper](https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2025MS005313?af=R)
+</h3>
+</div>
+
 A Python-based, differentiable, massively parallel lattice Boltzmann library for modeling multiphase and multiphysics flows & physics-based machine learning
 
 <table width="100%" cellspacing="0" cellpadding="0">

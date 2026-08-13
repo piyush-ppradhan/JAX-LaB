@@ -268,6 +268,8 @@ def save_fields_hdf5_xdmf(
 
     static_fields_file (str, Optional): Name of the file where static field is stored. Default: {prefix}_static.hdf5
 
+    libver (str, Optional): Library version for HDF5 export. Default: "earliest" for compatability with ParaView
+
     Returns
     -------
     None
