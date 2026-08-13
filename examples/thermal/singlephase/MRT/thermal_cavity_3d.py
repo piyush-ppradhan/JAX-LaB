@@ -69,13 +69,7 @@ class ThermalCavity(Thermal):
         rho = np.array(kwargs["rho"][0, ..., 0])
         u = np.array(kwargs["u"][0, ...])
         T = np.array(kwargs["T"][0, ..., 0])
-        fields = {
-            "rho": rho,
-            "u_x": u[..., 0],
-            "u_y": u[..., 1],
-            "u_z": u[..., 2],
-            "T": T,
-        }
+        fields = {"rho": rho, "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], "T": T}
         save_fields_vtk(timestep, fields, output_dir)
         print(f"T min/max: {T.min():.4f} / {T.max():.4f}")
 

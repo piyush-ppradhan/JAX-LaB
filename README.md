@@ -1,11 +1,5 @@
 <h1 align="center">JAX-LaB</h1>
 
-<div align="center">
-
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [![Documentation](https://img.shields.io/badge/Documentation-blue.svg?logo=readthedocs&logoColor=white)](https://piyush-ppradhan.github.io/JAX-LaB)
-
-</div>
-
 A Python-based, differentiable, massively parallel lattice Boltzmann library for modeling multiphase and multiphysics flows & physics-based machine learning
 
 <table width="100%" cellspacing="0" cellpadding="0">
@@ -153,7 +147,7 @@ The accompanying paper, published in Journal of Advances in Modeling Earth Syste
 
 ## Documentation
 
-Complete API documentation is available at [piyush-ppradhan.github.io/JAX-LaB](https://piyush-ppradhan.github.io/JAX-LaB/), or you can build and preview it locally:
+Complete API documentation is available [here](https://piyush-ppradhan.github.io/JAX-LaB/), or you can build and preview it locally:
 ```bash
 pip install -e ".[docs]"
 zensical serve
