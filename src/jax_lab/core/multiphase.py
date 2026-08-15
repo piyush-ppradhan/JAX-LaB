@@ -959,7 +959,7 @@ class Multiphase(LBMBase):
                 self.geometric_fluid_mask,
             )
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
         Apply collision step of LBM. The optional temperature field T is used
@@ -1645,7 +1645,7 @@ class MultiphaseBGK(Multiphase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
         BGK collision step for lattice, extended to pytrees.
@@ -1860,7 +1860,7 @@ class MultiphaseMRT(Multiphase):
         mout_tree = tree_map(lambda m, meq_force, meq: m + meq_force - meq, m_tree, meq_force_tree, meq_tree)
         return mout_tree
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
         MRT collision step for lattice. The optional temperature field T is
@@ -2857,7 +2857,7 @@ class MultiphaseCascade(Multiphase):
         Tf_tree = tree_map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
         return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
         Cascaded LBM collision step for lattice. The optional temperature field

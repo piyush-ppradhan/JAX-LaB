@@ -1058,7 +1058,7 @@ class LBMBase(object):
         """
         pass
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, fin):
         """
         This function performs the collision step in the Lattice Boltzmann Method.

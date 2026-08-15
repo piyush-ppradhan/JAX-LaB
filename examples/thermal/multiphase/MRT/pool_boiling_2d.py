@@ -97,7 +97,7 @@ class PoolFluid(MultiphaseMRT):
         buoyancy_tree = self.compute_buoyancy_force(rho_tree, timestep)
         return tree_map(lambda u, force, rho: u + 0.5 * force / rho, u_tree, buoyancy_tree, rho_tree)
 
-    @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0, 3))
     def step(self, f_poststreaming_tree, timestep, return_fpost=False, T=None):
         """
         Advance the fluid and apply buoyancy only after relaxation.
@@ -155,7 +155,7 @@ class PoolBoiling(MultiphaseThermal):
         self.thermal_BCs.append(DirichletTemperature(tuple(bbox["bottom"].T), prescribed=T_bottom))
         self.thermal_BCs.append(DirichletTemperature(tuple(bbox["top"].T), prescribed=T_top))
 
-    @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0, 4), donate_argnums=(1, 2))
     def step(self, T_prev, f_poststreaming_tree, timestep, return_fpost=False):
         """
         Advance the coupled fields with timestep-aware buoyancy.

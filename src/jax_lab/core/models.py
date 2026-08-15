@@ -20,7 +20,7 @@ class BGKSim(LBMBase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
         BGK collision step for lattice.
@@ -50,7 +50,7 @@ class KBCSim(LBMBase):
             raise ValueError("KBC collision operator in 3D must only be used with D3Q27 lattice.")
         super().__init__(**kwargs)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
         KBC collision step for lattice.
@@ -78,7 +78,7 @@ class KBCSim(LBMBase):
             fout = self.apply_force(fout, feq, rho, u)
         return self.precision_policy.cast_to_output(fout)
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision_modified(self, f):
         """
         Alternative KBC collision step for lattice.
@@ -257,7 +257,7 @@ class AdvectionDiffusionBGK(LBMBase):
         if self.vel is None:
             raise ValueError("Velocity must be specified for AdvectionDiffusionBGK.")
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
         BGK collision step for lattice.
@@ -324,7 +324,7 @@ class MRTSim(LBMBase):
         else:
             NotImplementedError(f"Lattice type {self.lattice.name} has not been implemented")
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
         MRT collision step for lattice.
@@ -1271,7 +1271,7 @@ class CLBMSim(LBMBase):
         Tf = jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * self.S)
         return Tdash + Tf
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, fin):
         """
         Cascaded LBM collision step for lattice.

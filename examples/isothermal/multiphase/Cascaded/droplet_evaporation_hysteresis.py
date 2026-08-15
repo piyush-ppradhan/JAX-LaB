@@ -83,7 +83,7 @@ class DropletEvaporationHysteresis(MultiphaseCascade):
         U_tree = tree_map(lambda rho: jnp.zeros_like(rho), rho_tree)
         return psi_tree, U_tree
 
-    @partial(jit, static_argnums=(0, 2), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0, 2))
     def compute_force(self, rho_tree, inter_component_interaction=True):
         rho_tree = self.apply_contact_angle(rho_tree)
         psi_tree, U_tree = self.compute_potential(rho_tree)

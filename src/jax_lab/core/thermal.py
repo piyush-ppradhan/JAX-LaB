@@ -430,7 +430,7 @@ class Thermal(object):
         """
         return self.fluid_solver.update_macroscopic(f)
 
-    @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0, 4), donate_argnums=(1, 2))
     def step(self, T_prev, f_poststreaming, timestep, return_fpost=False):
         """
         This function performs a single step of the hybrid thermal LBM simulation.
@@ -733,7 +733,7 @@ class MultiphaseThermal(Thermal):
 
         return -advection + (diffusion - phase_change + self.source(T)) / (rho * self.c_v)
 
-    @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0, 4), donate_argnums=(1, 2))
     def step(self, T_prev, f_poststreaming_tree, timestep, return_fpost=False):
         """
         This function performs a single step of the multiphase hybrid thermal LBM simulation.
