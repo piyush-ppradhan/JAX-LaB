@@ -1,12 +1,11 @@
 """
-3D thermal lid-driven cavity using the hybrid thermal LBM solver with the MRT
-(multi-relaxation time) collision model for the fluid on a D3Q19 lattice.
+3D thermal lid-driven cavity using the hybrid thermal LBM solver with the MRT (multi-relaxation time) collision model for
+the fluid on a D3Q19 lattice.
 
-The fluid is a standard lid-driven cavity (moving top lid at z = nz-1, no-slip
-walls elsewhere) with the D3Q19 orthogonal moment basis of d'Humieres et al.,
-matching the collision matrix used in the isothermal MRT droplet_3d example.
-The temperature field is advanced with the finite difference solver: hot
-bottom wall and cold lid (Dirichlet), adiabatic side walls (Neumann).
+The fluid is a standard lid-driven cavity (moving top lid at z = nz-1, no-slip walls elsewhere) with the D3Q19 orthogonal
+moment basis of d'Humieres et al., matching the collision matrix used in the isothermal MRT droplet_3d example. The
+temperature field is advanced with the finite difference solver: hot bottom wall and cold lid (Dirichlet), adiabatic side
+walls (Neumann).
 """
 
 import os

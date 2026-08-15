@@ -1423,6 +1423,12 @@ class Multiphase(LBMBase):
             if io_flag:
                 # Update the macroscopic variables and save the previous values (for error computation)
                 rho_prev_tree, _ = self.update_macroscopic(f_tree)
+                # update_macroscopic sums f_tree directly, so rho_prev_tree inherits f_tree's storage precision.
+                # macroscopic_velocity -> compute_force -> apply_contact_angle scatters into rho at its own dtype
+                # using values derived from G_ff (permanently fixed at compute precision), so under mixed
+                # precision (storage narrower than compute) that scatter's source and target dtypes mismatch.
+                # Cast to compute precision first, matching the convention collision() already uses.
+                rho_prev_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_prev_tree)
                 u_prev_tree = self.macroscopic_velocity(f_tree, rho_prev_tree)
                 rho_prev_tree = tree_map(
                     lambda rho_prev: downsample_field(rho_prev, self.downsampling_factor),
@@ -1460,6 +1466,8 @@ class Multiphase(LBMBase):
                 # Save the simulation data
                 logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho_tree, _ = self.update_macroscopic(f_tree)
+                # See the cast_to_compute comment on rho_prev_tree above: same fix, same reason.
+                rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
                 u_tree = self.macroscopic_velocity(f_tree, rho_tree)
                 psi_tree, _ = self.compute_potential(rho_tree)
                 p_tree = self.compute_pressure(rho_tree, psi_tree)
