@@ -27,32 +27,31 @@ class LBMBase(object):
 
     Parameters
     ----------
-    lattice : Lattice
-        Lattice structure and weights.
-    omega : float
-        Relaxation parameter.
-    nx, ny : int
-        Grid points in the x and y directions.
-    nz : int
-        Grid points in the z direction. Use 0 for two-dimensional simulations.
-    precision : str
-        Compute/storage precision policy, such as ``"f32/f32"``.
-    checkpoint_rate : int, optional
-        Timesteps between checkpoints. Defaults to 0, which disables checkpointing.
-    checkpoint_dir : str, optional
-        Checkpoint directory. Defaults to ``"./checkpoints"``.
-    downsampling_factor : int, optional
-        Spatial output downsampling factor. Defaults to 1.
-    print_info_rate : int, optional
-        Timesteps between progress messages. Defaults to 100.
-    io_rate : int, optional
-        Timesteps between output operations. Defaults to 0, which disables output.
-    return_fpost : bool, optional
-        Whether simulation steps return post-collision populations. Defaults to False.
-    compute_MLUPS : bool, optional
-        Whether to run in performance-measurement mode. Defaults to False.
-    restore_checkpoint : bool, optional
-        Whether to restore the latest checkpoint. Defaults to False.
+    lattice (Lattice): Lattice structure and weights.
+
+    omega (float): Relaxation parameter.
+
+    nx, ny (int): Grid points in the x and y directions.
+
+    nz (int): Grid points in the z direction. Use 0 for two-dimensional simulations.
+
+    precision (str): Compute/storage precision policy, such as ``"f32/f32"``.
+
+    checkpoint_rate (int, optional): Timesteps between checkpoints. Defaults to 0, which disables checkpointing.
+
+    checkpoint_dir (str, optional): Checkpoint directory. Defaults to ``"./checkpoints"``.
+
+    downsampling_factor (int, optional): Spatial output downsampling factor. Defaults to 1.
+
+    print_info_rate (int, optional): Timesteps between progress messages. Defaults to 100.
+
+    io_rate (int, optional): Timesteps between output operations. Defaults to 0, which disables output.
+
+    return_fpost (bool, optional): Whether simulation steps return post-collision populations. Defaults to False.
+
+    compute_MLUPS (bool, optional): Whether to run in performance-measurement mode. Defaults to False.
+
+    restore_checkpoint (bool, optional): Whether to restore the latest checkpoint. Defaults to False.
     """
 
     def __init__(self, **kwargs):
@@ -448,7 +447,7 @@ class LBMBase(object):
 
         Parameters
         ----------
-        solid_halo_voxels: A numpy array representing the voxels in the halo of the solid object.
+        solid_halo_voxels (numpy.ndarray): A NumPy array representing the voxels in the halo of the solid object.
 
         Returns
         -------
@@ -696,7 +695,7 @@ class LBMBase(object):
 
         Parameters
         ----------
-        f: The distribution function.
+        f (jax.numpy.ndarray): The distribution function.
 
         Returns
         -------
@@ -709,8 +708,9 @@ class LBMBase(object):
 
             Parameters
             ----------
-                f: The distribution function.
-                c: The streaming direction vector.
+                f (jax.numpy.ndarray): The distribution function.
+
+                c (jax.numpy.ndarray): The streaming direction vector.
 
             Returns
             -------
@@ -740,7 +740,8 @@ class LBMBase(object):
 
         u (jax.numpy.ndarray): The macroscopic velocity.
 
-        cast_output (bool, optional): A flag indicating whether to cast the density, velocity, and equilibrium distribution function to the
+        cast_output (bool, optional): A flag indicating whether to cast the density, velocity, and equilibrium
+            distribution function to the
         compute and output precisions. Default is True.
 
         Returns
@@ -800,7 +801,7 @@ class LBMBase(object):
         -------
         rho (jax.numpy.ndarray): Computed density.
 
-        u: (jax.numpy.ndarray): Computed velocity.
+        u (jax.numpy.ndarray): Computed velocity.
         """
         rho = jnp.sum(f, axis=-1, keepdims=True)
         c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
@@ -821,7 +822,7 @@ class LBMBase(object):
         ----------
         fout (jax.numpy.ndarray): Post-collision distribution functions.
 
-        fin: jax.numpy.ndarray): Post-streaming distribution functions.
+        fin (jax.numpy.ndarray): Post-streaming distribution functions.
 
         implementation_step (str): Implementation step at which the boundary conditions should be applied.
 

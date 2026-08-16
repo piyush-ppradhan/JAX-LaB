@@ -21,14 +21,13 @@ class Unit:
 
     Parameters
     ----------
-    lbm_mass : float, optional
-        Mass of one lattice mass unit in kg. Defaults to 1.0.
-    lbm_length : float, optional
-        Length of one lattice spacing in m. Defaults to 1.0.
-    lbm_time : float, optional
-        Duration of one lattice time step in s. Defaults to 1.0.
-    lbm_temperature : float, optional
-        Temperature of one lattice temperature unit in K. Defaults to 1.0.
+    lbm_mass (float, optional): Mass of one lattice mass unit in kg. Defaults to 1.0.
+
+    lbm_length (float, optional): Length of one lattice spacing in m. Defaults to 1.0.
+
+    lbm_time (float, optional): Duration of one lattice time step in s. Defaults to 1.0.
+
+    lbm_temperature (float, optional): Temperature of one lattice temperature unit in K. Defaults to 1.0.
     """
 
     def __init__(self, **kwargs):
@@ -102,10 +101,9 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Quantity to be scaled.
-        factor : float
-            Conversion factor.
+        value (float or jax.Array or pytree of jax.Array): Quantity to be scaled.
+
+        factor (float): Conversion factor.
 
         Returns
         -------
@@ -120,8 +118,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Length in LBM units.
+        value (float or jax.Array or pytree of jax.Array): Length in LBM units.
 
         Returns
         -------
@@ -136,8 +133,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Length in SI units.
+        value (float or jax.Array or pytree of jax.Array): Length in SI units.
 
         Returns
         -------
@@ -152,8 +148,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Time in LBM units.
+        value (float or jax.Array or pytree of jax.Array): Time in LBM units.
 
         Returns
         -------
@@ -168,8 +163,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Time in SI units.
+        value (float or jax.Array or pytree of jax.Array): Time in SI units.
 
         Returns
         -------
@@ -184,8 +178,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Density field in LBM units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Density field in LBM units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -200,8 +193,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Density field in SI units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Density field in SI units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -216,8 +208,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Velocity field in LBM units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Velocity field in LBM units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -232,8 +223,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Velocity field in SI units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Velocity field in SI units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -248,8 +238,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Kinematic viscosity in LBM units.
+        value (float or jax.Array or pytree of jax.Array): Kinematic viscosity in LBM units.
 
         Returns
         -------
@@ -264,8 +253,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Kinematic viscosity in SI units.
+        value (float or jax.Array or pytree of jax.Array): Kinematic viscosity in SI units.
 
         Returns
         -------
@@ -280,8 +268,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Pressure field in LBM units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Pressure field in LBM units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -296,8 +283,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Pressure field in SI units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Pressure field in SI units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -312,8 +298,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Force field in LBM units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Force field in LBM units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -328,8 +313,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Force field in SI units; a pytree for multiphase flows.
+        value (float or jax.Array or pytree of jax.Array): Force field in SI units; a pytree for multiphase flows.
 
         Returns
         -------
@@ -347,8 +331,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Temperature field in LBM units.
+        value (float or jax.Array or pytree of jax.Array): Temperature field in LBM units.
 
         Returns
         -------
@@ -366,8 +349,7 @@ class Unit:
 
         Parameters
         ----------
-        value : float or jax.Array or pytree of jax.Array
-            Temperature field in SI units.
+        value (float or jax.Array or pytree of jax.Array): Temperature field in SI units.
 
         Returns
         -------
@@ -387,20 +369,19 @@ class Unit:
 
         Parameters
         ----------
-        si_kinematic_visc : float
-            Kinematic viscosity in SI units (m^2/s).
-        si_density : float
-            Reference density in SI units (kg/m^3).
-        lbm_kinematic_visc : float
-            Kinematic viscosity in LBM units.
-        lbm_density : float, optional
-            Reference density in LBM units. Defaults to 1.0.
-        lbm_length : float, optional
-            Length of one lattice spacing in m.
-        lbm_time : float, optional
-            Duration of one lattice time step in s.
-        lbm_mass : float, optional
-            Mass of one lattice mass unit in kg.
+        si_kinematic_visc (float): Kinematic viscosity in SI units (m^2/s).
+
+        si_density (float): Reference density in SI units (kg/m^3).
+
+        lbm_kinematic_visc (float): Kinematic viscosity in LBM units.
+
+        lbm_density (float, optional): Reference density in LBM units. Defaults to 1.0.
+
+        lbm_length (float, optional): Length of one lattice spacing in m.
+
+        lbm_time (float, optional): Duration of one lattice time step in s.
+
+        lbm_mass (float, optional): Mass of one lattice mass unit in kg.
 
         Returns
         -------
@@ -444,25 +425,24 @@ class Unit:
 
         Parameters
         ----------
-        si_kinematic_visc : float
-            Kinematic viscosity in SI units (m^2/s).
-        si_density : float
-            Reference density in SI units (kg/m^3).
-        lbm_kinematic_visc : float
-            Kinematic viscosity in LBM units.
-        lbm_density : float
-            Reference density in LBM units, as given by the EOS.
-        si_temperature : float, optional
-            Reference temperature in SI units (K); required together with
-            lbm_temperature for thermal flows.
-        lbm_temperature : float, optional
-            Reference temperature in LBM units, as given by the EOS.
-        lbm_length : float, optional
-            Length of one lattice spacing in m.
-        lbm_time : float, optional
-            Duration of one lattice time step in s.
-        lbm_mass : float, optional
-            Mass of one lattice mass unit in kg.
+        si_kinematic_visc (float): Kinematic viscosity in SI units (m^2/s).
+
+        si_density (float): Reference density in SI units (kg/m^3).
+
+        lbm_kinematic_visc (float): Kinematic viscosity in LBM units.
+
+        lbm_density (float): Reference density in LBM units, as given by the EOS.
+
+        si_temperature (float, optional): Reference temperature in SI units (K); required together with lbm_temperature
+            for thermal flows.
+
+        lbm_temperature (float, optional): Reference temperature in LBM units, as given by the EOS.
+
+        lbm_length (float, optional): Length of one lattice spacing in m.
+
+        lbm_time (float, optional): Duration of one lattice time step in s.
+
+        lbm_mass (float, optional): Mass of one lattice mass unit in kg.
 
         Returns
         -------

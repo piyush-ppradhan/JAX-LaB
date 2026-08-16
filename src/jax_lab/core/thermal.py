@@ -43,15 +43,18 @@ class Thermal(object):
 
     Parameters
     ----------
-    fluid_solver (LBMBase): Configured fluid solver instance (e.g. BGKSim or MRTSim). Grid, lattice, precision and I/O settings are shared with it.
+    fluid_solver (LBMBase): Configured fluid solver instance (e.g. BGKSim or MRTSim). Grid, lattice, precision and I/O
+        settings are shared with it.
 
-    specific_heat (float or numpy.ndarray): Specific heat c_v. Either a scalar or an array of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
+    specific_heat (float or numpy.ndarray): Specific heat c_v. Either a scalar or an array of shape (nx, ny, 1) in 2D or
+        (nx, ny, nz, 1) in 3D.
 
     thermal_conductivity (float or numpy.ndarray): Thermal conductivity K with the same shape options as specific_heat.
 
     checkpoint_dir (str, optional): Directory for temperature checkpoints. Defaults to "./temperature_checkpoints".
 
-    apply_buoyancy (bool, optional): If True, adds a density variation based buoyancy force to the fluid solver. Defaults to False.
+    apply_buoyancy (bool, optional): If True, adds a density variation based buoyancy force to the fluid solver.
+        Defaults to False.
 
     gravity (sequence of float, optional): Gravitational acceleration vector, required when apply_buoyancy is True.
 
@@ -391,8 +394,8 @@ class Thermal(object):
 
         timestep (int): Current timestep used by the thermal boundary conditions.
 
-        *fields: Macroscopic fields forwarded to RHS (rho, u for single phase;
-        rho_tree, u_tree for multiphase).
+        *fields (jax.numpy.ndarray): Macroscopic fields forwarded to RHS - rho and u for single phase, or rho_tree and
+            u_tree for multiphase.
 
         Returns
         -------
@@ -643,7 +646,7 @@ class Thermal(object):
 
         Parameters
         ----------
-        **kwargs: The simulation data at the current I/O timestep, see handle_io_timestep.
+        **kwargs (dict): The simulation data at the current I/O timestep; see ``handle_io_timestep``.
         """
         pass
 

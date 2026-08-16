@@ -49,12 +49,11 @@ class Light:
 
     Parameters
     ----------
-    position: tuple of float
-        Light location in scene coordinates.
-    color: tuple of float
-        RGB light color in ``[0, 1]``.
-    intensity: float
-        Nonnegative light power.
+    position (tuple of float): Light location in scene coordinates.
+
+    color (tuple of float): RGB light color in ``[0, 1]``.
+
+    intensity (float): Nonnegative light power.
     """
 
     def __init__(self, position, color=(1.0, 1.0, 1.0), intensity=8.0):
@@ -70,28 +69,27 @@ class SurfaceRendering:
 
     Parameters
     ----------
-    value_range: tuple of float
-        Inclusive scalar interval defining the rendered material.
-    color: tuple of float
-        RGB surface color in ``[0, 1]``.
-    metallic: float
-        Metallic response in ``[0, 1]``.
-    roughness: float
-        Surface roughness in ``[0, 1]``.
-    opacity: float
-        Surface opacity in ``[0, 1]``.
-    spacing: tuple of float
-        Positive voxel spacing in scene coordinates.
-    origin: tuple of float
-        Field origin in scene coordinates.
-    casts_shadows: bool
-        Whether the surface tests visibility to scene lights.
-    color_field: str, optional
-        Named scalar or three-component vector field used to color the surface.
-    color_range: tuple of float, optional
-        Inclusive scalar or vector-magnitude range mapped through ``colormap``.
-    colormap: str or numpy.ndarray
-        Built-in matplotlib-compatible name or RGB control-point array.
+    value_range (tuple of float): Inclusive scalar interval defining the rendered material.
+
+    color (tuple of float): RGB surface color in ``[0, 1]``.
+
+    metallic (float): Metallic response in ``[0, 1]``.
+
+    roughness (float): Surface roughness in ``[0, 1]``.
+
+    opacity (float): Surface opacity in ``[0, 1]``.
+
+    spacing (tuple of float): Positive voxel spacing in scene coordinates.
+
+    origin (tuple of float): Field origin in scene coordinates.
+
+    casts_shadows (bool): Whether the surface tests visibility to scene lights.
+
+    color_field (str, optional): Named scalar or three-component vector field used to color the surface.
+
+    color_range (tuple of float, optional): Inclusive scalar or vector-magnitude range mapped through ``colormap``.
+
+    colormap (str or numpy.ndarray): Built-in matplotlib-compatible name or RGB control-point array.
     """
 
     def __init__(
@@ -140,24 +138,23 @@ class VolumeRendering:
 
     Parameters
     ----------
-    value_range: tuple of float
-        Inclusive scalar interval occupied by the volume.
-    color: tuple of float
-        RGB volume color in ``[0, 1]``.
-    opacity: float
-        Per-lattice-unit opacity in ``[0, 1]``.
-    index_of_refraction: float
-        Positive refractive index of the material.
-    spacing: tuple of float
-        Positive voxel spacing in scene coordinates.
-    origin: tuple of float
-        Field origin in scene coordinates.
-    color_field: str, optional
-        Named scalar or three-component vector field used to color the volume.
-    color_range: tuple of float, optional
-        Inclusive scalar or vector-magnitude range mapped through ``colormap``.
-    colormap: str or numpy.ndarray
-        Built-in matplotlib-compatible name or RGB control-point array.
+    value_range (tuple of float): Inclusive scalar interval occupied by the volume.
+
+    color (tuple of float): RGB volume color in ``[0, 1]``.
+
+    opacity (float): Per-lattice-unit opacity in ``[0, 1]``.
+
+    index_of_refraction (float): Positive refractive index of the material.
+
+    spacing (tuple of float): Positive voxel spacing in scene coordinates.
+
+    origin (tuple of float): Field origin in scene coordinates.
+
+    color_field (str, optional): Named scalar or three-component vector field used to color the volume.
+
+    color_range (tuple of float, optional): Inclusive scalar or vector-magnitude range mapped through ``colormap``.
+
+    colormap (str or numpy.ndarray): Built-in matplotlib-compatible name or RGB control-point array.
     """
 
     def __init__(
@@ -203,16 +200,15 @@ class VectorRendering:
 
     Parameters
     ----------
-    value_range: tuple of float
-        Magnitude interval mapped through the colormap.
-    colormap: str or numpy.ndarray
-        Built-in matplotlib-compatible name or RGB control-point array.
-    opacity: float
-        Per-lattice-unit opacity in ``[0, 1]``.
-    spacing: tuple of float
-        Positive voxel spacing in scene coordinates.
-    origin: tuple of float
-        Field origin in scene coordinates.
+    value_range (tuple of float): Magnitude interval mapped through the colormap.
+
+    colormap (str or numpy.ndarray): Built-in matplotlib-compatible name or RGB control-point array.
+
+    opacity (float): Per-lattice-unit opacity in ``[0, 1]``.
+
+    spacing (tuple of float): Positive voxel spacing in scene coordinates.
+
+    origin (tuple of float): Field origin in scene coordinates.
     """
 
     def __init__(
@@ -240,42 +236,42 @@ class Scene:
 
     Parameters
     ----------
-    renderings: mapping of str to rendering configuration
-        Field names and their unique surface, volume, or vector configuration.
-    resolution: tuple of int
-        Output ``(width, height)``. Both values are assumed positive.
-    position: tuple of float
-        Camera location in scene coordinates.
-    target: tuple of float
-        Camera focal point in scene coordinates.
-    field_of_view: float
-        Vertical field of view in degrees, assumed to be in ``(0, 180)``.
-    up: tuple of float
-        Camera up direction.
-    lights: sequence of Light
-        Positional lights. At least one light is assumed.
-    background_color: tuple of float
-        RGB background color in ``[0, 1]``.
-    global_illumination: float
-        Nonnegative ambient-light intensity.
-    global_illumination_color: tuple of float
-        RGB ambient-light color in ``[0, 1]``.
-    shadows: bool
-        Enable shadow rays for surfaces that cast shadows.
-    max_bounces: int
-        Maximum refraction and indirect-light bounce count.
-    surface_smoothing: int
-        Number of on-device smoothing passes applied to scalar surfaces.
-    samples_per_voxel: float
-        Ray samples per minimum voxel spacing, assumed to be at least one.
-    anti_aliasing: bool
-        Apply a device-side FXAA-style edge filter to the composited image.
-    anti_aliasing_strength: float
-        Edge smoothing strength in ``[0, 1]``.
-    output_dir: str or pathlib.Path
-        Directory used for relative output filenames.
-    rotate: bool
-        Rotate the camera around ``target`` using ``rotation_angle``.
+    renderings (mapping of str to rendering configuration): Field names and their unique surface, volume, or vector
+        configuration.
+
+    resolution (tuple of int): Output ``(width, height)``. Both values are assumed positive.
+
+    position (tuple of float): Camera location in scene coordinates.
+
+    target (tuple of float): Camera focal point in scene coordinates.
+
+    field_of_view (float): Vertical field of view in degrees, assumed to be in ``(0, 180)``.
+
+    up (tuple of float): Camera up direction.
+
+    lights (sequence of Light): Positional lights. At least one light is assumed.
+
+    background_color (tuple of float): RGB background color in ``[0, 1]``.
+
+    global_illumination (float): Nonnegative ambient-light intensity.
+
+    global_illumination_color (tuple of float): RGB ambient-light color in ``[0, 1]``.
+
+    shadows (bool): Enable shadow rays for surfaces that cast shadows.
+
+    max_bounces (int): Maximum refraction and indirect-light bounce count.
+
+    surface_smoothing (int): Number of on-device smoothing passes applied to scalar surfaces.
+
+    samples_per_voxel (float): Ray samples per minimum voxel spacing, assumed to be at least one.
+
+    anti_aliasing (bool): Apply a device-side FXAA-style edge filter to the composited image.
+
+    anti_aliasing_strength (float): Edge smoothing strength in ``[0, 1]``.
+
+    output_dir (str or pathlib.Path): Directory used for relative output filenames.
+
+    rotate (bool): Rotate the camera around ``target`` using ``rotation_angle``.
     """
 
     def __init__(
@@ -360,8 +356,7 @@ class Scene:
 
         Parameters
         ----------
-        timestep: int
-            Current simulation timestep.
+        timestep (int): Current simulation timestep.
 
         Returns
         -------
@@ -376,8 +371,7 @@ class Scene:
 
         Parameters
         ----------
-        timestep: int
-            Current simulation timestep.
+        timestep (int): Current simulation timestep.
 
         Returns
         -------
@@ -421,12 +415,11 @@ class Scene:
 
         Parameters
         ----------
-        data: mapping of str to array
-            Scalar or vector fields matching all names in ``renderings``.
-        timestep: int
-            Simulation timestep used by optional camera rotation.
-        filename: str or pathlib.Path, optional
-            PNG filename. Relative paths are placed under ``output_dir``.
+        data (mapping of str to array): Scalar or vector fields matching all names in ``renderings``.
+
+        timestep (int): Simulation timestep used by optional camera rotation.
+
+        filename (str or pathlib.Path, optional): PNG filename. Relative paths are placed under ``output_dir``.
 
         Returns
         -------
@@ -582,14 +575,13 @@ def render(
 
     Parameters
     ----------
-    scene: Scene
-        Configured rendering scene.
-    data: mapping of str to array
-        Named scalar or vector fields.
-    timestep: int
-        Simulation timestep used by optional camera rotation.
-    filename: str or pathlib.Path, optional
-        PNG output filename.
+    scene (Scene): Configured rendering scene.
+
+    data (mapping of str to array): Named scalar or vector fields.
+
+    timestep (int): Simulation timestep used by optional camera rotation.
+
+    filename (str or pathlib.Path, optional): PNG output filename.
 
     Returns
     -------

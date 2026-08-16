@@ -112,19 +112,18 @@ def read_raw_volume(path, shape, dtype="u1", endian="<", order="C", use_memmap=F
 
     Parameters
     ----------
-    path : str or Path
-        Path to the raw file.
-    shape : tuple[int, ...]
-        Volume shape, e.g. (1000, 1000, 1000).
-    dtype : str or np.dtype
-        Element type without endianness, e.g. "u1", "i1", "u2", "f4".
-        For 8-bit char data use "u1" (unsigned) or "i1" (signed).
-    endian : str
-        "<" little-endian, ">" big-endian.
-    order : str
-        "C" for C-order, "F" for Fortran-order.
-    use_memmap : bool
-        If True, return a memmap (does not load full array into RAM).
+    path (str or Path): Path to the raw file.
+
+    shape (tuple[int, ...]): Volume shape, e.g. (1000, 1000, 1000).
+
+    dtype (str or np.dtype): Element type without endianness, e.g. "u1", "i1", "u2", "f4". For 8-bit char data use "u1"
+        (unsigned) or "i1" (signed).
+
+    endian (str): "<" little-endian, ">" big-endian.
+
+    order (str): "C" for C-order, "F" for Fortran-order.
+
+    use_memmap (bool): If True, return a memmap (does not load full array into RAM).
 
     Returns
     -------
@@ -150,9 +149,11 @@ def downsample_field(field, factor, method="bicubic"):
 
     Parameters
     ----------
-    field (jax.numpy.ndarray): The input vector field to be downsampled. This should be a 3D or 4D JAX array where the last dimension is 2 or 3 (vector components).
+    field (jax.numpy.ndarray): The input vector field to be downsampled. This should be a 3D or 4D JAX array where the
+        last dimension is 2 or 3 (vector components).
 
-    factor (int): The factor by which to downsample the field. The dimensions of the field will be divided by this factor.
+    factor (int): The factor by which to downsample the field. The dimensions of the field will be divided by this
+        factor.
 
     method (str, optional): The method to use for downsampling. Default is 'bicubic'.
 
@@ -180,9 +181,11 @@ def save_image(timestep, fld, prefix=None):
     ----------
     timestep (int): The timestep at which the field is being saved.
 
-    fld (jax.numpy.ndarray): The field to be saved. This should be a 2D or 3D JAX array. If the field is 3D, the magnitude of the field will be calculated and saved.
+    fld (jax.numpy.ndarray): The field to be saved. This should be a 2D or 3D JAX array. If the field is 3D, the
+        magnitude of the field will be calculated and saved.
 
-    prefix (str, optional): A prefix to be added to the filename. The filename will be the name of the main script file by default.
+    prefix (str, optional): A prefix to be added to the filename. The filename will be the name of the main script file
+        by default.
 
     Returns
     -------
@@ -236,7 +239,8 @@ def save_fields_hdf5_xdmf(
     ----------
     timestep (int): The timestep number to be associated with the saved fields.
 
-    fields (Dict[str, np.ndarray]): A dictionary of fields to be saved. Each field must be an array-like object with dimensions (nx, ny) for 2D fields
+    fields (Dict[str, np.ndarray]): A dictionary of fields to be saved. Each field must be an array-like object with
+        dimensions (nx, ny) for 2D fields
     or (nx, ny, nz) for 3D fields, where:
 
     - nx : int, number of grid points along the x-axis
@@ -245,7 +249,8 @@ def save_fields_hdf5_xdmf(
 
     The key value for each field in the dictionary must be a string containing the name of the field.
 
-    output_dir (str, optional, default: '.'):  The directory in which to save the HDF5 files. Defaults to the current directory.
+    output_dir (str, optional, default: '.'): The directory in which to save the HDF5 files. Defaults to the current
+        directory.
 
     prefix (str, optional, default: 'fields'): A prefix to be added to the filename. Defaults to 'fields'.
 
@@ -263,7 +268,8 @@ def save_fields_hdf5_xdmf(
 
     multi_timestep_file (bool): Store data for all timesteps in a single, consolidated file.
 
-    static_fields (dict, Optional): Pass a dict for static fields that doesn't change. Useful for passing for non-changing values (for e.g., mask array).
+    static_fields (dict, Optional): Pass a dict for static fields that doesn't change. Useful for passing for
+        non-changing values (for e.g., mask array).
     Static fields are stored once and referenced from all timesteps.
 
     static_fields_file (str, Optional): Name of the file where static field is stored. Default: {prefix}_static.hdf5
@@ -903,7 +909,8 @@ def save_fields_vtk(timestep, fields, output_dir=".", prefix="fields"):
     - nz : int, number of grid points along the z-axis (for 3D fields only)
     The key value for each field in the dictionary must be a string containing the name of the field.
 
-    output_dir (str, optional, default: '.'): The directory in which to save the VTK files. Defaults to the current directory.
+    output_dir (str, optional, default: '.'): The directory in which to save the VTK files. Defaults to the current
+        directory.
 
     prefix (str, optional, default: 'fields'): A prefix to be added to the filename. Defaults to 'fields'.
 
@@ -958,10 +965,9 @@ def live_volume_rendering(timestep, field):
 
     Parameters
     ----------
-    timestep : int
-        Current simulation timestep.
-    field : numpy.ndarray
-        Three-dimensional field to render.
+    timestep (int): Current simulation timestep.
+
+    field (numpy.ndarray): Three-dimensional field to render.
 
     Returns
     -------
@@ -1116,7 +1122,7 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, transformation_matrix=None,
 
     transformation_matrix (array-like, optional): A transformation matrix to be applied to the mesh before voxelization.
 
-    pitch : (float, optional): The pitch of the voxel grid. Either this or 'length_lbm_unit' must be provided.
+    pitch ((float, optional): The pitch of the voxel grid. Either this or 'length_lbm_unit' must be provided.):
 
     Returns
     -------
@@ -1206,8 +1212,7 @@ def q_criterion(u):
 
     Parameters
     ----------
-    u : jax.Array
-        Velocity field with shape ``(nx, ny, nz, 3)`` and unit grid spacing.
+    u (jax.Array): Velocity field with shape ``(nx, ny, nz, 3)`` and unit grid spacing.
 
     Returns
     -------

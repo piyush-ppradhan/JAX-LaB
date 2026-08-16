@@ -12,15 +12,14 @@ class EOS:
 
     Parameters
     ----------
-    temperature_field_type : str, optional
-        ``"isothermal"`` for a fixed temperature or ``"thermal"`` for a
-        temperature field. Defaults to ``"isothermal"``.
-    a, b : float or list of float
-        Equation-specific parameters for each component.
-    R : float or list of float
-        Gas constant for each component.
-    T : float, optional
-        Fixed temperature required for isothermal calculations.
+    temperature_field_type (str, optional): ``"isothermal"`` for a fixed temperature or ``"thermal"`` for a temperature
+        field. Defaults to ``"isothermal"``.
+
+    a, b (float or list of float): Equation-specific parameters for each component.
+
+    R (float or list of float): Gas constant for each component.
+
+    T (float, optional): Fixed temperature required for isothermal calculations.
     """
 
     def __init__(self, temperature_field_type="isothermal", **kwargs):
@@ -106,8 +105,7 @@ class EOS:
 
         Parameters
         ----------
-        rho_tree : pytree of jax.Array
-            Component density fields.
+        rho_tree (pytree of jax.Array): Component density fields.
 
         Returns
         -------
@@ -123,10 +121,9 @@ class EOS:
 
         Parameters
         ----------
-        rho_tree : pytree of jax.Array
-            Component density fields.
-        T : jax.Array
-            Temperature field.
+        rho_tree (pytree of jax.Array): Component density fields.
+
+        T (jax.Array): Temperature field.
 
         Returns
         -------
@@ -142,10 +139,9 @@ class EOS:
 
         Parameters
         ----------
-        rho_tree : pytree of jax.Array
-            Component density fields.
-        T : jax.Array
-            Temperature field.
+        rho_tree (pytree of jax.Array): Component density fields.
+
+        T (jax.Array): Temperature field.
 
         Returns
         -------
@@ -161,19 +157,18 @@ class VanderWaals(EOS):
 
     Parameters
     ----------
-    a : list of float
-        Attraction parameter for each component.
-    b : list of float
-        Excluded-volume parameter for each component.
-    R : list of float
-        Gas constant for each component.
-    T : float or jax.Array
-        Temperature used by the isothermal equation of state.
+    a (list of float): Attraction parameter for each component.
+
+    b (list of float): Excluded-volume parameter for each component.
+
+    R (list of float): Gas constant for each component.
+
+    T (float or jax.Array): Temperature used by the isothermal equation of state.
 
     References
     ----------
     1. Reprint of: The Equation of State for Gases and Liquids. The Journal of Supercritical Fluids,
-    100th year Anniversary of van der Waals' Nobel Lecture, 55, no. 2 (2010): 403–14. https://doi.org/10.1016/j.supflu.2010.11.001.
+    100th year Anniversary of van der Waals' Nobel Lecture, 55, no. 2 (2010): 403-14. https://doi.org/10.1016/j.supflu.2010.11.001.
 
     Notes
     -----
@@ -206,10 +201,9 @@ class RedlichKwong(EOS):
 
     Parameters
     ----------
-    a, b, R : list of float
-        Equation parameters for each component.
-    T : float or jax.Array
-        Temperature used by the isothermal equation of state.
+    a, b, R (list of float): Equation parameters for each component.
+
+    T (float or jax.Array): Temperature used by the isothermal equation of state.
 
     References
     ----------
@@ -247,12 +241,11 @@ class RedlichKwongSoave(EOS):
 
     Parameters
     ----------
-    a, b, R : list of float
-        Equation parameters for each component.
-    T : float or jax.Array
-        Temperature used by the isothermal equation of state.
-    RKS_omega : list of float
-        Acentric factor for each component.
+    a, b, R (list of float): Equation parameters for each component.
+
+    T (float or jax.Array): Temperature used by the isothermal equation of state.
+
+    RKS_omega (list of float): Acentric factor for each component.
 
     References
     ----------
@@ -323,12 +316,11 @@ class PengRobinson(EOS):
 
     Parameters
     ----------
-    a, b, R : list of float
-        Equation parameters for each component.
-    T : float or jax.Array
-        Temperature used by the isothermal equation of state.
-    pr_omega : float or list of float
-        Acentric factor for each component.
+    a, b, R (list of float): Equation parameters for each component.
+
+    T (float or jax.Array): Temperature used by the isothermal equation of state.
+
+    pr_omega (float or list of float): Acentric factor for each component.
 
     References
     ----------
@@ -406,10 +398,9 @@ class CarnahanStarling(EOS):
 
     Parameters
     ----------
-    a, b, R : list of float
-        Equation parameters for each component.
-    T : float or jax.Array
-        Temperature used by the isothermal equation of state.
+    a, b, R (list of float): Equation parameters for each component.
+
+    T (float or jax.Array): Temperature used by the isothermal equation of state.
 
     References
     ----------

@@ -42,15 +42,11 @@ class Multiphase(LBMBase):
 
     Parameters
     ----------
-    k : list
-        Modification coefficient used to tune surface tension.
+    k (list): Modification coefficient used to tune surface tension.
 
-    A : numpy.ndarray
-        Weighting factor for combining the Shan-Chen and Zhang-Chen forces.
+    A (numpy.ndarray): Weighting factor for combining the Shan-Chen and Zhang-Chen forces.
 
-    g_kkprime : numpy.ndarray
-        Symmetric component-interaction matrix with shape
-        ``(n_components, n_components)``.
+    g_kkprime (numpy.ndarray): Symmetric component-interaction matrix with shape ``(n_components, n_components)``.
 
     References
     ----------
@@ -789,7 +785,8 @@ class Multiphase(LBMBase):
 
         u_tree (pytree of jax.numpy.ndarray): Velocity field
 
-        cast_output (bool, optional): A flag to cast the density and velocity values to the compute and output precision. Default: True
+        cast_output (bool, optional): A flag to cast the density and velocity values to the compute and output
+            precision. Default: True
 
         Returns
         -------
@@ -817,9 +814,8 @@ class Multiphase(LBMBase):
 
         Parameters
         ----------
-        rho_tree : pytree of jax.Array
-            Component density fields with shape ``(nx, ny, 1)`` in 2D or
-            ``(nx, ny, nz, 1)`` in 3D.
+        rho_tree (pytree of jax.Array): Component density fields with shape ``(nx, ny, 1)`` in 2D or ``(nx, ny, nz, 1)``
+            in 3D.
 
         Returns
         -------
@@ -1090,8 +1086,8 @@ class Multiphase(LBMBase):
         """
         Compute the total density using component velocity and density values.
 
-        Parmeters
-        ---------
+        Parameters
+        ----------
         rho_tree (Pytree of jax.numpy.ndarray): Density field.
 
         Returns
@@ -1300,7 +1296,8 @@ class Multiphase(LBMBase):
 
         Parameters
         ----------
-        fout_tree (pytree of jax.numpy.ndarray): The post-collision or post-streaming distribution functions where bc needs to be applied.
+        fout_tree (pytree of jax.numpy.ndarray): The post-collision or post-streaming distribution functions where bc
+            needs to be applied.
 
         fin_tree (pytree of jax.numpy.ndarray): The pre-collision or post-collision distribution functions.
 
@@ -1594,7 +1591,7 @@ class Multiphase(LBMBase):
 
         p_tree (pytree of jax.numpy.ndarray): Pressure field at the current time step.
 
-        p (jax.numpy.ndarray): Total pressure field at the current time step.
+        p_total (jax.numpy.ndarray): Total pressure field at the current time step.
 
         u_total (jax.numpy.ndarray): Total velocity field at the current time step.
 
@@ -1606,7 +1603,7 @@ class Multiphase(LBMBase):
 
         p_prev_tree (pytree of jax.numpy.ndarray): Pressure field at the previous time step.
 
-        p_prev (jax.numpy.ndarray): Total pressure field at the previous time step.
+        p_prev_total (jax.numpy.ndarray): Total pressure field at the previous time step.
 
         u_total_prev (jax.numpy.ndarray): Total velocity field at the previous time step.
 
@@ -1614,7 +1611,7 @@ class Multiphase(LBMBase):
 
         rho_total_prev (jax.numpy.ndarray): Total density field at the previous time step.
 
-        rho_prev_tree: (ytree of jax.numpy.ndarray): Density field at the previous time step.
+        rho_prev_tree (pytree of jax.numpy.ndarray): Density field at the previous time step.
 
         Returns
         -------

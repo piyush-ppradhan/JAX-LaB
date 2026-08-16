@@ -63,8 +63,7 @@ class BoundaryCondition(object):
 
         Parameters
         ----------
-        grid_mask : array-like
-            The grid mask for the lattice.
+        grid_mask (array-like): The grid mask for the lattice.
 
         Returns
         -------
@@ -140,7 +139,8 @@ class BoundaryCondition(object):
 
         fin (jax.numpy.ndarray): The outgoing distribution functions.
 
-        implementation_step (str): The step in the lattice Boltzmann method algorithm at which the preparation is applied.
+        implementation_step (str): The step in the lattice Boltzmann method algorithm at which the preparation is
+            applied.
 
         Returns
         -------
@@ -234,11 +234,9 @@ class BoundaryCondition(object):
 
         Parameters
         ----------
-        fout : jax.Array
-            Output distribution functions.
+        fout (jax.Array): Output distribution functions.
 
-        fin : jax.Array
-            Input distribution functions.
+        fin (jax.Array): Input distribution functions.
 
         Returns
         -------
@@ -641,12 +639,11 @@ class DoNothing(BoundaryCondition):
 
     Parameters
     ----------
-    indices : tuple of numpy.ndarray
-        Boundary-node indices.
-    grid_info : dict
-        Grid and lattice metadata.
-    precision_policy : PrecisionPolicy
-        Compute and output precision policy.
+    indices (tuple of numpy.ndarray): Boundary-node indices.
+
+    grid_info (dict): Grid and lattice metadata.
+
+    precision_policy (PrecisionPolicy): Compute and output precision policy.
 
     Notes
     -----
@@ -667,10 +664,9 @@ class DoNothing(BoundaryCondition):
 
         Parameters
         ----------
-        fout : jax.numpy.ndarray
-            The output distribution functions.
-        fin : jax.numpy.ndarray
-            The input distribution functions.
+        fout (jax.numpy.ndarray): The output distribution functions.
+
+        fin (jax.numpy.ndarray): The input distribution functions.
 
         Returns
         -------
@@ -797,6 +793,7 @@ class ZouHe(BoundaryCondition):
         Parameters
         ----------
         fout (jax.numpy.ndarray): The output distribution functions.
+
         _ (jax.numpy.ndarray): The input distribution functions. This is not used in this method.
 
         Returns
@@ -960,7 +957,7 @@ class ExtrapolationOutflow(BoundaryCondition):
     References
     ----------
     Geier, M., Schönherr, M., Pasquali, A., & Krafczyk, M. (2015). The cumulant lattice Boltzmann equation in three
-    dimensions: Theory and validation. Computers & Mathematics with Applications, 70(4), 507–547.
+    dimensions: Theory and validation. Computers & Mathematics with Applications, 70(4), 507-547.
     doi:10.1016/j.camwa.2015.05.001.
     """
 
@@ -999,7 +996,8 @@ class ExtrapolationOutflow(BoundaryCondition):
 
         fin (jax.numpy.ndarray): The outgoing distribution functions.
 
-        implementation_step (str): The step in the lattice Boltzmann method algorithm at which the preparation is applied.
+        implementation_step (str): The step in the lattice Boltzmann method algorithm at which the preparation is
+            applied.
 
         Returns
         -------
@@ -1035,6 +1033,7 @@ class ExtrapolationOutflow(BoundaryCondition):
         Parameters
         ----------
         fout (jax.numpy.ndarray): The output distribution functions.
+
         fin (jax.numpy.ndarray): The input distribution functions.
 
         Returns
@@ -1151,7 +1150,7 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
     References
     ----------
     [1] Geier, M., Schönherr, M., Pasquali, A., & Krafczyk, M. (2015). The cumulant lattice Boltzmann equation in three
-    dimensions: Theory and validation. Computers & Mathematics with Applications, 70(4), 507–547.
+    dimensions: Theory and validation. Computers & Mathematics with Applications, 70(4), 507-547.
     doi:10.1016/j.camwa.2015.05.001.
 
 
@@ -1174,10 +1173,9 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
 
         Parameters
         ----------
-        fout : jax.numpy.ndarray
-            The output distribution functions.
-        fin : jax.numpy.ndarray
-            The input distribution functions.
+        fout (jax.numpy.ndarray): The output distribution functions.
+
+        fin (jax.numpy.ndarray): The input distribution functions.
 
         Returns
         -------
@@ -1296,7 +1294,7 @@ class ExtrapolationOutflowMultiphase(BoundaryCondition):
     References
     ----------
     1. Zhao-Li, G., Chu-Guang, Z. & Bao-Chang, S. Non-equilibrium extrapolation method for velocity and pressure boundary conditions in the lattice
-    Boltzmann method. Chinese Phys. 11, 366–374 (2002).
+    Boltzmann method. Chinese Phys. 11, 366-374 (2002).
     """
 
     def __init__(self, indices, grid_info, precision_policy):
@@ -1351,7 +1349,7 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
     References
     ----------
     1. Zhao-Li, G., Chu-Guang, Z. & Bao-Chang, S. Non-equilibrium extrapolation method for velocity and pressure boundary conditions in the lattice
-    Boltzmann method. Chinese Phys. 11, 366–374 (2002).
+    Boltzmann method. Chinese Phys. 11, 366-374 (2002).
     """
 
     def __init__(self, indices, grid_info, precision_policy, prescribed):
@@ -1415,7 +1413,7 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
     References
     ----------
     1. Zhao-Li, G., Chu-Guang, Z. & Bao-Chang, S. Non-equilibrium extrapolation method for velocity and pressure boundary conditions in the lattice
-    Boltzmann method. Chinese Phys. 11, 366–374 (2002).
+    Boltzmann method. Chinese Phys. 11, 366-374 (2002).
 
     2. Fei, L., Qin, F., Zhao, J., Derome, D. & Carmeliet, J. Lattice Boltzmann modelling of isothermal two-component evaporation in porous media.
     Journal of Fluid Mechanics 955, A18 (2023).
@@ -1435,8 +1433,7 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
 
         Parameters
         ----------
-        boundary_mask : np.ndarray
-            The grid mask for the boundary voxels.
+        boundary_mask (np.ndarray): The grid mask for the boundary voxels.
         """
         hasFluidNeighbour = ~boundary_mask[:, self.lattice.opp_indices]
         idx = np.array(self.indices).T

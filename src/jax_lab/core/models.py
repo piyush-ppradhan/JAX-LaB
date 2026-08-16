@@ -140,8 +140,7 @@ class KBCSim(LBMBase):
 
         Parameters
         ----------
-        fneq : jax.numpy.array
-            Non-equilibrium distribution function.
+        fneq (jax.numpy.array): Non-equilibrium distribution function.
 
         Returns
         -------
@@ -169,8 +168,7 @@ class KBCSim(LBMBase):
 
         Parameters
         ----------
-        fneq : jax.numpy.ndarray
-            Non-equilibrium distribution function.
+        fneq (jax.numpy.ndarray): Non-equilibrium distribution function.
 
         Returns
         -------
@@ -451,10 +449,9 @@ class CLBMSim(LBMBase):
 
         Parameters
         ----------
-        f: jax.numpy.ndarray
-            Distribution arrays.
-        rho: jax.numpy.ndarray
-            Density fields.
+        f (jax.numpy.ndarray): Distribution arrays.
+
+        rho (jax.numpy.ndarray): Density fields.
 
         Returns
         -------
@@ -1145,8 +1142,7 @@ class CLBMSim(LBMBase):
 
         Parameters
         ----------
-        rho : jax.numpy.ndarray
-            Density field.
+        rho (jax.numpy.ndarray): Density field.
 
         Returns
         -------
@@ -1194,8 +1190,7 @@ class CLBMSim(LBMBase):
 
         Parameters
         ----------
-        F : pytree of jax.numpy.ndarray
-            Force field.
+        F (pytree of jax.numpy.ndarray): Force field.
 
         Returns
         -------
@@ -1257,7 +1252,9 @@ class CLBMSim(LBMBase):
         Parameters
         ----------
             Tdash (jax.numpy.ndarray): Central moments post-collision distribution functions.
+
             rho (jax.numpy.ndarray): Density field.
+
             u (jax.numpy.ndarray): Velocity field.
 
         Returns

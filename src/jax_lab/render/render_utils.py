@@ -85,10 +85,9 @@ def colormap_lookup_table(colormap, size=256):
 
     Parameters
     ----------
-    colormap: str or numpy.ndarray
-        Built-in matplotlib-compatible name or an RGB array of shape ``(n, 3)``.
-    size: int
-        Number of lookup entries. Assumed to be at least two.
+    colormap (str or numpy.ndarray): Built-in matplotlib-compatible name or an RGB array of shape ``(n, 3)``.
+
+    size (int): Number of lookup entries. Assumed to be at least two.
 
     Returns
     -------
@@ -124,10 +123,9 @@ def write_image(filename, image_data):
 
     Parameters
     ----------
-    filename: str or pathlib.Path
-        Output filename. The file is assumed to use PNG format.
-    image_data: jax.Array or numpy.ndarray
-        RGB data of shape ``(height, width, 3)`` in ``[0, 1]`` or uint8.
+    filename (str or pathlib.Path): Output filename. The file is assumed to use PNG format.
+
+    image_data (jax.Array or numpy.ndarray): RGB data of shape ``(height, width, 3)`` in ``[0, 1]`` or uint8.
 
     Returns
     -------
@@ -522,10 +520,9 @@ def apply_edge_antialiasing(image, strength):
 
     Parameters
     ----------
-    image: jax.Array
-        RGB image of shape ``(height, width, 3)`` with values in ``[0, 1]``.
-    strength: jax.Array
-        Edge blend strength in ``[0, 1]``.
+    image (jax.Array): RGB image of shape ``(height, width, 3)`` with values in ``[0, 1]``.
+
+    strength (jax.Array): Edge blend strength in ``[0, 1]``.
 
     Returns
     -------

@@ -44,7 +44,8 @@ def _cast_floating_to(tree, dtype):
 
     Parameters
     ----------
-    tree: A pytree of JAX or NumPy arrays.
+    tree (pytree): A pytree of JAX or NumPy arrays.
+
     dtype (jnp.dtype): Target dtype for floating-point leaves.
 
     Returns
@@ -136,7 +137,7 @@ class PrecisionPolicy(Enum):
 
         Parameters
         ----------
-        tree: A pytree of JAX or NumPy arrays.
+        tree (pytree): A pytree of JAX or NumPy arrays.
 
         Returns
         -------
@@ -150,7 +151,7 @@ class PrecisionPolicy(Enum):
 
         Parameters
         ----------
-        tree: A pytree of JAX or NumPy arrays.
+        tree (pytree): A pytree of JAX or NumPy arrays.
 
         Returns
         -------
