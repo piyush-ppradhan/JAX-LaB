@@ -1301,6 +1301,8 @@ class Multiphase(LBMBase):
 
         fin_tree (pytree of jax.numpy.ndarray): The pre-collision or post-collision distribution functions.
 
+        timestep (int): Current simulation timestep, used by dynamic boundary conditions.
+
         implementation_step (str): The implementation step at which the boundary conditions should be applied.
 
         Returns
@@ -1339,7 +1341,7 @@ class Multiphase(LBMBase):
 
         Parameters
         ----------
-        fin_tree (pytree of jax.numpy.ndarray): Post-streaming distribution function.
+        f_poststreaming_tree (pytree of jax.numpy.ndarray): Post-streaming distribution function.
 
         timestep (int): Current timestep
 

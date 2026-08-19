@@ -1028,6 +1028,10 @@ def save_BCs_vtk(timestep, BCs, grid_info, output_dir="."):
 
     BCs (List[BC]): A list of boundary conditions to be saved. Each boundary condition must be an object of type BC.
 
+    grid_info (dict): Grid dimensions and dimensionality.
+
+    output_dir (str, optional): Directory for the VTK file. Defaults to the current directory.
+
     Returns
     -------
     None
@@ -1103,8 +1107,7 @@ def rotate_geometry(indices, origin, axis, angle):
 
     Notes
     -----
-    This function rotates the mesh by applying a rotation matrix to the voxel indices. The rotation matrix is calculated
-    using the axis-angle representation of rotations. The origin of the rotation axis is assumed to be at (0, 0, 0).
+    This function rotates the mesh around the supplied origin using an axis-angle rotation matrix.
     """
     indices_rotated = (jnp.array(indices).T - origin) @ axangle2mat(axis, angle) + origin
     return tuple(jnp.rint(indices_rotated).astype("int32").T)
@@ -1122,7 +1125,9 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, transformation_matrix=None,
 
     transformation_matrix (array-like, optional): A transformation matrix to be applied to the mesh before voxelization.
 
-    pitch ((float, optional): The pitch of the voxel grid. Either this or 'length_lbm_unit' must be provided.):
+    pitch (float, optional): The pitch of the voxel grid. Either this or 'length_lbm_unit' must be provided.
+
+    **kwargs (dict): Supports the deprecated 'tranformation_matrix' spelling.
 
     Returns
     -------

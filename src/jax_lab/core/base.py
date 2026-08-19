@@ -824,6 +824,8 @@ class LBMBase(object):
 
         fin (jax.numpy.ndarray): Post-streaming distribution functions.
 
+        timestep (int): Current simulation timestep, used by dynamic boundary conditions.
+
         implementation_step (str): Implementation step at which the boundary conditions should be applied.
 
         Returns
@@ -1020,6 +1022,10 @@ class LBMBase(object):
         rho (jax.numpy.ndarray): Density field at the current time step.
 
         u (jax.numpy.ndarray): Velocity field at the current time step.
+
+        rho_prev (jax.numpy.ndarray): Density field at the previous I/O time step.
+
+        u_prev (jax.numpy.ndarray): Velocity field at the previous I/O time step.
         """
         kwargs = {
             "timestep": timestep,

@@ -1,3 +1,5 @@
+::: jax_lab.core.utils.read_raw_volume
+
 ::: jax_lab.core.utils.downsample_field
 
 ::: jax_lab.core.utils.save_image
