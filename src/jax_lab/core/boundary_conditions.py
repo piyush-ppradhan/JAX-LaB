@@ -1401,7 +1401,6 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
         return fbd
 
 
-# TODO
 class ExactNonEquilibriumExtrapolation(BoundaryCondition):
     """
     Non-equilibrium extrapolation boundary condition but with added correction step to correct the density at the boundary node.
@@ -1422,28 +1421,20 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
     def __init__(self, indices, grid_info, precision_policy, prescribed, bc_type):
         super().__init__(indices, grid_info, precision_policy)
         self.name = "ExactNonEquilibriumExtrapolation"
-        self.needs_extra_configuration = True  # TODO
+        self.needs_extra_configuration = False
         self.prescribed = prescribed
         self.type = bc_type
         self.w_NEQ = self.compute_NEQ_weights()
+        self.neighbors_found = False
 
-    def configure(self, boundary_mask):
+    def find_neighbors(self):
         """
-        Configure the boundary condition by finding neighbouring voxel indices.
-
-        Parameters
-        ----------
-        boundary_mask (np.ndarray): The grid mask for the boundary voxels.
+        Locate the nearest neighbouring fluid site (one per boundary node, along the inward normal) used to
+        extrapolate the non-equilibrium part of the distribution. Must be called after self.normals is available,
+        i.e. after BoundaryCondition.create_local_mask_and_normal_arrays has run.
         """
-        hasFluidNeighbour = ~boundary_mask[:, self.lattice.opp_indices]
-        idx = np.array(self.indices).T
-        idx_trg = []
-        for i in range(self.lattice.q):
-            idx_trg.append(idx[hasFluidNeighbour[:, i], :] + self.lattice.c[:, i])
-        indices_nbr = np.unique(np.vstack(idx_trg), axis=0)
-        self.indices_nbr = tuple(indices_nbr.T)
-
-        return
+        ind = np.array(self.indices).T - self.normals
+        self.indices_nbr = tuple(ind.T)
 
     def compute_NEQ_weights(self):
         """
@@ -1498,6 +1489,10 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         -------
         (jax.numpy.ndarray): The modified output distribution functions after applying the boundary condition.
         """
+        if not self.neighbors_found:
+            self.find_neighbors()
+            self.neighbors_found = True
+
         nbd = len(self.indices[0])
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
@@ -1512,9 +1507,11 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         fneq_nbr = fout[self.indices_nbr] - feq_nbr
         fbd = fbd.at[bindex, self.imissing].set(feq[bindex, self.imissing] + fneq_nbr[bindex, self.imissing])
 
-        # Correction step
+        # Correction step: redistribute the density error over the unknown (imissing) directions only, weighted
+        # by w_NEQ, so that the corrected boundary density matches self.prescribed exactly.
         rho_incorrect = jnp.sum(fbd, axis=-1, keepdims=True)
-        beta = self.w_NEQ * jnp.repeat(self.prescribed - rho_incorrect, axis=-1, repeats=self.lattice.q) / jnp.sum(self.w_NEQ)
+        w_missing = self.w_NEQ * self.imissing_mask
+        beta = w_missing * (self.prescribed - rho_incorrect) / jnp.sum(w_missing, axis=-1, keepdims=True)
         fbd = fbd.at[bindex, self.imissing].set(fbd[bindex, self.imissing] + beta[bindex, self.imissing])
         return fbd
 
