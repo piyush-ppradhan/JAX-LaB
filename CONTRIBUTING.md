@@ -46,7 +46,7 @@ git switch -c descriptive-branch-name
 
 Keep each pull request limited to one logical change. Follow the existing project structure:
 
-- Library code belongs in `src/jax_lab/`.
+- Library code belongs in `jax_lab/`.
 - Tests belong in `tests/` and should use the `test_*.py` naming convention.
 - Runnable simulations and demonstrations belong in `examples/`.
 - Documentation belongs in `docs/`.

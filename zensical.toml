@@ -7,7 +7,7 @@ site_dir = "site"
 repo_name = "piyush-ppradhan/JAX-LaB"
 repo_url = "https://github.com/piyush-ppradhan/JAX-LaB"
 edit_uri = "edit/multiphase/docs/"
-watch = ["src/jax_lab"]
+watch = ["jax_lab"]
 extra_javascript = [
   "javascripts/mathjax.js",
   "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js",
@@ -58,7 +58,7 @@ base_path = ["."]
 check_paths = true
 
 [project.plugins.mkdocstrings.handlers.python]
-paths = ["src"]
+paths = ["."]
 
 [project.plugins.mkdocstrings.handlers.python.options]
 separate_signature = true

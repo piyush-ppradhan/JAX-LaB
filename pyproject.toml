@@ -46,7 +46,7 @@ Repository = "https://github.com/piyush-ppradhan/JAX-LaB"
 Paper = "https://doi.org/10.1029/2025MS005313"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+include = ["jax_lab*"]
 
 [tool.setuptools_scm]
 # Versions come from git tags (v0.1.0 -> 0.1.0). Untagged commits produce
