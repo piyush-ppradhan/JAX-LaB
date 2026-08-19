@@ -16,6 +16,17 @@
 
 ::: jax_lab.core.boundary_conditions.ExtrapolationOutflow
 
+::: jax_lab.core.boundary_conditions.InterpolatedBounceBackBouzidi
+
+::: jax_lab.core.boundary_conditions.InterpolatedBounceBackDifferentiable
+
+::: jax_lab.core.boundary_conditions.ExtrapolationOutflowMultiphase
+
+::: jax_lab.core.boundary_conditions.NonEquilibriumExtrapolation
+
+::: jax_lab.core.boundary_conditions.ExactNonEquilibriumExtrapolation
+
+::: jax_lab.core.boundary_conditions.ConvectiveOutflow
 
 ::: jax_lab.core.boundary_conditions.ThermalBoundaryCondition
 
