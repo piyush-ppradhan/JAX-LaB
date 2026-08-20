@@ -60,7 +60,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           # TestPyPI only hosts jax-lab; dependencies come from real PyPI.
           # Retry to allow for index propagation delay after upload.
-          for i in $(seq 1 10); do
+          for i in $(seq 1 20); do
             pip install \
               --index-url https://test.pypi.org/simple/ \
               --extra-index-url https://pypi.org/simple/ \

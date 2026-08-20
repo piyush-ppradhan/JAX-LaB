@@ -1361,11 +1361,13 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
         self.neighbors_found = False
 
     def find_neighbors(self):
+        """
+        Locate the nearest neighbouring fluid site (one per boundary node, along the inward normal) used to
+        extrapolate the non-equilibrium part of the distribution. Must be called after self.normals is available,
+        i.e. after BoundaryCondition.create_local_mask_and_normal_arrays has run.
+        """
         ind = np.array(self.indices).T - self.normals
         self.indices_nbr = tuple(ind.T)
-        self.indices_next_nbr = tuple((np.array(self.indices_nbr).T - self.normals).T)
-        nbd = len(self.indices[0])
-        self.bindex = np.arange(nbd)[:, None]
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, _):
@@ -1387,16 +1389,19 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
             self.find_neighbors()
             self.neighbors_found = True
 
+        nbd = len(self.indices[0])
+        bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
-        f_nbr = fout[self.indices_nbr]
-        rho = jnp.sum(fbd, axis=-1, keepdims=True)
-        rho_nbr = jnp.sum(f_nbr, axis=-1, keepdims=True)
-        vel_nbr = jnp.dot(f_nbr, self.lattice.c.T) / rho_nbr
 
-        feq = self.equilibrium(rho, vel_nbr)
+        rho = jnp.sum(fout, axis=-1, keepdims=True)
+        vel = jnp.dot(fout, self.precision_policy.cast_to_compute(self.lattice.c.T)) / rho
+
+        rho_nbr = rho[self.indices_nbr]
+        vel_nbr = vel[self.indices_nbr]
         feq_nbr = self.equilibrium(rho_nbr, vel_nbr)
-        fneq_nbr = f_nbr - feq_nbr
-        fbd = fbd.at[self.bindex, self.imissing].set(feq[self.bindex, self.imissing] + fneq_nbr[self.bindex, self.imissing])
+        feq = self.equilibrium(self.prescribed, vel_nbr)
+        fneq_nbr = fout[self.indices_nbr] - feq_nbr
+        fbd = fbd.at[bindex, self.imissing].set(feq[bindex, self.imissing] + fneq_nbr[bindex, self.imissing])
 
         return fbd
 

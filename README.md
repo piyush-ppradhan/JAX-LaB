@@ -41,9 +41,9 @@ A Python-based, differentiable, massively parallel lattice Boltzmann library for
       Droplet impingement on an inclined surface.
     </td>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/bubble_rising.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_funnel.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
       <br>
-      Bubble rising in a column.
+      Droplet growth from a capillary (in situ render).
     </td>
   </tr>
 </table>
@@ -54,30 +54,6 @@ A Python-based, differentiable, massively parallel lattice Boltzmann library for
 <div align="center">
   Temporal evolution of the density field determined using neural network for the inverse multiphase flow control problem of forming a droplet at t = 900. The MLP output is used as the initial condition for LBM and the backpropagation step during training leverages the auto-differentiation capabilities of JAX-LaB (see <a href="https://doi.org/10.1029/2025MS005313">paper</a> for details).
 </div>
-<!-- <p align="center">
-  On GPU in-situ rendering using JAX-LaB's JAX-native renderer (no field I/O). Droplet impact on dry surface using MRT collision model with ~16 million cells.
-  (single component, multiphase simulation, density ratio: 350, fluid modeled using Peng-Robinson EOS).
-</p> -->
-<!-- <p align="center">
-  In-situ GPU rendering of drainage in a porous geometry. BGK collision model, 110 million cells.
-</p> -->
-<!-- <p align="center">
-    Contact angle hysteresis: Left: droplet impinging on inclined surface (MRT collision model). Right: Droplet undergoing evaporation (Cascaded collision model). Simulated using Peng-Robinson EOS, geometric wetting.
-</p> -->
-<!-- <p align="center">
-    Time evolution of liquid distribution in a Fontainebleau sandstone during evaporation simulated using the Cascaded (central-moment) collision model.
-</p> -->
-<!-- <p align="center">
-    Vapor generation and departure during a two-dimensional pool-boiling simulation.
-</p> -->
-
-### In-Situ Rendering
-JAX-LaB includes an accelerated ray tracer for rapidly visualizing JAX arrays. Rendered images can be used to create animations or quickly diagnose large simulations running on clusters and HPC systems without any post-processing.
-<div width="50%" align="center">
-  <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/stanford_bunny_render.gif" alt="Stanford bunny-shaped droplet falling on a surface" width="50%">
-  <br>
-  Stanford bunny-shaped droplet falling on a surface
-</div>
 
 ## Key Features
 - **JAX Ecosystem Integration:** Works with machine learning libraries such as [Equinox](https://github.com/patrick-kidger/equinox), [Flax](https://github.com/google/flax), [Haiku](https://github.com/deepmind/dm-haiku), and [Optax](https://github.com/google-deepmind/optax).
@@ -86,7 +62,7 @@ JAX-LaB includes an accelerated ray tracer for rapidly visualizing JAX arrays. R
 - **Broad LBM Support:** Includes several boundary conditions and collision kernels, along with Shan-Chen multiphase, multiphysics, and multicomponent flow modeling.
 - **User-Friendly Python Interface:** Written entirely in Python, simplifying simulation setup and making library easy to extend.
 - **JAX Array and Shardmap:** Offers a NumPy-like interface while leaving performance optimization to the compiler.
-- **Visualization:** Supports multiple output options, including JAX-native in-situ surface, volume, and vector-field rendering.
+- **Visualization:** Supports multiple output options, including JAX-native ray tracer for in situ surface, volume, and vector-field rendering of GPU/TPU arrays.
 
 ## Capabilities
 ### Multiphase Flow Modeling
@@ -143,6 +119,8 @@ Computations use *pytrees* to **model any number of components**, each with its 
 - **Zou-He:** Imposes a prescribed velocity or pressure profile.
 - **Regularized:** Provides a more stable, but more expensive, alternative to Zou-He.
 - **Extrapolation Outflow:** Reduces wave reflections using extrapolation.
+- **Non-Equilibrium Extrapolation:** Open boundary condition with prescribed density.
+- **Exact Non-Equilibrium Extrapolation:** Mass-corrected open boundary condition with prescribed density.
 - **Interpolated Bounceback:** Applies the Bouzidi scheme to curved or off-lattice walls.
 - **Convective Outflow:** Supports outflow in applications such as porous media flow.
 - **Dirichlet:** Prescribes temperature at the boundary.

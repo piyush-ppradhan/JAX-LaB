@@ -127,10 +127,6 @@ if __name__ == "__main__":
     Tc = 0.5714285714
     T = 0.8 * Tc
 
-    theta = (np.pi / 2) * np.ones((nx, ny, nz, 1))
-    phi = np.ones((nx, ny, nz, 1))
-    delta_rho = np.zeros((nx, ny, nz, 1))
-
     kwargs = {"a": a, "b": b, "R": R, "T": T}
     eos = VanderWaals(**kwargs)
 
