@@ -13,14 +13,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as orb
-from jax import jit, vmap
+from jax import jit, shard_map, vmap
 from jax.experimental.multihost_utils import process_allgather
+from jax.sharding import NamedSharding, PartitionSpec
 
 # Third-party libraries
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from .base import LBMBase
+from .base import WALL_BC_TYPES, LBMBase
 
 # User-defined libraries
 from .boundary_conditions import BounceBack, BounceBackHalfway, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable
@@ -79,7 +80,40 @@ class Multiphase(LBMBase):
         self.G_ff = self.compute_ff_greens_function()
         self.g_kkprime = jnp.array(self.g_kkprime, dtype=self.precision_policy.compute_dtype)
 
+        P = PartitionSpec
+        scalar_spec = P("x", None, None) if self.dim == 2 else P("x", None, None, None)
+        G_ff_host = np.array(self.G_ff)
+        # scalar_neighbor_sum: G_ff-weighted scalar neighbor sum, used by the wetting/average-density
+        # denominator. scalar_force_stencil: the same neighbor structure, weighted by G_ff*c (a per-direction
+        # vector instead of a scalar), used by the Shan-Chen/Zhang-Chen fluid-fluid force - both share
+        # _neighbor_stencil_m's one-x-halo-exchange machinery, bound to their own static weights.
+        self.scalar_neighbor_sum = jit(
+            shard_map(
+                partial(self._neighbor_stencil_m, weights=G_ff_host),
+                mesh=self.mesh,
+                in_specs=scalar_spec,
+                out_specs=scalar_spec,
+                check_vma=False,
+            )
+        )
+        self.scalar_force_stencil = jit(
+            shard_map(
+                partial(self._neighbor_stencil_m, weights=G_ff_host[None, :] * np.array(self.c)),
+                mesh=self.mesh,
+                in_specs=scalar_spec,
+                out_specs=scalar_spec,
+                check_vma=False,
+            )
+        )
+
         self.solid_mask_streamed = self.get_solid_mask_streamed()
+        self.average_density_denominator = (
+            [self.scalar_neighbor_sum(1 - mask) for mask in self.solid_mask_streamed]
+            if self.wetting_formulation == "improved_virtual_density"
+            else None
+        )
+        if self.average_density_denominator is not None:
+            tree_map(lambda denominator: denominator.block_until_ready(), self.average_density_denominator)
         self.geometric_wetting_data, self.geometric_fluid_mask = (
             self._create_geometric_wetting_data() if self.wetting_formulation == "geometric" else (None, None)
         )
@@ -717,11 +751,13 @@ class Multiphase(LBMBase):
 
     def get_solid_mask_streamed(self):
         """
-        Define the solid mask used for fluid-solid interaction force. The boundary conditions must be passed separately.
+        Define the solid mask used for the fluid-solid interaction (wetting) force. One flag per node, not per
+        lattice direction - neighbor-direction information is derived on demand by scalar_neighbor_sum instead of
+        being pre-streamed into a persistent per-direction mask. The boundary conditions must be passed separately.
 
         Returns
         -------
-        solid_mask array: (numpy.ndarray) Dimension: (nx, ny, 1) for d == 2 and (nx, ny, nz, 1) for d == 3
+        solid_mask array: (jax.numpy.ndarray) Dimension: (nx, ny, 1) for d == 2 and (nx, ny, nz, 1) for d == 3
         """
         solid_mask = []
         solid_indices = [[] for i in range(self.n_components)]
@@ -729,25 +765,63 @@ class Multiphase(LBMBase):
             for bc in self.BCs[i]:
                 if isinstance(bc, BounceBack) or isinstance(bc, BounceBackHalfway) or isinstance(bc, BounceBackMoving):
                     solid_indices[i].append(np.array(self._get_solid_indices(bc)).T)
+        shape = (self.nx, self.ny, 1) if self.dim == 2 else (self.nx, self.ny, self.nz, 1)
         for i in range(self.n_components):
-            index = None
-            if not len(solid_indices[i]) == 0:
+            mask_host = np.zeros(shape, dtype=np.int8)
+            if len(solid_indices[i]) != 0:
                 index = np.vstack(solid_indices[i])
-            if self.dim == 2:
-                shape = (self.nx, self.ny, 1)
-                mask = jnp.zeros(shape, dtype=jnp.int8)
-                if index is not None:
-                    mask = mask.at[index[:, 0], index[:, 1], 0].set(1)
-                mask = self.streaming(jnp.repeat(mask, axis=-1, repeats=self.q))
-                solid_mask.append(mask)
-            else:
-                shape = (self.nx, self.ny, self.nz, 1)
-                mask = jnp.zeros(shape, dtype=jnp.int8)
-                if index is not None:
-                    mask = mask.at[index[:, 0], index[:, 1], index[:, 2], 0].set(1)
-                mask = self.streaming(jnp.repeat(mask, axis=-1, repeats=self.q))
-                solid_mask.append(mask)
+                mask_host[tuple(index.T)] = 1
+            mask = self.distributed_array_init(shape, jnp.int8, init_val=mask_host)
+            solid_mask.append(mask)
         return solid_mask
+
+    def _neighbor_stencil_m(self, field, weights):
+        """
+        Sum a scalar (single-channel) field over its lattice neighbors, weighted per direction, using local
+        jnp.roll for every axis and exactly one x-halo exchange per distinct x-shift shared by every lattice
+        direction with that shift (-1, 0 or +1 for every lattice this library supports).
+
+        Reused for two purposes, bound to their own static weights via functools.partial when scalar_neighbor_sum
+        / scalar_force_stencil are built (see __init__): the G_ff-weighted neighbor sum used by
+        compute_average_density's wetting denominator (scalar weights), and the G_ff*c weighted directional sum
+        used by compute_fluid_fluid_force's Shan-Chen/Zhang-Chen force (vector weights) - both without ever
+        streaming a q-channel array.
+
+        Parameters
+        ----------
+        field (jax.numpy.ndarray): Local shard of a scalar field, shape (nx, ny, 1) or (nx, ny, nz, 1).
+
+        weights (numpy.ndarray): Per-direction weights, shape (q,) for a scalar-weighted neighbor sum, or
+            (dim, q) for a direction-vector weighted sum (one weight vector per lattice direction).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Local shard of the weighted neighbor sum, shape (..., 1) for scalar weights or
+        (..., dim) for vector weights.
+        """
+        field = field.astype(self.precision_policy.compute_dtype)
+        x_shifted = {0: field}
+        for x_shift in (1, -1):
+            shifted = jnp.roll(field, x_shift, axis=0)
+            if x_shift == 1:
+                x_shifted[1] = shifted.at[:1].set(self.send_right(field[-1:], "x"))
+            else:
+                x_shifted[-1] = shifted.at[-1:].set(self.send_left(field[:1], "x"))
+
+        directions = np.array(self.lattice.c).T
+        is_vector = weights.ndim == 2
+        out_channels = weights.shape[0] if is_vector else 1
+        total = jnp.zeros((*field.shape[:-1], out_channels), dtype=self.precision_policy.compute_dtype)
+        for q_index, direction in enumerate(directions):
+            w = weights[:, q_index] if is_vector else weights[q_index]
+            if np.all(w == 0.0):
+                continue
+            base = x_shifted[int(direction[0])]
+            remaining_axes = tuple(int(component) for component in direction[1 : self.dim])
+            if any(remaining_axes):
+                base = jnp.roll(base, remaining_axes, axis=tuple(range(1, self.dim)))
+            total = total + base * jnp.asarray(w, dtype=self.precision_policy.compute_dtype)
+        return total
 
     def _create_boundary_data(self):
         """
@@ -773,6 +847,56 @@ class Multiphase(LBMBase):
                 assert bc.implementation_step in ["PostStreaming", "PostCollision"]
                 bc.create_local_mask_and_normal_arrays(grid_mask)
             logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
+
+    def _make_local_bounceback_indices(self):
+        """
+        Distribute one padded local BounceBack index array per component (self.BCs is a list of per-component
+        boundary condition lists for Multiphase, unlike the flat list in LBMBase).
+
+        Returns
+        -------
+        (list): One distributed local index array (or None) per component, see LBMBase._make_local_bounceback_indices.
+        """
+        sharding = NamedSharding(self.mesh, PartitionSpec("x", None, None))
+        local_bounceback_indices = []
+        for BCs in self.BCs:
+            local_indices = self._collect_bounceback_indices(BCs)
+            if local_indices is None:
+                local_bounceback_indices.append(None)
+                continue
+            indices = self.distributed_array_init(local_indices.shape, jnp.int32, init_val=local_indices, sharding=sharding)
+            indices.block_until_ready()
+            local_bounceback_indices.append(indices)
+        return local_bounceback_indices
+
+    def _make_local_wall_bc_data(self):
+        """
+        Distribute, per component and per concrete wall boundary condition type in WALL_BC_TYPES, the padded
+        local fluid-node indices and auxiliary data, plus one merged padded local solid-node index array per
+        component (self.BCs is a list of per-component boundary condition lists for Multiphase, unlike the flat
+        list in LBMBase).
+
+        Returns
+        -------
+        (list, list): One wall_bc_data dict and one solid-pin index array (or None) per component, see
+        LBMBase._make_local_wall_bc_data.
+        """
+        wall_bc_data_by_component = []
+        solid_pin_indices_by_component = []
+        for BCs in self.BCs:
+            wall_bc_data = {}
+            for bc_type, _, has_weights in WALL_BC_TYPES:
+                local_indices, (local_imissing, local_iknown, local_vel, local_weights) = self._collect_wall_bc_data(BCs, bc_type, has_weights)
+                wall_bc_data[bc_type] = (
+                    self._distribute_local(local_indices, jnp.int32),
+                    self._distribute_local(local_imissing, jnp.uint8),
+                    self._distribute_local(local_iknown, jnp.uint8),
+                    self._distribute_local(local_vel),
+                    self._distribute_local(local_weights),
+                )
+            wall_bc_data_by_component.append(wall_bc_data)
+            solid_pin_indices_by_component.append(self._distribute_local(self._collect_solid_pin_indices(BCs), jnp.int32))
+        return wall_bc_data_by_component, solid_pin_indices_by_component
 
     @partial(jit, static_argnums=(0, 3), inline=True)
     def equilibrium(self, rho_tree, u_tree, cast_output=True):
@@ -810,7 +934,9 @@ class Multiphase(LBMBase):
     @partial(jit, static_argnums=(0,))
     def compute_average_density(self, rho_tree):
         """
-        Compute component densities averaged over neighboring fluid nodes.
+        Compute component densities averaged over neighboring fluid nodes, using the scalar solid mask and the
+        denominator cached once at construction time (self.average_density_denominator), instead of streaming a
+        q-channel mask and dividing every timestep.
 
         Parameters
         ----------
@@ -822,15 +948,12 @@ class Multiphase(LBMBase):
         pytree of jax.Array
             Averaged component density fields with the same shapes as the inputs.
         """
-        rho_s_tree = tree_map(lambda rho: self.streaming(jnp.repeat(rho, axis=-1, repeats=self.lattice.q)), rho_tree)
-        rho_ave_tree = tree_map(
-            lambda rho_s, solid_mask: (
-                jnp.sum(self.G_ff * rho_s * (1 - solid_mask), axis=-1, keepdims=True) / jnp.sum(self.G_ff * (1 - solid_mask), axis=-1, keepdims=True)
-            ),
-            rho_s_tree,
+        return tree_map(
+            lambda rho, solid_mask, denominator: self.scalar_neighbor_sum(rho * (1 - solid_mask)) / denominator,
+            rho_tree,
             self.solid_mask_streamed,
+            self.average_density_denominator,
         )
-        return rho_ave_tree
 
     @partial(jit, static_argnums=(0,))
     def apply_contact_angle(self, rho_tree):
@@ -1235,25 +1358,30 @@ class Multiphase(LBMBase):
         Returns
         -------
         (pytree of jax.numpy.ndarray): Fluid-fluid interaction forces.
+
+        Notes
+        -----
+        jnp.dot(G_ff * field_s, c), with field_s the q-channel streamed field, is a G_ff*c weighted directional
+        sum of neighbor values - exactly what scalar_force_stencil computes directly from the unstreamed scalar
+        field (see _neighbor_stencil_m). Computed once per component here, outside the per-output-component
+        vmap below, matching the original psi_s_tree/U_s_tree precompute (scalar_force_stencil is itself a
+        shard_map'd call and must not be invoked from inside vmap).
         """
-        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
-        psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
-        U_s_tree = tree_map(lambda U: self.streaming(jnp.repeat(U, axis=-1, repeats=self.q)), U_tree)
+        psi_stencil_tree = tree_map(lambda psi: self.scalar_force_stencil(psi), psi_tree)
+        U_stencil_tree = tree_map(lambda U: self.scalar_force_stencil(U), U_tree)
 
         def ffk_1(Ai, g_kkprime):
             """
             Shan-Chen interaction force
             g_kkprime is a row of self.gkkprime, as it represents the interaction between kth component with all components
             """
-            return reduce(
-                operator.add, tree_map(lambda A, G, psi_s: jnp.dot((1 - A) * G * self.G_ff * psi_s, c), list(Ai), list(g_kkprime), psi_s_tree)
-            )
+            return reduce(operator.add, tree_map(lambda A, G, stencil: (1 - A) * G * stencil, list(Ai), list(g_kkprime), psi_stencil_tree))
 
         def ffk_2(Ai):
             """
             Zhang-Chen interaction force.
             """
-            return reduce(operator.add, tree_map(lambda A, U_s: A * jnp.dot(self.G_ff * U_s, c), list(Ai), U_s_tree))
+            return reduce(operator.add, tree_map(lambda A, stencil: A * stencil, list(Ai), U_stencil_tree))
 
         return tree_map(
             lambda psi, nt_1, nt_2: psi * nt_1 + nt_2,
@@ -1267,11 +1395,16 @@ class Multiphase(LBMBase):
         """
         Modified version of the apply_force defined in LBMBase to account for modified force.
 
+        Adds the force contribution using the exact-difference method (Kupershtokh), computing
+        feq(rho, u + F/rho) - feq(rho, u) directly from cu, dcu and delta_usqr instead of building a second full
+        equilibrium distribution and subtracting feq_tree from it.
+
         Parameters
         ----------
         f_postcollision_tree (pytree of jax.numpy.ndarray): Post-collision distribution field.
 
-        feq_tree (pytree of jax.numpy.ndarray): Equilibrium distribution functions.
+        feq_tree (pytree of jax.numpy.ndarray): Equilibrium distribution functions. Unused - kept for interface
+            compatibility with existing callers, since the compact difference formula only needs rho, u and F.
 
         rho_tree (pytree of jax.numpy.ndarray): Density field.
 
@@ -1282,17 +1415,41 @@ class Multiphase(LBMBase):
         Returns
         -------
         f_postcollision_tree (pytree of jax.numpy.ndarray): The post-collision distribution field with the force applied.
+
+        References
+        ----------
+        1. Kupershtokh, A. (2004). New method of incorporating a body force term into the lattice Boltzmann
+        equation. In Proceedings of the 5th International EHD Workshop (pp. 241-246). University of Poitiers.
         """
         F_tree = self.compute_force(rho_tree, T=T)
+        du_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
 
-        u_temp_tree = tree_map(lambda u, F, rho: u + F / rho, u_tree, F_tree, rho_tree)
-        feq_force_tree = self.equilibrium(rho_tree, u_temp_tree)
-        return tree_map(lambda f_postcollision, feq_force, feq: f_postcollision + feq_force - feq, f_postcollision_tree, feq_force_tree, feq_tree)
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        cu_tree = tree_map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
+        dcu_tree = tree_map(lambda du: 3.0 * jnp.dot(du, c), du_tree)
+        delta_usqr_tree = tree_map(
+            lambda u, du: 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True)),
+            u_tree,
+            du_tree,
+        )
+        delta_feq_tree = tree_map(
+            lambda rho, cu, dcu, delta_usqr: rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr),
+            rho_tree,
+            cu_tree,
+            dcu_tree,
+            delta_usqr_tree,
+        )
+        return tree_map(lambda f_postcollision, delta_feq: f_postcollision + delta_feq, f_postcollision_tree, delta_feq_tree)
 
-    @partial(jit, static_argnums=(0, 4), inline=True)
+    @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
     def apply_bc(self, fout_tree, fin_tree, timestep, implementation_step):
         """
         This function extends apply_bc to pytrees.
+
+        Full-way BounceBack and every wall boundary condition in WALL_BC_TYPES (BounceBackHalfway,
+        InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable) are handled separately per
+        component, in batched calls using local (per-shard, int32) indices, instead of the generic per-BC
+        global-index loop.
 
         Parameters
         ----------
@@ -1311,6 +1468,8 @@ class Multiphase(LBMBase):
         """
 
         def _apply_bc_(fin, fout, bc):
+            if isinstance(bc, (BounceBack, BounceBackHalfway)):
+                return fout
             fout = bc.prepare_populations(fout, fin, implementation_step)
             if bc.implementation_step == implementation_step:
                 if bc.is_dynamic:
@@ -1324,7 +1483,27 @@ class Multiphase(LBMBase):
                 fout = _apply_bc_(fin, fout, bc)
             return fout
 
-        return tree_map(lambda fout, fin, BCs: __apply_bc__(fout, fin, BCs), fout_tree, fin_tree, self.BCs)
+        fout_tree = tree_map(lambda fout, fin, BCs: __apply_bc__(fout, fin, BCs), fout_tree, fin_tree, self.BCs)
+
+        if implementation_step == "PostCollision":
+            fout_tree = [
+                self.local_bounceback(fout, fin, local_indices) if local_indices is not None else fout
+                for fout, fin, local_indices in zip(fout_tree, fin_tree, self.local_bounceback_indices, strict=True)
+            ]
+
+        if implementation_step == "PostStreaming":
+            new_fout_tree = []
+            for fout, fin, wall_bc_data, solid_pin_indices in zip(fout_tree, fin_tree, self.wall_bc_data, self.solid_pin_indices, strict=True):
+                if solid_pin_indices is not None:
+                    fout = self.local_solid_pin(fout, solid_pin_indices)
+                for bc_type, _, _ in WALL_BC_TYPES:
+                    local_indices, local_imissing, local_iknown, local_vel, local_weights = wall_bc_data[bc_type]
+                    if local_indices is not None:
+                        fout = self.local_wall_bc_kernels[bc_type](fout, fin, local_indices, local_imissing, local_iknown, local_vel, local_weights)
+                new_fout_tree.append(fout)
+            fout_tree = new_fout_tree
+
+        return fout_tree
 
     @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
     def step(self, f_poststreaming_tree, timestep, return_fpost=False, T=None):
@@ -1739,6 +1918,28 @@ class MultiphaseMRT(Multiphase):
                 self.s_m,
             )
 
+        # Fused collision matrix K = M @ S @ M_inv, replacing the three separate moment-space matrix multiplies
+        # (f @ M, relax, @ M_inv) in collision() with symbolic, sparse-coefficient columns compiled from K's
+        # nonzero entries - see collision() and its module-level References for the fusion identity.
+        self.collision_matrix = tree_map(lambda M, S, M_inv: jnp.dot(jnp.dot(M, S), M_inv), self.M, self.S, self.M_inv)
+        self.collision_terms = []
+        for collision_matrix in self.collision_matrix:
+            matrix = np.asarray(collision_matrix)
+            columns = []
+            for output_direction in range(self.lattice.q):
+                columns.append(
+                    tuple(
+                        (input_direction, np.float32(matrix[input_direction, output_direction]))
+                        for input_direction in range(self.lattice.q)
+                        if not np.isclose(matrix[input_direction, output_direction], 0.0, atol=1e-7)
+                    )
+                )
+            self.collision_terms.append(tuple(columns))
+        # Surface tension adjustment (adjust_surface_tension) is identically zero whenever every component's
+        # kappa is zero - a static (non-traced) fact known here, so collision() can skip computing and adding
+        # it entirely in that case, rather than multiplying by a provably-zero array every timestep.
+        self._has_surface_tension = any(float(kappa) != 0.0 for kappa in self.kappa)
+
     @property
     def omega(self):
         return self._omega
@@ -1830,15 +2031,62 @@ class MultiphaseMRT(Multiphase):
             raise NotImplementedError("MRT model with D3Q27 model has not been implemented")
 
     @partial(jit, static_argnums=(0,), inline=True)
+    def _compute_force_delta_feq(self, rho_tree, u_tree, T=None):
+        """
+        Real-space compact EDM difference delta_feq = feq(rho, u + F/rho) - feq(rho, u), computed directly from
+        cu, dcu and delta_usqr instead of building a full feq_force array via equilibrium(). Shared by
+        apply_force (which transforms it into moment space for the unfused, moment-space collision path some
+        callers may still use) and collision (which adds it directly in real space, needing no M transform at
+        all - see collision()'s Notes).
+
+        Parameters
+        ----------
+        rho_tree (pytree of jax.numpy.ndarray): Density field for all components.
+
+        u_tree (pytree of jax.numpy.ndarray): Velocity field for all components.
+
+        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+
+        Returns
+        -------
+        (pytree of jax.numpy.ndarray): Real-space delta_feq for all components.
+        """
+        F_tree = self.compute_force(rho_tree, T=T)
+        du_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
+
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        cu_tree = tree_map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
+        dcu_tree = tree_map(lambda du: 3.0 * jnp.dot(du, c), du_tree)
+        delta_usqr_tree = tree_map(
+            lambda u, du: 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True)),
+            u_tree,
+            du_tree,
+        )
+        return tree_map(
+            lambda rho, cu, dcu, delta_usqr: rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr),
+            rho_tree,
+            cu_tree,
+            dcu_tree,
+            delta_usqr_tree,
+        )
+
+    @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, m_tree, meq_tree, rho_tree, u_tree, T=None):
         """
         Modified version of the apply_force defined in LBMBase to account for modified force.
+
+        Adds the force contribution using the exact-difference method (Kupershtokh): the compact real-space
+        delta_feq (see _compute_force_delta_feq) transformed into moment space with M. Since M is linear,
+        dot(delta_feq, M) == dot(feq_force, M) - dot(feq(rho, u), M), so this is an exact substitute for
+        separately building feq_force and meq_force. Provided for callers using the unfused, moment-space
+        collision path; collision() itself adds delta_feq directly in real space instead.
 
         Parameters
         ----------
         m_tree (pytree of jax.numpy.ndarray): Post-collision distribution function.
 
-        meq_tree (pytree of jax.numpy.ndarray): Equilibrium distribution function.
+        meq_tree (pytree of jax.numpy.ndarray): Equilibrium distribution function. Unused - kept for interface
+            compatibility with existing callers, since the compact difference formula only needs rho, u and F.
 
         rho_tree (pytree of jax.numpy.ndarray): Density field for all components.
 
@@ -1850,36 +2098,54 @@ class MultiphaseMRT(Multiphase):
         -------
         f_postcollision_tree (pytree of jax.numpy.ndarray): Post-collision distribution functions with the force applied.
         """
-        F_tree = self.compute_force(rho_tree, T=T)
-
-        delta_u_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
-        u_temp_tree = tree_map(lambda u, delta_u: u + delta_u, u_tree, delta_u_tree)
-        feq_force_tree = self.equilibrium(rho_tree, u_temp_tree, cast_output=False)
-        meq_force_tree = tree_map(lambda feq, M: jnp.dot(feq, M), feq_force_tree, self.M)
-        mout_tree = tree_map(lambda m, meq_force, meq: m + meq_force - meq, m_tree, meq_force_tree, meq_tree)
-        return mout_tree
+        delta_feq_tree = self._compute_force_delta_feq(rho_tree, u_tree, T=T)
+        delta_meq_tree = tree_map(lambda delta_feq, M: jnp.dot(delta_feq, M), delta_feq_tree, self.M)
+        return tree_map(lambda m, delta_meq: m + delta_meq, m_tree, delta_meq_tree)
 
     @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
-        MRT collision step for lattice. The optional temperature field T is
-        forwarded to the pressure and force computations for thermal EOS.
+        MRT collision step for lattice, using a symbolic (sparse-coefficient) fused collision matrix instead of
+        three separate moment-space matrix multiplies. The optional temperature field T is forwarded to the
+        pressure and force computations for thermal EOS.
+
+        Notes
+        -----
+        The unfused collision is m = f @ M; mout = m - (m - meq) @ S + delta_meq + C; fout = mout @ M_inv, with
+        delta_meq = dot(delta_feq, M) (see apply_force) and C the surface-tension adjustment (see
+        adjust_surface_tension). Substituting and using M @ M_inv = I:
+
+            fout = f - (f - feq) @ (M @ S @ M_inv) + delta_feq + C @ M_inv
+
+        collision_matrix = M @ S @ M_inv is built once in __init__; collision_terms holds its nonzero entries as
+        static Python tuples per output direction, so the (f - feq) @ collision_matrix contraction is unrolled
+        into an explicit sum over only the nonzero terms while tracing, instead of a dense matrix multiply.
+        C @ M_inv is skipped entirely when every component's kappa is zero (see __init__), since C is then
+        identically zero.
         """
         fin_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
-        m_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
-        meq_tree = tree_map(lambda feq, M: jnp.dot(feq, M), feq_tree, self.M)
-        psi_tree, _ = self.compute_potential(rho_tree, T=T)
-        C_tree = self.adjust_surface_tension(psi_tree)
-        mout_tree = tree_map(lambda m, meq, S: m - jnp.dot(m - meq, S), m_tree, meq_tree, self.S)
-        mout_tree = self.apply_force(mout_tree, meq_tree, rho_tree, u_tree, T=T)
-        fout_tree = tree_map(lambda m, Minv, C: jnp.dot(m + C, Minv), mout_tree, self.M_inv, C_tree)
+        delta_feq_tree = self._compute_force_delta_feq(rho_tree, u_tree, T=T)
+
+        fout_tree = []
+        for f, feq, delta_feq, columns in zip(fin_tree, feq_tree, delta_feq_tree, self.collision_terms, strict=True):
+            difference = f - feq
+            outputs = []
+            for output_direction, terms in enumerate(columns):
+                relaxed = sum(difference[..., input_direction] * coefficient for input_direction, coefficient in terms)
+                outputs.append(f[..., output_direction] - relaxed + delta_feq[..., output_direction])
+            fout_tree.append(jnp.stack(outputs, axis=-1))
+
+        if self._has_surface_tension:
+            psi_tree, _ = self.compute_potential(rho_tree, T=T)
+            C_tree = self.adjust_surface_tension(psi_tree)
+            fout_tree = tree_map(lambda fout, C, M_inv: fout + jnp.dot(C, M_inv), fout_tree, C_tree, self.M_inv)
+
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
             rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = tree_map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
-        # fout_tree = self.apply_force(fout_tree, feq_tree, rho_tree, u_tree)
         return tree_map(lambda fout: self.precision_policy.cast_to_output(fout), fout_tree)
 
 

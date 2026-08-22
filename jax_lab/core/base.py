@@ -15,10 +15,39 @@ from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
+from .boundary_conditions import BounceBack, BounceBackHalfway, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable
 from .precision_policy import PrecisionPolicy
 from .utils import colored, downsample_field
 
 logger = logging.getLogger(__name__)
+
+
+# Concrete wall boundary condition types that support local (per-shard, int32) index handling, paired with the
+# pure math each uses (factored out onto the classes themselves so apply()'s global-index path and the local
+# kernels below share the exact same formulas). local_weights is unused (but always present, for a uniform
+# kernel signature) for WALL_BC_TYPES entries that don't carry interpolation weights.
+def _halfway_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
+    del weights
+    fbd = BounceBackHalfway.reflect_missing(fout_bd, fin_bd, imissing, iknown)
+    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
+
+
+def _bouzidi_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
+    fbd = InterpolatedBounceBackBouzidi.interpolate_missing(fout_bd, fin_bd, fout_bd, imissing, iknown, weights)
+    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
+
+
+def _differentiable_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
+    fbd = InterpolatedBounceBackDifferentiable.interpolate_missing(fout_bd, fin_bd, fout_bd, imissing, iknown, weights)
+    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
+
+
+# (concrete type, pure math function, whether it carries per-node interpolation weights)
+WALL_BC_TYPES = (
+    (BounceBackHalfway, _halfway_wall_math, False),
+    (InterpolatedBounceBackBouzidi, _bouzidi_wall_math, True),
+    (InterpolatedBounceBackDifferentiable, _differentiable_wall_math, True),
+)
 
 
 class LBMBase(object):
@@ -153,6 +182,25 @@ class LBMBase(object):
                     check_vma=False,
                 )
             )
+            self.local_bounceback = jit(
+                shard_map(
+                    self.local_bounceback_m,
+                    mesh=self.mesh,
+                    in_specs=(P("x", None, None), P("x", None, None), P("x", None, None)),
+                    out_specs=P("x", None, None),
+                    check_vma=False,
+                )
+            )
+            self.local_wall_bc_kernels = self._build_local_wall_kernels(field_spec=P("x", None, None))
+            self.local_solid_pin = jit(
+                shard_map(
+                    self.local_solid_pin_m,
+                    mesh=self.mesh,
+                    in_specs=(P("x", None, None), P("x", None, None)),
+                    out_specs=P("x", None, None),
+                    check_vma=False,
+                )
+            )
 
         # Set up the sharding and streaming for 3D simulations
         elif self.dim == 3:
@@ -169,6 +217,25 @@ class LBMBase(object):
                     check_vma=False,
                 )
             )
+            self.local_bounceback = jit(
+                shard_map(
+                    self.local_bounceback_m,
+                    mesh=self.mesh,
+                    in_specs=(P("x", None, None, None), P("x", None, None, None), P("x", None, None)),
+                    out_specs=P("x", None, None, None),
+                    check_vma=False,
+                )
+            )
+            self.local_wall_bc_kernels = self._build_local_wall_kernels(field_spec=P("x", None, None, None))
+            self.local_solid_pin = jit(
+                shard_map(
+                    self.local_solid_pin_m,
+                    mesh=self.mesh,
+                    in_specs=(P("x", None, None, None), P("x", None, None)),
+                    out_specs=P("x", None, None, None),
+                    check_vma=False,
+                )
+            )
 
         else:
             raise ValueError(f"dim = {self.dim} not supported")
@@ -177,6 +244,11 @@ class LBMBase(object):
         self.bounding_box_indices = self.compute_bounding_box_indices()
         # Create boundary data for the simulation
         self._create_boundary_data()
+        # Local (per-shard, int32) BounceBack indices, used by apply_bc's fast bounce-back path.
+        self.local_bounceback_indices = self._make_local_bounceback_indices()
+        # Local (per-shard, int32) data for BounceBackHalfway/InterpolatedBounceBack* and the solid-node pin,
+        # used by apply_bc's fast wall boundary condition path.
+        self.wall_bc_data, self.solid_pin_indices = self._make_local_wall_bc_data()
         self.force = self.get_force()
 
     @property
@@ -724,6 +796,320 @@ class LBMBase(object):
 
         return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(f, self.c.T)
 
+    def local_bounceback_m(self, fout, fin, local_indices):
+        """
+        Apply full-way bounce-back using local (per-shard, int32) solid indices instead of the global index list
+        baked into every device's compiled program. Dimension-generic: works for 2D and 3D since the index tuple
+        length is derived from self.dim.
+
+        Padded index rows point one position outside the local shard (see _collect_bounceback_indices), so
+        out-of-shard reads return 0.0 (mode="fill") and out-of-shard writes are dropped (mode="drop"), making the
+        padding a safe no-op.
+
+        Parameters
+        ----------
+        fout (jax.numpy.ndarray): Local shard of the post-collision distribution functions.
+
+        fin (jax.numpy.ndarray): Local shard of the pre-collision distribution functions.
+
+        local_indices (jax.numpy.ndarray): Local shard of padded solid-node indices, shape (1, n_local, dim).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Local shard of fout with bounce-back applied at the solid nodes.
+        """
+        local_indices = local_indices[0]
+        idx = tuple(local_indices[:, axis] for axis in range(self.dim))
+        bounced = fin.at[idx].get(mode="fill", fill_value=0.0)[..., self.lattice.opp_indices]
+        return fout.at[idx].set(bounced, mode="drop")
+
+    def local_wall_bc_m(self, fout, fin, local_indices, local_imissing, local_iknown, local_vel, local_weights, apply_fn):
+        """
+        Apply a wall boundary condition (see WALL_BC_TYPES) using local (per-shard, int32) fluid-node indices
+        and aligned auxiliary data, instead of the global index/imissing/iknown/weights arrays baked into every
+        device's compiled program. Dimension-generic. apply_fn is a static (non-traced) Python callable, bound
+        via functools.partial before this body is wrapped in shard_map, so it selects the compiled formula
+        without adding a traced argument (see _build_local_wall_kernel).
+
+        Padded index rows point one position outside the local shard, so out-of-shard reads return 0.0
+        (mode="fill") and out-of-shard writes are dropped (mode="drop"); the padded rows of local_imissing,
+        local_iknown, local_vel and local_weights are zero-filled, which is a safe no-op input for that padding.
+
+        Parameters
+        ----------
+        fout (jax.numpy.ndarray): Local shard of the post-streaming distribution functions.
+
+        fin (jax.numpy.ndarray): Local shard of the post-collision distribution functions.
+
+        local_indices (jax.numpy.ndarray): Local shard of padded fluid-node indices, shape (1, n_local, dim).
+
+        local_imissing, local_iknown (jax.numpy.ndarray): Local shard of padded missing/known direction
+            indices, shape (1, n_local, q).
+
+        local_vel (jax.numpy.ndarray): Local shard of padded prescribed velocities, shape (1, n_local, dim).
+
+        local_weights (jax.numpy.ndarray): Local shard of padded interpolation weights, shape (1, n_local, q).
+            Unused when apply_fn ignores it (see WALL_BC_TYPES), but always present for a uniform signature.
+
+        apply_fn (callable): One of _halfway_wall_math, _bouzidi_wall_math, _differentiable_wall_math.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Local shard of fout with the wall boundary condition applied at the fluid nodes.
+        """
+        local_indices = local_indices[0]
+        idx = tuple(local_indices[:, axis] for axis in range(self.dim))
+        fout_bd = fout.at[idx].get(mode="fill", fill_value=0.0)
+        fin_bd = fin.at[idx].get(mode="fill", fill_value=0.0)
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        fbd = apply_fn(fout_bd, fin_bd, local_imissing[0], local_iknown[0], local_vel[0], local_weights[0], self.lattice.w, c)
+        return fout.at[idx].set(fbd, mode="drop")
+
+    def local_solid_pin_m(self, fout, local_indices):
+        """
+        Pin local (per-shard, int32) solid-node populations to the rest equilibrium after streaming, using local
+        indices instead of the global solid-index list baked into every device's compiled program (see
+        BounceBackHalfway.prepare_populations).
+
+        Parameters
+        ----------
+        fout (jax.numpy.ndarray): Local shard of the post-streaming distribution functions.
+
+        local_indices (jax.numpy.ndarray): Local shard of padded solid-node indices, shape (1, n_local, dim).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Local shard of fout with solid nodes pinned to the rest equilibrium.
+        """
+        local_indices = local_indices[0]
+        idx = tuple(local_indices[:, axis] for axis in range(self.dim))
+        return fout.at[idx].set(self.precision_policy.cast_to_output(self.w), mode="drop")
+
+    def _build_local_wall_kernels(self, field_spec):
+        """
+        Build one jitted shard_map callable per concrete wall boundary condition type in WALL_BC_TYPES, all
+        sharing local_wall_bc_m's body with their own formula bound via functools.partial (a static Python
+        callable, not a traced argument, so this produces distinct compiled kernels without an extra runtime
+        argument or a Python-level branch inside the traced body).
+
+        Parameters
+        ----------
+        field_spec (jax.sharding.PartitionSpec): Sharding of fout/fin, dimension-dependent (2D or 3D).
+
+        Returns
+        -------
+        (dict): Maps each WALL_BC_TYPES class to its jitted shard_map callable.
+        """
+        P = PartitionSpec
+        aux_spec = P("x", None, None)
+        return {
+            bc_type: jit(
+                shard_map(
+                    partial(self.local_wall_bc_m, apply_fn=apply_fn),
+                    mesh=self.mesh,
+                    in_specs=(field_spec, field_spec, aux_spec, aux_spec, aux_spec, aux_spec, aux_spec),
+                    out_specs=field_spec,
+                    check_vma=False,
+                )
+            )
+            for bc_type, apply_fn, _ in WALL_BC_TYPES
+        }
+
+    def _split_local_indices(self, indices, *aux_arrays):
+        """
+        Split global node indices (and any per-row auxiliary data aligned with them) by x-shard, padding each
+        device's list to a common length. Shared by every local (per-shard, int32) boundary condition path -
+        full-way BounceBack (no auxiliary data) and the wall boundary conditions in WALL_BC_TYPES (imissing,
+        iknown, vel, and optionally interpolation weights).
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Global node coordinates, shape (n, dim).
+
+        *aux_arrays (numpy.ndarray): Per-row data aligned with indices, each shape (n, ...).
+
+        Returns
+        -------
+        (numpy.ndarray or None, tuple of numpy.ndarray or None): Padded local indices, shape
+        (n_devices, max_local, dim), and one padded local array per aux_arrays entry, shape
+        (n_devices, max_local, ...) zero-filled at padded rows. Both are None if indices is empty.
+        """
+        if len(indices) == 0:
+            return None, tuple(None for _ in aux_arrays)
+        local_nx = self.nx // self.n_devices
+        owner = indices[:, 0] // local_nx
+        by_device = [(indices[owner == device], [aux[owner == device] for aux in aux_arrays]) for device in range(self.n_devices)]
+        max_local = max(len(idx) for idx, _ in by_device)
+        if max_local == 0:
+            return None, tuple(None for _ in aux_arrays)
+
+        local_indices = np.zeros((self.n_devices, max_local, self.dim), dtype=np.int32)
+        local_indices[..., 0] = local_nx
+        local_aux = [np.zeros((self.n_devices, max_local, *aux.shape[1:]), dtype=aux.dtype) for aux in aux_arrays]
+        for device, (idx, auxs) in enumerate(by_device):
+            count = len(idx)
+            local_indices[device, :count] = idx
+            local_indices[device, :count, 0] -= device * local_nx
+            for a, aux in enumerate(auxs):
+                local_aux[a][device, :count] = aux
+        return local_indices, tuple(local_aux)
+
+    def _distribute_local(self, array, dtype=None):
+        """
+        Distribute a padded local (per-shard) host array sharded along x, blocking until it is ready.
+
+        Parameters
+        ----------
+        array (numpy.ndarray or None): Padded local array, shape (n_devices, max_local, ...), or None.
+
+        dtype (jax.numpy.dtype, optional): Target dtype. Defaults to array's own dtype, so floating-point
+            auxiliary data (vel, weights) is distributed at whatever precision apply()'s global path already
+            uses it at, rather than being independently rounded to a different precision.
+
+        Returns
+        -------
+        (jax.numpy.ndarray or None): Distributed array, or None if array is None.
+        """
+        if array is None:
+            return None
+        if dtype is None:
+            dtype = array.dtype
+        sharding = NamedSharding(self.mesh, PartitionSpec("x", *([None] * (array.ndim - 1))))
+        distributed = self.distributed_array_init(array.shape, dtype, init_val=array, sharding=sharding)
+        distributed.block_until_ready()
+        return distributed
+
+    def _collect_bounceback_indices(self, BCs):
+        """
+        Build padded local (per-shard, int32) solid-node indices for every full-way BounceBack boundary
+        condition in BCs, split by x-shard.
+
+        Parameters
+        ----------
+        BCs (list): Boundary conditions for one component (or the whole simulation for single-phase).
+
+        Returns
+        -------
+        (numpy.ndarray or None): Padded local indices, shape (n_devices, max_local, dim), or None if BCs
+        contains no BounceBack instances.
+        """
+        bounceback_indices = [np.asarray(bc.indices, dtype=np.int32).T for bc in BCs if isinstance(bc, BounceBack)]
+        if not bounceback_indices:
+            return None
+        local_indices, _ = self._split_local_indices(np.vstack(bounceback_indices))
+        return local_indices
+
+    def _make_local_bounceback_indices(self):
+        """
+        Distribute the padded local BounceBack indices for this simulation's boundary conditions.
+
+        Returns
+        -------
+        (jax.numpy.ndarray or None): Distributed local indices sharded along x, or None if there is no
+        BounceBack boundary condition.
+
+        Notes
+        -----
+        Overridden by Multiphase to return one such array per component.
+        """
+        return self._distribute_local(self._collect_bounceback_indices(self.BCs), jnp.int32)
+
+    def _collect_wall_bc_data(self, BCs, bc_type, has_weights):
+        """
+        Build padded local (per-shard, int32) fluid-node indices and aligned auxiliary data (imissing, iknown,
+        vel, and optionally interpolation weights) for every boundary condition of exactly bc_type in BCs.
+
+        Parameters
+        ----------
+        BCs (list): Boundary conditions for one component (or the whole simulation for single-phase).
+
+        bc_type (type): Exact wall boundary condition class to match (subclasses are matched by their own entry
+            in WALL_BC_TYPES instead, so each concrete formula gets its own local kernel).
+
+        has_weights (bool): Whether bc_type carries per-node interpolation weights (set_proximity_ratio is
+            called eagerly here if a matching boundary condition hasn't computed them yet).
+
+        Returns
+        -------
+        (numpy.ndarray or None, tuple): Padded local indices and (imissing, iknown, vel, weights) padded local
+        arrays (weights is None when has_weights is False). All None if BCs has no matching boundary condition.
+        """
+        matches = [bc for bc in BCs if type(bc) is bc_type]
+        if not matches:
+            return None, (None, None, None, None)
+
+        indices = np.vstack([np.asarray(bc.indices, dtype=np.int32).T for bc in matches])
+        imissing = np.vstack([np.asarray(bc.imissing) for bc in matches])
+        iknown = np.vstack([np.asarray(bc.iknown) for bc in matches])
+        # Not cast to compute_dtype here: kept at whatever dtype apply()'s global path already uses (self.vel /
+        # self.weights, untouched), so the local path is numerically identical to it, not independently rounded.
+        vel = np.vstack([
+            np.broadcast_to(np.asarray(bc.vel), (len(bc.indices[0]), self.dim)) if bc.vel is not None else np.zeros((len(bc.indices[0]), self.dim))
+            for bc in matches
+        ])
+        if has_weights:
+            for bc in matches:
+                if bc.weights is None:
+                    bc.set_proximity_ratio()
+            weights = np.vstack([np.asarray(bc.weights) for bc in matches])
+        else:
+            # Unused by apply_fn for this bc_type (see WALL_BC_TYPES), but always materialized so every wall
+            # kernel shares the same argument signature.
+            weights = np.zeros_like(imissing, dtype=np.float64)
+
+        local_indices, (local_imissing, local_iknown, local_vel, local_weights) = self._split_local_indices(indices, imissing, iknown, vel, weights)
+        return local_indices, (local_imissing, local_iknown, local_vel, local_weights)
+
+    def _collect_solid_pin_indices(self, BCs):
+        """
+        Build padded local (per-shard, int32) solid-node indices for every wall boundary condition in
+        WALL_BC_TYPES present in BCs, used to pin those nodes to the rest equilibrium after streaming (see
+        BounceBackHalfway.prepare_populations).
+
+        Parameters
+        ----------
+        BCs (list): Boundary conditions for one component (or the whole simulation for single-phase).
+
+        Returns
+        -------
+        (numpy.ndarray or None): Padded local indices, shape (n_devices, max_local, dim), or None if BCs has no
+        matching boundary condition.
+        """
+        solid_indices = [np.asarray(bc.solid_indices, dtype=np.int32).T for wall_type, _, _ in WALL_BC_TYPES for bc in BCs if type(bc) is wall_type]
+        if not solid_indices:
+            return None
+        local_indices, _ = self._split_local_indices(np.vstack(solid_indices))
+        return local_indices
+
+    def _make_local_wall_bc_data(self):
+        """
+        Distribute, per concrete wall boundary condition type in WALL_BC_TYPES, the padded local fluid-node
+        indices and auxiliary data, plus one merged padded local solid-node index array used to pin solid nodes
+        after streaming.
+
+        Returns
+        -------
+        (dict, jax.numpy.ndarray or None): Maps each WALL_BC_TYPES class to a (local_indices, local_imissing,
+        local_iknown, local_vel, local_weights) tuple of distributed arrays (entries None where not
+        applicable), and the distributed local solid-pin indices.
+
+        Notes
+        -----
+        Overridden by Multiphase to return one such mapping (and one solid-pin index array) per component.
+        """
+        wall_bc_data = {}
+        for bc_type, _, has_weights in WALL_BC_TYPES:
+            local_indices, (local_imissing, local_iknown, local_vel, local_weights) = self._collect_wall_bc_data(self.BCs, bc_type, has_weights)
+            wall_bc_data[bc_type] = (
+                self._distribute_local(local_indices, jnp.int32),
+                self._distribute_local(local_imissing, jnp.uint8),
+                self._distribute_local(local_iknown, jnp.uint8),
+                self._distribute_local(local_vel),
+                self._distribute_local(local_weights),
+            )
+        solid_pin_indices = self._distribute_local(self._collect_solid_pin_indices(self.BCs), jnp.int32)
+        return wall_bc_data, solid_pin_indices
+
     @partial(jit, static_argnums=(0, 3), inline=True)
     def equilibrium(self, rho, u, cast_output=True):
         """
@@ -809,7 +1195,7 @@ class LBMBase(object):
 
         return rho, u
 
-    @partial(jit, static_argnums=(0, 4), inline=True)
+    @partial(jit, static_argnums=(0, 4), donate_argnums=(1,))
     def apply_bc(self, fout, fin, timestep, implementation_step):
         """
         This function applies the boundary conditions to the distribution functions.
@@ -817,6 +1203,10 @@ class LBMBase(object):
         It iterates over all boundary conditions (BCs) and checks if the implementation step of the
         boundary condition matches the provided implementation step. If it does, it applies the
         boundary condition to the post-streaming distribution functions (fout).
+
+        Full-way BounceBack and every wall boundary condition in WALL_BC_TYPES (BounceBackHalfway,
+        InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable) are handled separately, in batched
+        calls using local (per-shard, int32) indices, instead of the generic per-BC global-index loop.
 
         Parameters
         ----------
@@ -833,12 +1223,25 @@ class LBMBase(object):
         (jax.numpy.ndarray): The output distribution functions after applying the boundary conditions.
         """
         for bc in self.BCs:
+            if isinstance(bc, (BounceBack, BounceBackHalfway)):
+                continue
             fout = bc.prepare_populations(fout, fin, implementation_step)
             if bc.implementation_step == implementation_step:
                 if bc.is_dynamic:
                     fout = bc.apply(fout, fin, timestep)
                 else:
                     fout = fout.at[bc.indices].set(bc.apply(fout, fin))
+
+        if implementation_step == "PostCollision" and self.local_bounceback_indices is not None:
+            fout = self.local_bounceback(fout, fin, self.local_bounceback_indices)
+
+        if implementation_step == "PostStreaming":
+            if self.solid_pin_indices is not None:
+                fout = self.local_solid_pin(fout, self.solid_pin_indices)
+            for bc_type, _, _ in WALL_BC_TYPES:
+                local_indices, local_imissing, local_iknown, local_vel, local_weights = self.wall_bc_data[bc_type]
+                if local_indices is not None:
+                    fout = self.local_wall_bc_kernels[bc_type](fout, fin, local_indices, local_imissing, local_iknown, local_vel, local_weights)
 
         return fout
 
@@ -1107,11 +1510,16 @@ class LBMBase(object):
         """
         add force based on exact-difference method due to Kupershtokh
 
+        Computes delta_feq = feq(rho, u + du) - feq(rho, u) directly from cu, dcu and delta_usqr instead of
+        building a second full equilibrium distribution and subtracting feq from it. Lattice-generic: works for
+        any lattice this class supports (D2Q9, D3Q19, D3Q27), since it only uses self.c/self.w.
+
         Parameters
         ----------
         f_postcollision (jax.numpy.ndarray): Post-collision distribution functions.
 
-        feq (jax.numpy.ndarray): Equilibrium distribution functions.
+        feq (jax.numpy.ndarray): Equilibrium distribution functions. Unused - kept for interface compatibility
+            with existing callers, since the compact difference formula only needs rho, u and the force.
 
         rho (jax.numpy.ndarray): Density field.
 
@@ -1129,7 +1537,10 @@ class LBMBase(object):
         Boundary conditions. Physica A, 392, 1925-1930.
         2. Krüger, T., et al. (2017). The lattice Boltzmann method. Springer International Publishing, 10.978-3, 4-15.
         """
-        delta_u = self.get_force()
-        feq_force = self.equilibrium(rho, u + delta_u, cast_output=False)
-        f_postcollision = f_postcollision + feq_force - feq
-        return f_postcollision
+        du = self.get_force()
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        cu = 3.0 * jnp.dot(u, c)
+        dcu = 3.0 * jnp.dot(du, c)
+        delta_usqr = 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True))
+        delta_feq = rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr)
+        return f_postcollision + delta_feq

@@ -41,7 +41,7 @@ A Python-based, differentiable, massively parallel lattice Boltzmann library for
       Droplet impingement on an inclined surface.
     </td>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_funnel.gif" alt="Droplet evaporation with contact-angle hysteresis" width="105%">
+      <img src="https://raw.githubusercontent.com/piyush-ppradhan/JAX-LaB/multiphase/assets/droplet_funnel.gif" alt="Droplet growth from a capillary" width="105%">
       <br>
       Droplet growth from a capillary (in situ render).
     </td>
@@ -62,6 +62,7 @@ A Python-based, differentiable, massively parallel lattice Boltzmann library for
 - **Broad LBM Support:** Includes several boundary conditions and collision kernels, along with Shan-Chen multiphase, multiphysics, and multicomponent flow modeling.
 - **User-Friendly Python Interface:** Written entirely in Python, simplifying simulation setup and making library easy to extend.
 - **JAX Array and Shardmap:** Offers a NumPy-like interface while leaving performance optimization to the compiler.
+- **GPU-Optimized:** Per-shard boundary indices, scalar wetting/force stencils, and a fused symbolic MRT collision path reduce memory traffic and compiled kernel size.
 - **Visualization:** Supports multiple output options, including JAX-native ray tracer for in situ surface, volume, and vector-field rendering of GPU/TPU arrays.
 
 ## Capabilities
@@ -103,6 +104,9 @@ Computations use *pytrees* to **model any number of components**, each with its 
 ### Compute Capabilities
 - Distributed Multi-GPU support
 - Mixed-Precision support (store vs compute)
+- Local, per-shard boundary condition indices instead of global lists replicated on every device
+- Scalar neighbor stencils for wetting and Shan-Chen force, avoiding per-direction streamed arrays
+- Fused, symbolic MRT collision matrix
 
 ### Output
 - Binary and ASCII VTK output using [PyVista](https://docs.pyvista.org/)

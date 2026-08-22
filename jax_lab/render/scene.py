@@ -404,13 +404,7 @@ class Scene:
             raise ValueError(f"Scalar field {name!r} must have shape (nx, ny, nz) or (nx, ny, nz, 1).")
         return field.astype(jnp.float32)
 
-    def render(
-        self,
-        data,
-        *,
-        timestep=0,
-        filename=None,
-    ):
+    def render(self, data, *, timestep=0, filename=None):
         """Render named fields and optionally save the final RGB image.
 
         Parameters
@@ -564,13 +558,7 @@ class Scene:
         return image
 
 
-def render(
-    scene,
-    data,
-    *,
-    timestep=0,
-    filename=None,
-):
+def render(scene, data, *, timestep=0, filename=None):
     """Render data with a scene.
 
     Parameters

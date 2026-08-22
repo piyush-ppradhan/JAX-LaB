@@ -74,9 +74,10 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
         pressure_difference = p[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         print(f"Pressure difference: {pressure_difference}")
         # HDF5/XDMF output option:
-        # from jax_lab.core.utils import save_fields_hdf5_xdmf
-        # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
-        save_fields_vtk(timestep, fields, "output", "data")
+        from jax_lab.core.utils import save_fields_hdf5_xdmf
+
+        save_fields_hdf5_xdmf(timestep, fields, "output", "data")
+        # save_fields_vtk(timestep, fields, "output", "data")
 
 
 class DropletOnCurvedSurface2DGeometric(DropletOnCurvedSurface2D):

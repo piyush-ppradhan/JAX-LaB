@@ -23,6 +23,7 @@ from jax.tree import map as tree_map
 from jax.tree import reduce
 from jax.experimental.multihost_utils import process_allgather
 
+from .models import MRTSim
 from .utils import colored, downsample_field
 
 logger = logging.getLogger(__name__)
@@ -266,14 +267,25 @@ class Thermal(object):
         Modified version of the single phase apply_force function that adds a density variation based buoyancy force to any user defined fluid force,
         using the exact-difference method due to Kupershtokh.
 
+        Computes delta_feq = feq(rho, u + du) - feq(rho, u) directly from cu, dcu and delta_usqr instead of
+        building a second full equilibrium distribution and subtracting feq from it. Lattice-generic (D2Q9,
+        D3Q19, D3Q27).
+
+        f_postcollision is population-space for BGKSim/KBCSim, but moment-space (m, with feq's slot holding
+        meq) when fluid_solver is an MRTSim, since MRTSim.collision calls apply_force with its moments - adding
+        a population-space delta_feq directly to those would silently mix spaces. When fluid_solver is an
+        MRTSim, delta_feq is transformed into moment space with its M first, matching MRTSim.apply_force.
+
         Note: the buoyancy force is computed from the local density deviation relative to the mean density, not from the temperature field, since the
         fluid collision does not have access to the temperature.
 
         Parameters
         ----------
-        f_postcollision (jax.numpy.ndarray): Post-collision distribution functions.
+        f_postcollision (jax.numpy.ndarray): Post-collision distribution functions (population-space), or
+            moments (moment-space, when fluid_solver is an MRTSim).
 
-        feq (jax.numpy.ndarray): Equilibrium distribution functions.
+        feq (jax.numpy.ndarray): Equilibrium distribution functions. Unused - kept for interface compatibility,
+            since the compact difference formula only needs rho, u and the force.
 
         rho (jax.numpy.ndarray): Density field.
 
@@ -281,13 +293,19 @@ class Thermal(object):
 
         Returns
         -------
-        jax.numpy.ndarray: Post-collision distribution functions with the force applied.
+        jax.numpy.ndarray: f_postcollision with the force applied, in the same space it was given in.
         """
         rho_average = rho.mean()
         buoyancy = jnp.repeat(rho - rho_average, repeats=self.dim, axis=-1) * self.gravity
-        delta_u = buoyancy + self.fluid_solver.force
-        feq_force = self.fluid_solver.equilibrium(rho, u + delta_u, cast_output=False)
-        f_postcollision = f_postcollision + feq_force - feq
+        du = buoyancy + self.fluid_solver.force
+        c = jnp.array(self.lattice.c, dtype=self.precision_policy.compute_dtype)
+        cu = 3.0 * jnp.dot(u, c)
+        dcu = 3.0 * jnp.dot(du, c)
+        delta_usqr = 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True))
+        delta_feq = rho * self.lattice.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr)
+        if isinstance(self.fluid_solver, MRTSim):
+            delta_feq = jnp.dot(delta_feq, self.fluid_solver.M)
+        f_postcollision = f_postcollision + delta_feq
         return f_postcollision
 
     @partial(jit, static_argnums=(0,), inline=True)

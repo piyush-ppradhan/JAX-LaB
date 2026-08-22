@@ -322,20 +322,104 @@ class MRTSim(LBMBase):
         else:
             NotImplementedError(f"Lattice type {self.lattice.name} has not been implemented")
 
+        # Fused collision matrix K = M @ S @ M_inv, replacing the three separate moment-space matrix multiplies
+        # (f @ M, relax, @ M_inv) in collision() with symbolic, sparse-coefficient columns compiled from K's
+        # nonzero entries - see collision() and MultiphaseMRT.collision (same fusion identity, without a
+        # surface-tension term since this is the single-phase model).
+        collision_matrix = np.asarray(jnp.dot(jnp.dot(self.M, self.S), self.M_inv))
+        columns = []
+        for output_direction in range(self.lattice.q):
+            columns.append(
+                tuple(
+                    (input_direction, np.float32(collision_matrix[input_direction, output_direction]))
+                    for input_direction in range(self.lattice.q)
+                    if not np.isclose(collision_matrix[input_direction, output_direction], 0.0, atol=1e-7)
+                )
+            )
+        self.collision_matrix = jnp.array(collision_matrix, dtype=self.precision_policy.compute_dtype)
+        self.collision_terms = tuple(columns)
+
     @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
-        MRT collision step for lattice.
+        MRT collision step for lattice, using a symbolic (sparse-coefficient) fused collision matrix instead of
+        three separate moment-space matrix multiplies. See MultiphaseMRT.collision for the fusion identity.
         """
         f = self.precision_policy.cast_to_compute(f)
-        m = jnp.dot(f, self.M)
         rho, u = self.update_macroscopic(f)
         feq = self.equilibrium(rho, u)
-        meq = jnp.dot(feq, self.M)
-        mout = -jnp.dot(m - meq, self.S)
+        difference = f - feq
+
+        outputs = []
+        for output_direction, terms in enumerate(self.collision_terms):
+            relaxed = sum(difference[..., input_direction] * coefficient for input_direction, coefficient in terms)
+            outputs.append(f[..., output_direction] - relaxed)
+        fout = jnp.stack(outputs, axis=-1)
+
         if self.force is not None:
-            mout = self.apply_force(mout, meq, rho, u)
-        return self.precision_policy.cast_to_output(f + jnp.dot(mout, self.M_inv))
+            fout = fout + self._compute_force_delta_feq(rho, u)
+        return self.precision_policy.cast_to_output(fout)
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def _compute_force_delta_feq(self, rho, u):
+        """
+        Real-space compact EDM difference delta_feq = feq(rho, u + du) - feq(rho, u), computed directly from
+        cu, dcu and delta_usqr instead of building a full feq_force array via equilibrium(). Shared by
+        collision (added directly, real space) and apply_force (transformed into moment space with M, for
+        callers using the unfused, moment-space collision path).
+
+        Parameters
+        ----------
+        rho (jax.numpy.ndarray): Density field.
+
+        u (jax.numpy.ndarray): Velocity field.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Real-space delta_feq.
+        """
+        du = self.get_force()
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        cu = 3.0 * jnp.dot(u, c)
+        dcu = 3.0 * jnp.dot(du, c)
+        delta_usqr = 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True))
+        return rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr)
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def apply_force(self, m, meq, rho, u):
+        """
+        add force based on exact-difference method due to Kupershtokh, in moment space.
+
+        LBMBase.apply_force subtracts feq in population space, which does not apply here since m/meq are
+        moment-space quantities. Instead, the real-space delta_feq (see _compute_force_delta_feq) is
+        transformed into moment space with M: since M is linear, dot(delta_feq, M) ==
+        dot(feq(rho, u + du), M) - dot(feq(rho, u), M), an exact substitute for subtracting a moment-space
+        equilibrium from a population-space one. Provided for callers using the unfused, moment-space collision
+        path (e.g. Thermal.apply_force_thermal, when the wrapped fluid_solver is an MRTSim); collision() itself
+        adds delta_feq directly in real space instead.
+
+        Parameters
+        ----------
+        m (jax.numpy.ndarray): Post-collision moments.
+
+        meq (jax.numpy.ndarray): Equilibrium moments. Unused - kept for interface compatibility, since the
+            compact difference formula only needs rho, u and the force.
+
+        rho (jax.numpy.ndarray): Density field.
+
+        u (jax.numpy.ndarray): Velocity field.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Post-collision moments with the force applied.
+
+        References
+        ----------
+        1. Kupershtokh, A. (2004). New method of incorporating a body force term into the lattice Boltzmann
+        equation. In Proceedings of the 5th International EHD Workshop (pp. 241-246). University of Poitiers.
+        """
+        delta_feq = self._compute_force_delta_feq(rho, u)
+        return m + jnp.dot(delta_feq, self.M)
 
 
 class CLBMSim(LBMBase):

@@ -556,12 +556,65 @@ class BounceBackHalfway(BoundaryCondition):
             return fout.at[self.solid_indices].set(self.precision_policy.cast_to_output(self.lattice.w))
         return fout
 
+    @staticmethod
+    def reflect_missing(fbd, fin_bd, imissing, iknown):
+        """
+        Core halfway bounce-back math: set each missing direction to the post-streaming value coming from its
+        known (opposite) direction. Pure function of its arguments (no BC-instance state), so it is reusable
+        both by apply() (global indices) and by a local (per-shard) bounce-back kernel operating on a gathered
+        block with the same (n, q) shape.
+
+        Parameters
+        ----------
+        fbd (jax.numpy.ndarray): Post-streaming distribution functions at the boundary nodes, shape (n, q).
+
+        fin_bd (jax.numpy.ndarray): Post-streaming distribution functions at the same boundary nodes, shape (n, q).
+
+        imissing (array-like): Missing-direction indices, shape (n, q).
+
+        iknown (array-like): Known (opposite) direction indices, shape (n, q).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): fbd with each missing direction set from its known direction.
+        """
+        bindex = jnp.arange(fbd.shape[0])[:, None]
+        return fbd.at[bindex, imissing].set(fin_bd[bindex, iknown])
+
+    @staticmethod
+    def velocity_correction(fbd, imissing, iknown, vel, w, c):
+        """
+        Core halfway bounce-back velocity-forcing math, factored out of impose_boundary_vel so it is reusable by
+        a local (per-shard) bounce-back kernel. Pure function of its arguments; vel=0 is a safe no-op, so a
+        local kernel merging several boundary conditions can always call this instead of conditionally skipping
+        it per boundary condition.
+
+        Parameters
+        ----------
+        fbd (jax.numpy.ndarray): Distribution functions at the boundary nodes, shape (n, q).
+
+        imissing (array-like): Missing-direction indices, shape (n, q).
+
+        iknown (array-like): Known (opposite) direction indices, shape (n, q).
+
+        vel (jax.numpy.ndarray): Prescribed velocity vector, shape (n, dim).
+
+        w (jax.numpy.ndarray): Lattice weights, shape (q,).
+
+        c (jax.numpy.ndarray): Lattice velocity vectors, shape (dim, q).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): fbd with the velocity correction applied.
+        """
+        bindex = jnp.arange(fbd.shape[0])[:, None]
+        cu = 6.0 * w * jnp.dot(vel, c)
+        return fbd.at[bindex, imissing].add(-cu[bindex, iknown])
+
     @partial(jit, static_argnums=(0,))
     def impose_boundary_vel(self, fbd, bindex):
         c = jnp.array(self.lattice.c, dtype=self.precision_policy.compute_dtype)
-        cu = 6.0 * self.lattice.w * jnp.dot(self.vel, c)
-        fbd = fbd.at[bindex, self.imissing].add(-cu[bindex, self.iknown])
-        return fbd
+        return self.velocity_correction(fbd, self.imissing, self.iknown, self.vel, self.lattice.w, c)
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
@@ -578,12 +631,9 @@ class BounceBackHalfway(BoundaryCondition):
         -------
         (jax.numpy.ndarray): The modified output distribution functions after applying the boundary condition.
         """
-        nbd = len(self.indices[0])
-        bindex = np.arange(nbd)[:, None]
-        fbd = fout[self.indices]
-
-        fbd = fbd.at[bindex, self.imissing].set(fin[self.indices][bindex, self.iknown])
+        fbd = self.reflect_missing(fout[self.indices], fin[self.indices], self.imissing, self.iknown)
         if self.vel is not None:
+            bindex = np.arange(len(self.indices[0]))[:, None]
             fbd = self.impose_boundary_vel(fbd, bindex)
         return fbd
 
@@ -1102,6 +1152,46 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         self.weights = weights[bindex, self.iknown]
         return
 
+    @staticmethod
+    def interpolate_missing(fbd, fin_bd, fout_bd, imissing, iknown, weights):
+        """
+        Core Bouzidi interpolated bounce-back math. Pure function of its arguments (no BC-instance state), so it
+        is reusable both by apply() (global indices) and by a local (per-shard) bounce-back kernel operating on
+        a gathered block with the same (n, q) shape.
+
+        Parameters
+        ----------
+        fbd (jax.numpy.ndarray): Post-streaming distribution functions at the boundary nodes, shape (n, q).
+
+        fin_bd (jax.numpy.ndarray): Post-collision distribution functions at the boundary nodes, shape (n, q).
+
+        fout_bd (jax.numpy.ndarray): Post-streaming distribution functions at the boundary nodes, shape (n, q).
+
+        imissing (array-like): Missing-direction indices, shape (n, q).
+
+        iknown (array-like): Known (opposite) direction indices, shape (n, q).
+
+        weights (array-like): Proximity-ratio interpolation weights, shape (n, q).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): fbd with each missing direction set from the interpolated value.
+        """
+        bindex = jnp.arange(fbd.shape[0])[:, None]
+        f_postcollision_iknown = fin_bd[bindex, iknown]
+        f_postcollision_imissing = fin_bd[bindex, imissing]
+        f_poststreaming_iknown = fout_bd[bindex, iknown]
+
+        # if weights<0.5
+        fs_near = 2.0 * weights * f_postcollision_iknown + (1.0 - 2.0 * weights) * f_poststreaming_iknown
+
+        # if weights>=0.5
+        fs_far = 1.0 / (2.0 * weights) * f_postcollision_iknown + (2.0 * weights - 1.0) / (2.0 * weights) * f_postcollision_imissing
+
+        # combine near and far contributions
+        fmissing = jnp.where(weights < 0.5, fs_near, fs_far)
+        return fbd.at[bindex, imissing].set(fmissing)
+
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
         """
@@ -1119,24 +1209,10 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         """
         if self.weights is None:
             self.set_proximity_ratio()
-        nbd = len(self.indices[0])
-        bindex = np.arange(nbd)[:, None]
-        fbd = fout[self.indices]
-        f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
-        f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
-        f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
-
-        # if weights<0.5
-        fs_near = 2.0 * self.weights * f_postcollision_iknown + (1.0 - 2.0 * self.weights) * f_poststreaming_iknown
-
-        # if weights>=0.5
-        fs_far = 1.0 / (2.0 * self.weights) * f_postcollision_iknown + (2.0 * self.weights - 1.0) / (2.0 * self.weights) * f_postcollision_imissing
-
-        # combine near and far contributions
-        fmissing = jnp.where(self.weights < 0.5, fs_near, fs_far)
-        fbd = fbd.at[bindex, self.imissing].set(fmissing)
+        fbd = self.interpolate_missing(fout[self.indices], fin[self.indices], fout[self.indices], self.imissing, self.iknown, self.weights)
 
         if self.vel is not None:
+            bindex = np.arange(len(self.indices[0]))[:, None]
             fbd = self.impose_boundary_vel(fbd, bindex)
         return fbd
 
@@ -1166,6 +1242,38 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         super().__init__(indices, implicit_distances, grid_info, precision_policy, vel=vel)
         self.name = "InterpolatedBounceBackDifferentiable"
 
+    @staticmethod
+    def interpolate_missing(fbd, fin_bd, fout_bd, imissing, iknown, weights):
+        """
+        Core differentiable interpolated bounce-back math. Pure function of its arguments (no BC-instance
+        state), so it is reusable both by apply() (global indices) and by a local (per-shard) bounce-back
+        kernel operating on a gathered block with the same (n, q) shape.
+
+        Parameters
+        ----------
+        fbd (jax.numpy.ndarray): Post-streaming distribution functions at the boundary nodes, shape (n, q).
+
+        fin_bd (jax.numpy.ndarray): Post-collision distribution functions at the boundary nodes, shape (n, q).
+
+        fout_bd (jax.numpy.ndarray): Post-streaming distribution functions at the boundary nodes, shape (n, q).
+
+        imissing (array-like): Missing-direction indices, shape (n, q).
+
+        iknown (array-like): Known (opposite) direction indices, shape (n, q).
+
+        weights (array-like): Proximity-ratio interpolation weights, shape (n, q).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): fbd with each missing direction set from the interpolated value.
+        """
+        bindex = jnp.arange(fbd.shape[0])[:, None]
+        f_postcollision_iknown = fin_bd[bindex, iknown]
+        f_postcollision_imissing = fin_bd[bindex, imissing]
+        f_poststreaming_iknown = fout_bd[bindex, iknown]
+        fmissing = ((1.0 - weights) * f_poststreaming_iknown + weights * (f_postcollision_imissing + f_postcollision_iknown)) / (1.0 + weights)
+        return fbd.at[bindex, imissing].set(fmissing)
+
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
         """
@@ -1184,18 +1292,10 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         """
         if self.weights is None:
             self.set_proximity_ratio()
-        nbd = len(self.indices[0])
-        bindex = np.arange(nbd)[:, None]
-        fbd = fout[self.indices]
-        f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
-        f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
-        f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
-        fmissing = ((1.0 - self.weights) * f_poststreaming_iknown + self.weights * (f_postcollision_imissing + f_postcollision_iknown)) / (
-            1.0 + self.weights
-        )
-        fbd = fbd.at[bindex, self.imissing].set(fmissing)
+        fbd = self.interpolate_missing(fout[self.indices], fin[self.indices], fout[self.indices], self.imissing, self.iknown, self.weights)
 
         if self.vel is not None:
+            bindex = np.arange(len(self.indices[0]))[:, None]
             fbd = self.impose_boundary_vel(fbd, bindex)
         return fbd
 
@@ -1372,7 +1472,8 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, _):
         """
-        Applies the non-equilibrium extrapolation boundary condition.
+        Applies the non-equilibrium extrapolation boundary condition. Density and velocity are evaluated only at
+        the boundary and neighbor nodes (not over the whole domain) before being indexed.
 
         Parameters
         ----------
@@ -1392,15 +1493,13 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
         nbd = len(self.indices[0])
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
+        f_nbr = fout[self.indices_nbr]
 
-        rho = jnp.sum(fout, axis=-1, keepdims=True)
-        vel = jnp.dot(fout, self.precision_policy.cast_to_compute(self.lattice.c.T)) / rho
-
-        rho_nbr = rho[self.indices_nbr]
-        vel_nbr = vel[self.indices_nbr]
+        rho_nbr = jnp.sum(f_nbr, axis=-1, keepdims=True)
+        vel_nbr = jnp.dot(f_nbr, self.precision_policy.cast_to_compute(self.lattice.c.T)) / rho_nbr
         feq_nbr = self.equilibrium(rho_nbr, vel_nbr)
         feq = self.equilibrium(self.prescribed, vel_nbr)
-        fneq_nbr = fout[self.indices_nbr] - feq_nbr
+        fneq_nbr = f_nbr - feq_nbr
         fbd = fbd.at[bindex, self.imissing].set(feq[bindex, self.imissing] + fneq_nbr[bindex, self.imissing])
 
         return fbd
@@ -1482,7 +1581,8 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, _):
         """
-        Applies the non-equilibrium extrapolation boundary condition.
+        Applies the non-equilibrium extrapolation boundary condition. Density and velocity are evaluated only at
+        the boundary and neighbor nodes (not over the whole domain) before being indexed.
 
         Parameters
         ----------
@@ -1501,15 +1601,13 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         nbd = len(self.indices[0])
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
+        f_nbr = fout[self.indices_nbr]
 
-        rho = jnp.sum(fout, axis=-1, keepdims=True)
-        vel = jnp.dot(fout, self.precision_policy.cast_to_compute(self.lattice.c.T)) / rho
-
-        rho_nbr = rho[self.indices_nbr]
-        vel_nbr = vel[self.indices_nbr]
+        rho_nbr = jnp.sum(f_nbr, axis=-1, keepdims=True)
+        vel_nbr = jnp.dot(f_nbr, self.precision_policy.cast_to_compute(self.lattice.c.T)) / rho_nbr
         feq_nbr = self.equilibrium(rho_nbr, vel_nbr)
         feq = self.equilibrium(self.prescribed, vel_nbr)
-        fneq_nbr = fout[self.indices_nbr] - feq_nbr
+        fneq_nbr = f_nbr - feq_nbr
         fbd = fbd.at[bindex, self.imissing].set(feq[bindex, self.imissing] + fneq_nbr[bindex, self.imissing])
 
         # Correction step: redistribute the density error over the unknown (imissing) directions only, weighted

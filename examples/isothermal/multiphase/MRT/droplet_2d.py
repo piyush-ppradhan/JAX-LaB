@@ -134,7 +134,7 @@ if __name__ == "__main__":
         "kappa": [1.0],
         "precision": precision,
         "io_rate": 10000,
-        "compute_MLUPS": False,
+        "compute_MLUPS": True,
         "print_info_rate": 10000,
         "checkpoint_rate": -1,
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
