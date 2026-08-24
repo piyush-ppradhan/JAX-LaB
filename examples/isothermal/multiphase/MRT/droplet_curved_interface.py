@@ -18,6 +18,11 @@ from jax_lab.core.eos import VanderWaals
 from jax_lab.core.utils import save_fields_vtk
 from jax_lab.core.multiphase import MultiphaseMRT
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 
@@ -63,16 +68,16 @@ class DropletOnCurvedSurface2D(MultiphaseMRT):
         rho_east = rho[self.nx // 2 + offset, self.ny // 2, 0]
         rho_g_pred = 0.25 * (rho_north + rho_south + rho_west + rho_east)
         rho_l_pred = rho[self.nx // 2, self.ny // 2, 0]
-        print(f"%Error Min: {(rho_g_pred - rho_g) * 100 / rho_g} Max: {(rho_l_pred - rho_l) * 100 / rho_l}")
-        print(f"Density: Min: {rho_g_pred} Max: {rho_l_pred}")
-        print(f"Maxwell construction: Min: {rho_g} Max: {rho_l}")
-        print(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
+        logger.info(f"%Error Min: {(rho_g_pred - rho_g) * 100 / rho_g} Max: {(rho_l_pred - rho_l) * 100 / rho_l}")
+        logger.info(f"Density: Min: {rho_g_pred} Max: {rho_l_pred}")
+        logger.info(f"Maxwell construction: Min: {rho_g} Max: {rho_l}")
+        logger.info(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
         p_north = p[self.nx // 2, self.ny // 2 - offset, 0]
         p_south = p[self.nx // 2, self.ny // 2 + offset, 0]
         p_west = p[self.nx // 2 - offset, self.ny // 2, 0]
         p_east = p[self.nx // 2 + offset, self.ny // 2, 0]
         pressure_difference = p[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
-        print(f"Pressure difference: {pressure_difference}")
+        logger.info(f"Pressure difference: {pressure_difference}")
         # HDF5/XDMF output option:
         from jax_lab.core.utils import save_fields_hdf5_xdmf
 

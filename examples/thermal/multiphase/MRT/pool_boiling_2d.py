@@ -24,6 +24,11 @@ from jax_lab.core.multiphase import MultiphaseMRT
 from jax_lab.core.thermal import MultiphaseThermal
 from jax_lab.core.utils import save_fields_hdf5_xdmf
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # from jax_lab.core.utils import save_fields_vtk
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_pool_boiling_2d")
@@ -220,7 +225,7 @@ class PoolBoiling(MultiphaseThermal):
         # Do not export force-corrected diagnostic velocities on solid walls.
         u[:, (0, -1), :] = 0.0
         if not np.isfinite(rho).all() or not np.isfinite(T).all():
-            print(f"Simulation diverged at timestep {timestep}.")
+            logger.info(f"Simulation diverged at timestep {timestep}.")
             self.stop_simulation = True
             return
 
@@ -232,7 +237,7 @@ class PoolBoiling(MultiphaseThermal):
         fields = {"rho": rho, "u_x": u[..., 0], "u_y": u[..., 1], "T": T}
         save_fields_hdf5_xdmf(timestep, fields, output_dir, prefix="pool_boiling")
         # save_fields_vtk(timestep, fields, output_dir)
-        print(
+        logger.info(
             f"timestep {timestep}: vapor fraction = {vapor_fraction:.4f}, "
             f"T/Tc = {T.min() / Tc:.4f}/{T.max() / Tc:.4f}, mass error = {relative_mass_error:.2e}"
         )

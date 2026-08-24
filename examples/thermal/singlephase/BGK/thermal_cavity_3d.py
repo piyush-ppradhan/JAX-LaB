@@ -19,6 +19,11 @@ from jax_lab.core.models import BGKSim
 from jax_lab.core.thermal import Thermal
 from jax_lab.core.utils import save_fields_vtk
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_3d")
 
 
@@ -77,7 +82,7 @@ class ThermalCavity(Thermal):
             "T": T,
         }
         save_fields_vtk(timestep, fields, output_dir)
-        print(f"T min/max: {T.min():.4f} / {T.max():.4f}")
+        logger.info(f"T min/max: {T.min():.4f} / {T.max():.4f}")
 
 
 if __name__ == "__main__":

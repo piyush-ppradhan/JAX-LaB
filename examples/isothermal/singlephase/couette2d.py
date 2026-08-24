@@ -13,6 +13,11 @@ from jax_lab.core.models import BGKSim
 from jax_lab.core.boundary_conditions import BounceBack, EquilibriumBC, DoNothing
 from jax_lab.core.lattice import LatticeD2Q9
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update('jax_disable_jit', True)
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=4'
 
@@ -48,7 +53,7 @@ class Couette(BGKSim):
         u_old = np.linalg.norm(u_prev, axis=2)
         u_new = np.linalg.norm(u, axis=2)
         err = np.sum(np.abs(u_old - u_new))
-        print("error= {:07.6f}".format(err))
+        logger.info("error= {:07.6f}".format(err))
         # save_image(timestep, u)
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1]}
         # HDF5/XDMF output option:

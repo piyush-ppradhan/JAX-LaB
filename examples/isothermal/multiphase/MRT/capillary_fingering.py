@@ -25,6 +25,11 @@ import jax.numpy as jnp
 
 import jax
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 
@@ -93,7 +98,7 @@ class Droplet2D(MultiphaseMRT):
         p_west = p_d[self.nx // 2 - offset_x, self.ny // 2, 0]
         p_east = p_d[self.nx // 2 + offset_x, self.ny // 2, 0]
         pressure_difference = p_i[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
-        print(f"Pressure difference: {pressure_difference}")
+        logger.info(f"Pressure difference: {pressure_difference}")
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")

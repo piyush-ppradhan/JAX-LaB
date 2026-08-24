@@ -17,6 +17,11 @@ from jax_lab.core.multiphase import MultiphaseMRT
 from jax_lab.render import Light, Scene, SurfaceRendering, VolumeRendering
 from jax_lab.render.render_utils import smooth_scalar_field
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 def voxelize_filled_bunny(filename, target_extent):
     """Voxelize the Stanford bunny as a filled binary body.
@@ -189,7 +194,7 @@ class BunnyDropletImpactMRT(MultiphaseMRT):
         render_density = jnp.where(render_fluid_mask, render_density, vapor_density)
         fluid_speed = jnp.where(self.fluid_mask, jnp.linalg.norm(velocity, axis=-1), 0.0)
         rendered_voxels = jnp.count_nonzero(render_density >= liquid_render_threshold)
-        print(
+        logger.info(
             f"timestep={timestep}, density=[{float(jnp.min(density)):.4f}, "
             f"{float(jnp.max(density)):.4f}], max_fluid_speed={float(jnp.max(fluid_speed)):.5f}, "
             f"rendered_voxels={int(rendered_voxels)}"

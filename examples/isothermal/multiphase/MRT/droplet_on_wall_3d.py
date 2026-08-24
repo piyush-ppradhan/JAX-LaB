@@ -18,6 +18,11 @@ from jax_lab.core.eos import PengRobinson
 from jax_lab.core.boundary_conditions import BounceBack
 from jax_lab.core.utils import save_fields_vtk
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 # config.update("jax_default_matmul_precision", "float32")
 

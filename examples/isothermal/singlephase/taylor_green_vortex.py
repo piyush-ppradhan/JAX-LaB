@@ -16,6 +16,11 @@ from jax_lab.core.utils import save_fields_vtk
 from jax_lab.core.models import BGKSim, KBCSim, AdvectionDiffusionBGK
 from jax_lab.core.lattice import LatticeD2Q9
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -63,7 +68,7 @@ class TaylorGreenVortex(KBCSim):
         }
         ADE = AdvectionDiffusionBGK(**kwargs)
         ADE.initialize_macroscopic_fields = self.initialize_macroscopic_fields
-        print("Initializing the distribution functions using the specified macroscopic fields....")
+        logger.info("Initializing the distribution functions using the specified macroscopic fields....")
         f = ADE.run(int(20000 * nx / 32))
         return f
 
@@ -78,7 +83,7 @@ class TaylorGreenVortex(KBCSim):
         ux_th, uy_th, rho_th = taylor_green_initial_fields(xx, yy, vel_ref, 1, visc, time)
         vel_err_L2 = np.sqrt(np.sum((u[..., 0] - ux_th) ** 2 + (u[..., 1] - uy_th) ** 2) / np.sum(ux_th**2 + uy_th**2))
         rho_err_L2 = np.sqrt(np.sum((rho - rho_th) ** 2) / np.sum(rho_th**2))
-        print("Vel error= {:07.6f}, Pressure error= {:07.6f}".format(vel_err_L2, rho_err_L2))
+        logger.info("Vel error= {:07.6f}, Pressure error= {:07.6f}".format(vel_err_L2, rho_err_L2))
         if timestep == endTime:
             ErrL2ResList.append(vel_err_L2)
             ErrL2ResListRho.append(rho_err_L2)

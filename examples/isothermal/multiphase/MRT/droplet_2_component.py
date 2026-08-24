@@ -19,6 +19,11 @@ from jax.tree import reduce
 from jax.tree import map as tree_map
 import jax.numpy as jnp
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 
@@ -94,13 +99,13 @@ class Droplet2D(MultiphaseMRT):
             "uy": u[..., 1],
         }
         offset = 90
-        print(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
+        logger.info(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
         p_north = p_1[self.nx // 2, self.ny // 2 - offset, 0]
         p_south = p_1[self.nx // 2, self.ny // 2 + offset, 0]
         p_west = p_1[self.nx // 2 - offset, self.ny // 2, 0]
         p_east = p_1[self.nx // 2 + offset, self.ny // 2, 0]
         pressure_difference = p_2[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
-        print(f"Pressure difference for radius = {r}: {pressure_difference}")
+        logger.info(f"Pressure difference for radius = {r}: {pressure_difference}")
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields, f"output_{r}", "data")

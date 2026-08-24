@@ -16,6 +16,11 @@ from jax_lab.core.models import CLBMSim
 from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.boundary_conditions import EquilibriumBC, DoNothing, BounceBack
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 

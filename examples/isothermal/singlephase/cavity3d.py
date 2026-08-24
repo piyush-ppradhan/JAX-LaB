@@ -27,6 +27,11 @@ from jax_lab.core.models import BGKSim, KBCSim
 from jax_lab.core.lattice import LatticeD3Q19, LatticeD3Q27
 from jax_lab.core.boundary_conditions import Regularized
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 config.update("jax_enable_x64", True)
 
@@ -90,7 +95,7 @@ class Cavity(KBCSim):
         u_new = np.linalg.norm(u, axis=2)
 
         err = np.sum(np.abs(u_old - u_new))
-        print("error= {:07.6f}".format(err))
+        logger.info("error= {:07.6f}".format(err))
         fields = {
             "rho": rho[..., 0],
             "u_x": u[..., 0],

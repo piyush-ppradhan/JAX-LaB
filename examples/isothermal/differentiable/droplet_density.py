@@ -13,6 +13,11 @@ from jax_lab.core.lattice import LatticeD2Q9
 from jax_lab.core.multiphase import MultiphaseBGK
 from jax_lab.core.utils import save_fields_vtk
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 np.random.seed(42)
 
 # Input dimensions (nx, ny, 1)

@@ -21,6 +21,11 @@ from jax.tree import reduce
 from jax.tree import map as tree_map
 import jax.numpy as jnp
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 

@@ -19,6 +19,11 @@ from jax_lab.core.models import BGKSim
 from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.utils import save_fields_vtk
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update('jax_disable_jit', True)
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -69,19 +74,19 @@ if __name__ == "__main__":
     n_iters = args.N_ITERS
     n_processes = args.N_PROCESSES
     # Initialize JAX distributed. The IP, number of processes and process id must be set correctly.
-    print("N processes, ", n_processes)
-    print("N iter, ", n_iters)
+    logger.info(f"N processes, {n_processes}")
+    logger.info(f"N iter, {n_iters}")
     if n_processes > 1:
         process_id = int(os.environ.get("CUDA_VISIBLE_DEVICES", 0)) + args.PROCESS_ID_INCREMENT
-        print("ip, num_processes, process_id, ", args.IP, n_processes, process_id)
+        logger.info(f"ip, num_processes, process_id, {args.IP} {n_processes} {process_id}")
         jax.distributed.initialize(args.IP, num_processes=n_processes, process_id=process_id)
     elif n_processes == -1:
-        print("Will call jax.distributed.initialize()")
+        logger.info("Will call jax.distributed.initialize()")
         jax.distributed.initialize()
-        print("jax.distributed.initialize() ended")
+        logger.info("jax.distributed.initialize() ended")
     else:
-        print("No call to jax.distributed.initialize")
-    print("JAX local devices: ", jax.local_devices())
+        logger.info("No call to jax.distributed.initialize")
+    logger.info(f"JAX local devices: {jax.local_devices()}")
 
     precision = "f32/f32"
     # Create a 3D lattice with the D3Q19 scheme

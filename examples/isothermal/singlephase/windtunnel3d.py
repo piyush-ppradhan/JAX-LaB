@@ -24,6 +24,11 @@ from jax_lab.core.models import BGKSim, KBCSim
 from jax_lab.core.lattice import LatticeD3Q19, LatticeD3Q27
 from jax_lab.core.boundary_conditions import DoNothing, BounceBack, EquilibriumBC, BounceBackHalfway
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 
@@ -47,14 +52,14 @@ class Car(KBCSim):
         return mesh_matrix, pitch
 
     def set_boundary_conditions(self):
-        print("Voxelizing mesh...")
+        logger.info("Voxelizing mesh...")
         time_start = time()
         stl_filename = "stl-files/DrivAer-Notchback.stl"
         car_length_lbm_unit = self.nx / 4
         car_voxelized, pitch = self.voxelize_stl(stl_filename, car_length_lbm_unit)
         car_matrix = car_voxelized.matrix
-        print("Voxelization time for pitch={}: {} seconds".format(pitch, time() - time_start))
-        print("Car matrix shape: ", car_matrix.shape)
+        logger.info("Voxelization time for pitch={}: {} seconds".format(pitch, time() - time_start))
+        logger.info(f"Car matrix shape: {car_matrix.shape}")
 
         self.car_area = np.prod(car_matrix.shape[1:])
         tx, ty, tz = np.array([nx, ny, nz]) - car_matrix.shape
@@ -110,7 +115,7 @@ class Car(KBCSim):
         u_new = np.linalg.norm(u, axis=2)
 
         err = np.sum(np.abs(u_old - u_new))
-        print("error= {:07.6f}, CL = {:07.6f}, CD = {:07.6f}".format(err, cl, cd))
+        logger.info("error= {:07.6f}, CL = {:07.6f}, CD = {:07.6f}".format(err, cl, cd))
         fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf

@@ -24,6 +24,11 @@ from jax_lab.core.multiphase import MultiphaseMRT
 from jax_lab.core.thermal import MultiphaseThermal
 from jax_lab.core.utils import save_fields_hdf5_xdmf
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # from jax_lab.core.utils import save_fields_vtk
 
 config.update("jax_enable_x64", True)
@@ -135,7 +140,7 @@ class DropletThermal(MultiphaseThermal):
         T = np.array(kwargs["T"][0, ..., 0])
 
         if not np.isfinite(rho).all() or not np.isfinite(T).all():
-            print(f"Simulation diverged (non-finite density or temperature) at timestep {timestep}.")
+            logger.info(f"Simulation diverged (non-finite density or temperature) at timestep {timestep}.")
             self.stop_simulation = True
             return
 
@@ -149,7 +154,7 @@ class DropletThermal(MultiphaseThermal):
             save_fields_hdf5_xdmf(timestep, {"rho": rho, "T": T}, output_dir, prefix=self.xdmf_prefix)
             # save_fields_vtk(timestep, {"rho": rho, "T": T}, output_dir, prefix=self.vtk_prefix)
         if liquid_volume <= 1.0 or D <= self.minimum_diameter:
-            print(f"Stopping at timestep {timestep} before the droplet enters the diffuse-interface shrinkage regime.")
+            logger.info(f"Stopping at timestep {timestep} before the droplet enters the diffuse-interface shrinkage regime.")
             self.stop_simulation = True
             return
         # Always retain timestep zero as D0. Without this baseline, a run that
@@ -164,7 +169,7 @@ class DropletThermal(MultiphaseThermal):
         self.history.append((timestep, D, centroid[0], centroid[1], centroid[2]))
 
         if timestep % self.io_rate == 0:
-            print(
+            logger.info(
                 f"timestep {timestep}: (D/D0)^2 = {(D / self.D0) ** 2:.4f}, "
                 # f"rho = [{rho.min():.4f}, {rho.max():.4f}], T/Tc = [{T.min() / Tc:.4f}, {T.max() / Tc:.4f}], "
                 # f"mass error = {relative_mass_error:.2e}, centroid = ({centroid[0]:.3f}, {centroid[1]:.3f}, {centroid[2]:.3f})"
@@ -307,12 +312,12 @@ if __name__ == "__main__":
             minimum_diameter=4.0 * width,
             measurement_start=min(measurement_start, t_max // 2),
         )
-        print(f"K = {K:.4f}: rk_substeps = {rk_substeps}")
+        logger.info(f"K = {K:.4f}: rk_substeps = {rk_substeps}")
         sim.run(t_max)
 
         history = np.asarray(sim.history, dtype=np.float64).reshape((-1, 5))
         if history.shape[0] == 0:
-            print(f"K = {K:.4f}: no valid diameter samples; skipping curve output.")
+            logger.info(f"K = {K:.4f}: no valid diameter samples; skipping curve output.")
             continue
         diameter = history[:, 1]
         diameter_squared_normalized = (diameter / diameter[0]) ** 2
@@ -322,7 +327,7 @@ if __name__ == "__main__":
 
         csv_path = os.path.join(output_dir, f"d2_law_K{K:.3f}.csv")
         np.savetxt(csv_path, curve, delimiter=",", header="timestep,t_star,D,(D/D0)^2,centroid_x,centroid_y,centroid_z", comments="")
-        print(f"K = {K:.4f}: saved {csv_path}")
+        logger.info(f"K = {K:.4f}: saved {csv_path}")
 
     import matplotlib
 
@@ -351,4 +356,4 @@ if __name__ == "__main__":
         axes.legend(loc="best", frameon=True, fontsize="small")
     fig.suptitle("Finite-size 3D droplet evaporation (MRT, Peng-Robinson)")
     fig.savefig(os.path.join(output_dir, "d2_law_3d.png"), dpi=200, bbox_inches="tight")
-    print(f"Saved {os.path.join(output_dir, 'd2_law_3d.png')}")
+    logger.info(f"Saved {os.path.join(output_dir, 'd2_law_3d.png')}")

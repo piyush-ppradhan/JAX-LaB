@@ -27,6 +27,11 @@ from jax_lab.core.eos import VanderWaals
 from jax_lab.core.boundary_conditions import BounceBack
 from jax_lab.core.utils import save_fields_hdf5_xdmf
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # from jax_lab.core.utils import save_fields_vtk
 
 
@@ -120,7 +125,7 @@ class BubbleRise3D(MultiphaseMRT):
         vapor_fraction = float(np.mean(vapor_mask))
         column_counts = vapor_mask.sum(axis=(0, 1))
         centroid_z = float(np.average(np.arange(self.nz), weights=column_counts)) if column_counts.sum() > 0 else float("nan")
-        print(f"timestep {timestep}: vapor fraction = {vapor_fraction:.4f}, bubble centroid z = {centroid_z:.2f}")
+        logger.info(f"timestep {timestep}: vapor fraction = {vapor_fraction:.4f}, bubble centroid z = {centroid_z:.2f}")
 
         save_fields_hdf5_xdmf(timestep, fields, "output", "data")
         # save_fields_vtk(timestep, fields, "output", "data")

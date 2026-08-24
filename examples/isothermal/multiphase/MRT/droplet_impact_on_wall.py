@@ -23,6 +23,11 @@ from jax_lab.render import Light, Scene, SurfaceRendering
 from jax import config
 import jax.numpy as jnp
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 

@@ -18,6 +18,11 @@ from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.multiphase import MultiphaseMRT
 from jax_lab.render import Light, Scene, SurfaceRendering
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 def channel_radii(z, funnel_tip_z, tube_bottom_z, tube_inner_radius, tube_outer_radius, funnel_tip_inner_radius, funnel_tip_outer_radius):
     """
@@ -216,7 +221,7 @@ class DrippingFunnelMRT(MultiphaseMRT):
         maximum_speed = float(np.max(np.linalg.norm(velocity, axis=-1)))
         if not (np.isfinite(density).all() and np.isfinite(velocity).all()):
             raise FloatingPointError(f"Non-finite fields detected at timestep {timestep}.")
-        print(f"timestep={timestep}, density=[{density.min():.4f}, {density.max():.4f}], max_speed={maximum_speed:.5f}")
+        logger.info(f"timestep={timestep}, density=[{density.min():.4f}, {density.max():.4f}], max_speed={maximum_speed:.5f}")
         render_density = gaussian_filter(density, sigma=0.75, mode="nearest")
         if timestep >= 400:
             self.render_scene.render(

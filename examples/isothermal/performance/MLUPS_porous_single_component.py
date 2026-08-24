@@ -19,6 +19,11 @@ from jax.tree import map as tree_map
 import jax.numpy as jnp
 import h5py
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 class PorousMedia(MultiphaseBGK):
     def initialize_macroscopic_fields(self):
@@ -135,7 +140,7 @@ if __name__ == "__main__":
             config.update("jax_default_matmul_precision", "highest")
         else:
             config.update("jax_default_matmul_precision", "float32")
-        print(f"Precision: {precision}")
+        logger.info(f"Precision: {precision}")
         kwargs = {
             "n_components": 1,
             "lattice": LatticeD3Q19(precision),

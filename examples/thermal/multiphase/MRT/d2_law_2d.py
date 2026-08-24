@@ -25,6 +25,11 @@ from jax_lab.core.multiphase import MultiphaseMRT
 from jax_lab.core.thermal import MultiphaseThermal
 from jax_lab.core.utils import save_fields_hdf5_xdmf
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # from jax_lab.core.utils import save_fields_vtk
 
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_d2_law_2d")
@@ -116,7 +121,7 @@ class DropletThermal(MultiphaseThermal):
         T = np.array(kwargs["T"][0, ..., 0])
 
         if not np.isfinite(rho).all():
-            print(f"Simulation diverged (non-finite density) at timestep {timestep}; increase rk_substeps.")
+            logger.info(f"Simulation diverged (non-finite density) at timestep {timestep}; increase rk_substeps.")
             self.stop_simulation = True
             return
 
@@ -125,7 +130,7 @@ class DropletThermal(MultiphaseThermal):
             save_fields_hdf5_xdmf(timestep, {"rho": rho, "T": T}, output_dir, prefix=self.xdmf_prefix)
             # save_fields_vtk(timestep, {"rho": rho, "T": T}, output_dir, prefix=self.vtk_prefix)
         if liquid_volume <= 1.0 or D <= self.minimum_diameter:
-            print(f"Stopping at timestep {timestep} before the droplet enters the diffuse-interface shrinkage regime.")
+            logger.info(f"Stopping at timestep {timestep} before the droplet enters the diffuse-interface shrinkage regime.")
             self.stop_simulation = True
             return
         if timestep < self.measurement_start:
@@ -138,7 +143,7 @@ class DropletThermal(MultiphaseThermal):
         self.history.append((timestep, D, centroid[0], centroid[1]))
 
         if timestep % self.xdmf_rate == 0:
-            print(
+            logger.info(
                 f"timestep {timestep}: (D/D0)^2 = {(D / self.D0) ** 2:.4f}, "
                 # f"centroid = ({centroid[0]:.3f}, {centroid[1]:.3f}), liquid volume = {liquid_volume:.1f}"
             )
@@ -264,7 +269,7 @@ if __name__ == "__main__":
             minimum_diameter=4.0 * width,
             measurement_start=min(1000, t_max // 2),
         )
-        print(f"K = {K:.4f}: rk_substeps = {rk_substeps}")
+        logger.info(f"K = {K:.4f}: rk_substeps = {rk_substeps}")
         sim.run(t_max)
 
         history = np.array(sim.history)
@@ -283,7 +288,7 @@ if __name__ == "__main__":
 
         csv_path = os.path.join(output_dir, f"d2_law_K{K:.3f}.csv")
         np.savetxt(csv_path, curve, delimiter=",", header="timestep,t_star,D,(D/D0)^2,centroid_x,centroid_y", comments="")
-        print(f"K = {K:.4f}: saved {csv_path}")
+        logger.info(f"K = {K:.4f}: saved {csv_path}")
 
     import matplotlib
 
@@ -309,4 +314,4 @@ if __name__ == "__main__":
     axes.grid(True, alpha=0.3)
     fig.suptitle("2D droplet evaporation (MRT, VanderWaals)")
     fig.savefig(os.path.join(output_dir, "d2_law_2d.png"), dpi=200, bbox_inches="tight")
-    print(f"Saved {os.path.join(output_dir, 'd2_law_2d.png')}")
+    logger.info(f"Saved {os.path.join(output_dir, 'd2_law_2d.png')}")

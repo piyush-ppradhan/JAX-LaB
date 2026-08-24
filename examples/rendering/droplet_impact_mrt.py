@@ -15,6 +15,11 @@ from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.multiphase import MultiphaseMRT
 from jax_lab.render import Light, Scene, SurfaceRendering
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 class DropletImpactMRT(MultiphaseMRT):
     """
@@ -115,7 +120,9 @@ class DropletImpactMRT(MultiphaseMRT):
         maximum_speed = jnp.max(jnp.linalg.norm(velocity, axis=-1))
         if not bool(jnp.isfinite(density).all() & jnp.isfinite(velocity).all()):
             raise FloatingPointError(f"Non-finite fields detected at timestep {timestep}.")
-        print(f"timestep={timestep}, density=[{float(jnp.min(density)):.4f}, {float(jnp.max(density)):.4f}], max_speed={float(maximum_speed):.5f}")
+        logger.info(
+            f"timestep={timestep}, density=[{float(jnp.min(density)):.4f}, {float(jnp.max(density)):.4f}], max_speed={float(maximum_speed):.5f}"
+        )
         self.render_scene.render(
             {"liquid_density": density, "velocity": velocity, "floor": floor},
             timestep=timestep,

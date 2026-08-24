@@ -22,6 +22,11 @@ import jax.numpy as jnp
 import h5py
 from urllib.request import urlretrieve
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 # Geometry downloaded from Digital Rocks Portal
 # https://www.digitalrocksportal.org/projects/372

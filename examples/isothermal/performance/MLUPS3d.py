@@ -19,6 +19,11 @@ from jax_lab.core.boundary_conditions import BounceBack, EquilibriumBC
 from jax_lab.core.models import BGKSim
 from jax_lab.core.lattice import LatticeD3Q19
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 
 class Cavity(BGKSim):
     def __init__(self, **kwargs):

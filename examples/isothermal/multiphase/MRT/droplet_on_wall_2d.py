@@ -19,6 +19,11 @@ from jax_lab.core.eos import PengRobinson
 from jax_lab.core.boundary_conditions import BounceBack
 from jax_lab.core.utils import save_fields_vtk
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 
@@ -50,7 +55,7 @@ class DropletOnWall2D(MultiphaseMRT):
         timestep = kwargs["timestep"]
         fields = {"rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1], "flag": np.array(self.solid_mask_streamed[0][..., 0])}
         u_sp = np.sqrt(np.sum(np.square(u), axis=-1))
-        print(f"Max spurious velocity: {np.max(u_sp)}")
+        logger.info(f"Max spurious velocity: {np.max(u_sp)}")
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # dynamic_fields = {key: value for key, value in fields.items() if key != "flag"}

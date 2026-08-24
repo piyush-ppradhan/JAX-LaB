@@ -28,6 +28,11 @@ from jax_lab.core.models import BGKSim, KBCSim
 from jax_lab.core.lattice import LatticeD2Q9
 from jax_lab.core.utils import save_fields_vtk, save_BCs_vtk, save_image
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 

@@ -22,6 +22,11 @@ from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.multiphase import MultiphaseCascade
 from jax_lab.core.utils import save_fields_hdf5_xdmf
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 config.update("jax_default_matmul_precision", "float32")
 
 

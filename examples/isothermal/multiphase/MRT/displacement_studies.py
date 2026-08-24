@@ -23,6 +23,11 @@ from jax_lab.core.utils import save_fields_vtk
 
 import h5py
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # config.update("jax_default_matmul_precision", "float32")
 
 
@@ -83,7 +88,7 @@ class Droplet3D(MultiphaseMRT):
             "uy": u[..., 1],
         }
         offset = 65
-        print(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
+        logger.info(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
         p_north = p[self.nx // 2, self.ny // 2 - offset, self.nz // 2, 0]
         p_south = p[self.nx // 2, self.ny // 2 + offset, self.nz // 2, 0]
         p_west = p[self.nx // 2 - offset, self.ny // 2, self.nz // 2, 0]
@@ -91,7 +96,7 @@ class Droplet3D(MultiphaseMRT):
         p_back = p[self.nx // 2, self.ny // 2, self.nz // 2 - offset, 0]
         p_front = p[self.nx // 2, self.ny // 2, self.nz // 2 + offset, 0]
         pressure_difference = p[self.nx // 2, self.ny // 2, self.nz // 2, 0] - (p_north + p_south + p_west + p_east + p_front + p_back) / 6
-        print(f"Pressure difference for radius = {r}: {pressure_difference}")
+        logger.info(f"Pressure difference for radius = {r}: {pressure_difference}")
 
         rho_north = rho_CO2[self.nx // 2, self.ny // 2 - offset, self.nz // 2, 0]
         rho_south = rho_CO2[self.nx // 2, self.ny // 2 + offset, self.nz // 2, 0]
@@ -101,7 +106,7 @@ class Droplet3D(MultiphaseMRT):
         rho_front = rho_CO2[self.nx // 2 + offset, self.ny // 2, self.nz // 2 + offset, 0]
         rho_l_pred = (rho_north + rho_south + rho_west + rho_east + rho_front + rho_back) / 6
         rho_g_pred = rho_CO2[self.nx // 2, self.ny // 2, self.nz // 2, 0]
-        print(f"%Error CO2 Min: {(rho_g_pred - rho_c_g) * 100 / rho_c_g} Max: {(rho_l_pred - rho_c_l) * 100 / rho_c_l}")
+        logger.info(f"%Error CO2 Min: {(rho_g_pred - rho_c_g) * 100 / rho_c_g} Max: {(rho_l_pred - rho_c_l) * 100 / rho_c_l}")
 
         rho_north = rho_water[self.nx // 2, self.ny // 2 - offset, self.nz // 2, 0]
         rho_south = rho_water[self.nx // 2, self.ny // 2 + offset, self.nz // 2, 0]
@@ -111,7 +116,7 @@ class Droplet3D(MultiphaseMRT):
         rho_front = rho_water[self.nx // 2 + offset, self.ny // 2, self.nz // 2 + offset, 0]
         rho_g_pred = (rho_north + rho_south + rho_west + rho_east + rho_front + rho_back) / 6
         rho_l_pred = rho_water[self.nx // 2, self.ny // 2, self.nz // 2, 0]
-        print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
+        logger.info(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
 
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf
@@ -180,7 +185,7 @@ class DropletOnWall3D(MultiphaseMRT):
             "uy": u[..., 1],
         }
         offset = 65
-        print(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
+        logger.info(f"Spurious currents: {np.max(np.sqrt(np.sum(u**2, axis=-1)))}")
 
         rho_north = rho_CO2[self.nx // 2, self.ny // 2 - offset, self.nz // 2, 0]
         rho_south = rho_CO2[self.nx // 2, self.ny // 2 + offset, self.nz // 2, 0]
@@ -190,7 +195,7 @@ class DropletOnWall3D(MultiphaseMRT):
         rho_front = rho_CO2[self.nx // 2 + offset, self.ny // 2, self.nz // 2 + offset, 0]
         rho_l_pred = (rho_north + rho_south + rho_west + rho_east + rho_front + rho_back) / 6
         rho_g_pred = rho_CO2[self.nx // 2, self.ny // 2, self.nz // 2, 0]
-        print(f"%Error CO2 Min: {(rho_g_pred - rho_c_g) * 100 / rho_c_g} Max: {(rho_l_pred - rho_c_l) * 100 / rho_c_l}")
+        logger.info(f"%Error CO2 Min: {(rho_g_pred - rho_c_g) * 100 / rho_c_g} Max: {(rho_l_pred - rho_c_l) * 100 / rho_c_l}")
 
         rho_north = rho_water[self.nx // 2, self.ny // 2 - offset, self.nz // 2, 0]
         rho_south = rho_water[self.nx // 2, self.ny // 2 + offset, self.nz // 2, 0]
@@ -200,7 +205,7 @@ class DropletOnWall3D(MultiphaseMRT):
         rho_front = rho_water[self.nx // 2 + offset, self.ny // 2, self.nz // 2 + offset, 0]
         rho_g_pred = (rho_north + rho_south + rho_west + rho_east + rho_front + rho_back) / 6
         rho_l_pred = rho_water[self.nx // 2, self.ny // 2, self.nz // 2, 0]
-        print(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
+        logger.info(f"%Error Water Min: {(rho_g_pred - rho_w_g) * 100 / rho_w_g} Max: {(rho_l_pred - rho_w_l) * 100 / rho_w_l}")
 
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf

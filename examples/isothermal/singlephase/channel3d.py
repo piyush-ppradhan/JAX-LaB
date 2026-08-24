@@ -28,6 +28,11 @@ import matplotlib.pyplot as plt
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 import jax
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # disable JIt compilation
 
 jax.config.update("jax_enable_x64", True)
@@ -549,7 +554,7 @@ class TurbulentChannel(KBCSim):
         kwargs = {"lattice": lattice, "nx": self.nx, "ny": self.ny, "nz": self.nz, "precision": precision, "omega": omegaADE, "vel": u}
         ADE = AdvectionDiffusionBGK(**kwargs)
         ADE.initialize_macroscopic_fields = self.initialize_macroscopic_fields
-        print("Initializing the distribution functions using the specified macroscopic fields....")
+        logger.info("Initializing the distribution functions using the specified macroscopic fields....")
         f = ADE.run(50000)
         return f
 
@@ -569,7 +574,7 @@ class TurbulentChannel(KBCSim):
         u_new = np.linalg.norm(u, axis=2)
 
         err = np.sum(np.abs(u_old - u_new))
-        print("error= {:07.6f}".format(err))
+        logger.info("error= {:07.6f}".format(err))
 
         # mean streamwise velocity in wall units u^+(z)
         uplus = np.mean(u[..., 0], axis=(0, 1)) / u_tau

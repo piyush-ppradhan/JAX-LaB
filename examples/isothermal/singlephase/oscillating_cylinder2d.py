@@ -30,6 +30,11 @@ from jax_lab.core.boundary_conditions import BounceBack, BounceBackMoving, Extra
 from jax_lab.core.models import BGKSim, KBCSim
 from jax_lab.core.lattice import LatticeD2Q9
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
+
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 jax.config.update("jax_enable_x64", True)
@@ -105,7 +110,7 @@ class Cylinder(KBCSim):
         u_old = np.linalg.norm(u_prev, axis=2)
         u_new = np.linalg.norm(u, axis=2)
         err = np.sum(np.abs(u_old - u_new))
-        print("error= {:07.6f}, CL = {:07.6f}, CD = {:07.6f}".format(err, cl, cd))
+        logger.info("error= {:07.6f}, CL = {:07.6f}, CD = {:07.6f}".format(err, cl, cd))
         save_image(timestep, u)
         # u magnitude
         fields = {"rho": rho[..., 0], "u": np.linalg.norm(u, axis=2)}
