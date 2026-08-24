@@ -95,9 +95,3 @@ def test_local_bounceback_matches_global_multiphase():
     actual = np.asarray(fout_tree[0])[tuple(indices.T)]
 
     assert np.max(np.abs(actual - expected)) == 0.0
-
-
-if __name__ == "__main__":
-    test_local_bounceback_matches_global_single_phase()
-    test_local_bounceback_matches_global_multiphase()
-    print("local bounce-back matches global bounce-back exactly")

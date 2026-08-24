@@ -15,39 +15,11 @@ from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
-from .boundary_conditions import BounceBack, BounceBackHalfway, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable
+from .boundary_conditions import WALL_BC_TYPES, BounceBack, BounceBackHalfway
 from .precision_policy import PrecisionPolicy
 from .utils import colored, downsample_field
 
 logger = logging.getLogger(__name__)
-
-
-# Concrete wall boundary condition types that support local (per-shard, int32) index handling, paired with the
-# pure math each uses (factored out onto the classes themselves so apply()'s global-index path and the local
-# kernels below share the exact same formulas). local_weights is unused (but always present, for a uniform
-# kernel signature) for WALL_BC_TYPES entries that don't carry interpolation weights.
-def _halfway_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
-    del weights
-    fbd = BounceBackHalfway.reflect_missing(fout_bd, fin_bd, imissing, iknown)
-    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
-
-
-def _bouzidi_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
-    fbd = InterpolatedBounceBackBouzidi.interpolate_missing(fout_bd, fin_bd, fout_bd, imissing, iknown, weights)
-    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
-
-
-def _differentiable_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
-    fbd = InterpolatedBounceBackDifferentiable.interpolate_missing(fout_bd, fin_bd, fout_bd, imissing, iknown, weights)
-    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
-
-
-# (concrete type, pure math function, whether it carries per-node interpolation weights)
-WALL_BC_TYPES = (
-    (BounceBackHalfway, _halfway_wall_math, False),
-    (InterpolatedBounceBackBouzidi, _bouzidi_wall_math, True),
-    (InterpolatedBounceBackDifferentiable, _differentiable_wall_math, True),
-)
 
 
 class LBMBase(object):
@@ -1308,11 +1280,9 @@ class LBMBase(object):
             if latest_step is not None:  # existing checkpoint present
                 # Assert that the checkpoint manager is not None
                 assert self.mngr is not None, "Checkpoint manager does not exist."
-                state = {"f": f}
-                # shardings = map(lambda x: x.sharding, state)
-                # restore_args = orb.checkpoint_utils.construct_restore_args(state, shardings)
+                restore_target = lambda value: jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=self.sharding)
+                state = jax.tree.map(restore_target, {"f": f})
                 try:
-                    # f = self.mngr.restore(latest_step, restore_kwargs={'restore_args': restore_args})['f']
                     f = self.mngr.restore(latest_step, args=orb.args.StandardRestore(state))["f"]
                     logger.info(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:

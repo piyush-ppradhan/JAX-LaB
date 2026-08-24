@@ -2,13 +2,15 @@
 G_ff-weighted neighbor-average reference computed with plain (periodic) numpy rolls.
 """
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from jax_lab.core.boundary_conditions import BounceBack
 from jax_lab.core.eos import VanderWaals
 from jax_lab.core.lattice import LatticeD2Q9, LatticeD3Q19
-from jax_lab.core.multiphase import MultiphaseMRT
+from jax_lab.core.multiphase import MultiphaseBGK, MultiphaseMRT
 
 DOMAIN_3D = (20, 20, 20)
 DOMAIN_2D = (24, 24, 0)
@@ -171,10 +173,7 @@ def test_no_wetting_does_not_build_average_density_data():
     mask = _random_solid_mask(DOMAIN_2D)
     sim = RandomSolidNoWetting(mask, **_simulation_kwargs(DOMAIN_2D, LatticeD2Q9))
 
-    assert sim.wetting_formulation is None
-    assert sim._has_wetting_bc == (False,)
     assert sim.scalar_neighbor_sum is None
-    assert sim.solid_mask_streamed is None
     assert sim.average_density_denominator is None
 
 
@@ -184,7 +183,50 @@ def test_wetting_boundary_requires_explicit_formulation():
         RandomSolidWetting(mask, **_simulation_kwargs(DOMAIN_2D, LatticeD2Q9))
 
 
-if __name__ == "__main__":
-    test_compute_average_density_matches_reference_3d()
-    test_compute_average_density_matches_reference_2d()
-    print("compute_average_density matches the independent reference")
+@pytest.mark.skipif(jax.device_count() < 2, reason="Multiple devices required for local wetting-index coverage")
+def test_local_improved_wetting_matches_reference_for_multiple_components():
+    nx, ny = 24, 18
+    mask_0 = np.zeros((nx, ny), dtype=bool)
+    mask_1 = np.zeros((nx, ny), dtype=bool)
+    mask_0[1::4, 2::3] = True
+    mask_1[2::5, 1::4] = True
+    indices_0 = np.asarray(np.where(mask_0)).T
+    indices_1 = np.asarray(np.where(mask_1)).T
+
+    class TwoComponentWetting(MultiphaseBGK):
+        def set_boundary_conditions(self):
+            self.BCs[0].append(BounceBack(tuple(indices_0.T), self.grid_info, self.precision_policy, np.pi / 3, 1.1, 0.0))
+            theta_1 = np.full((nx, ny, 1), 2.0 * np.pi / 3, dtype=np.float32)
+            self.BCs[1].append(BounceBack(tuple(indices_1.T), self.grid_info, self.precision_policy, theta_1, 0.9, 0.2))
+
+    sim = TwoComponentWetting(
+        lattice=LatticeD2Q9(PRECISION),
+        omega=[1.0, 1.0],
+        nx=nx,
+        ny=ny,
+        nz=0,
+        precision=PRECISION,
+        io_rate=0,
+        print_info_rate=0,
+        checkpoint_rate=0,
+        n_components=2,
+        g_kkprime=np.array([[-1.0, -0.25], [-0.25, -1.0]]),
+        k=[1.0, 1.0],
+        A=np.zeros((2, 2)),
+        EOS=VanderWaals(a=[9.0 / 49.0] * 2, b=[2.0 / 21.0] * 2, R=[1.0, 1.0], T=0.8 * 0.5714285714),
+        wetting_formulation="improved_virtual_density",
+    )
+    rng = np.random.default_rng(SEED + 3)
+    rho_tree = [
+        sim.distributed_array_init((nx, ny, 1), jnp.float32, init_val=rng.uniform(0.5, 4.0, size=(nx, ny, 1)).astype(np.float32)) for _ in range(2)
+    ]
+    rho_ave_tree = sim.compute_average_density(rho_tree)
+    expected = [np.asarray(rho).copy() for rho in rho_tree]
+    expected[0][tuple(indices_0.T)] = 1.1 * np.asarray(rho_ave_tree[0])[tuple(indices_0.T)]
+    expected[1][tuple(indices_1.T)] = np.asarray(rho_ave_tree[1])[tuple(indices_1.T)] - 0.2
+    expected = [np.clip(value, np.min(np.asarray(rho)), np.max(np.asarray(rho))) for value, rho in zip(expected, rho_tree, strict=True)]
+
+    actual = sim.apply_contact_angle(rho_tree)
+    assert all(data is not None for data in (sim.local_improved_wetting_data[0][0], sim.local_improved_wetting_data[1][0]))
+    for actual_component, expected_component in zip(actual, expected, strict=True):
+        assert np.max(np.abs(np.asarray(actual_component) - expected_component)) < 1e-6

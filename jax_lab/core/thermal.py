@@ -525,8 +525,15 @@ class Thermal(object):
             latest_step = self.mngr.latest_step()
             if latest_step is not None:  # existing checkpoint present
                 try:
-                    T = self.mngr.restore(latest_step, args=orb.args.StandardRestore({"T": T}))["T"]
-                    f = self.fluid_solver.mngr.restore(latest_step, args=orb.args.StandardRestore({"f": f}))["f"]
+                    restore_target = lambda value: jax.ShapeDtypeStruct(
+                        value.shape,
+                        value.dtype,
+                        sharding=self.fluid_solver.sharding,
+                    )
+                    T_target = jax.tree.map(restore_target, {"T": T})
+                    f_target = jax.tree.map(restore_target, {"f": f})
+                    T = self.mngr.restore(latest_step, args=orb.args.StandardRestore(T_target))["T"]
+                    f = self.fluid_solver.mngr.restore(latest_step, args=orb.args.StandardRestore(f_target))["f"]
                     logger.info(f"Restored checkpoint at step {latest_step}.")
                 except ValueError:
                     raise ValueError(f"Failed to restore checkpoint at step {latest_step}.")

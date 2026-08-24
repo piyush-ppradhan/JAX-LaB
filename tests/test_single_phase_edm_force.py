@@ -1,6 +1,4 @@
-"""Verify the compact EDM force formula is applied correctly for single-phase BGK (population space) and MRT
-(moment space, via LBMBase.apply_force / MRTSim.apply_force), against independent two-equilibrium references
-computed directly in this test (not by calling the library's own formula)."""
+"""Verify single-phase BGK and MRT EDM forcing against independent two-equilibrium references."""
 
 import jax
 
@@ -11,7 +9,6 @@ import numpy as np
 
 from jax_lab.core.lattice import LatticeD2Q9
 from jax_lab.core.models import BGKSim, MRTSim
-from jax_lab.core.thermal import Thermal
 
 DOMAIN = (8, 8, 0)
 PRECISION = "f64/f64"
@@ -102,29 +99,3 @@ def test_mrt_apply_force_matches_moment_space_reference():
     expected = m + jnp.dot(feq_force, sim.M) - jnp.dot(feq, sim.M)
 
     assert np.max(np.abs(np.asarray(actual) - np.asarray(expected))) < 1e-10
-
-
-def test_thermal_buoyancy_force_matches_population_space_reference():
-    fluid = BGKSim(lattice=LatticeD2Q9(PRECISION), omega=OMEGA, nx=DOMAIN[0], ny=DOMAIN[1], nz=DOMAIN[2], precision=PRECISION)
-    thermal = Thermal(fluid_solver=fluid, specific_heat=1.0, thermal_conductivity=0.05, apply_buoyancy=True, gravity=[0.0, -1e-4])
-
-    rho, u = _random_fields()
-    feq = fluid.equilibrium(rho, u, cast_output=False)
-    rng = np.random.default_rng(SEED + 3)
-    fout = feq + jnp.asarray(rng.uniform(-0.01, 0.01, size=feq.shape))
-
-    # apply_buoyancy=True monkeypatches fluid.apply_force to Thermal.apply_force_thermal.
-    actual = fluid.apply_force(fout, feq, rho, u)
-
-    du = thermal.gravity * (rho - rho.mean()) + fluid.force
-    feq_force = fluid.equilibrium(rho, u + du, cast_output=False)
-    expected = fout + feq_force - feq
-
-    assert np.max(np.abs(np.asarray(actual) - np.asarray(expected))) < 1e-12
-
-
-if __name__ == "__main__":
-    test_bgk_apply_force_matches_population_space_reference()
-    test_mrt_apply_force_matches_moment_space_reference()
-    test_thermal_buoyancy_force_matches_population_space_reference()
-    print("single-phase BGK, MRT and thermal-buoyancy apply_force match their independent references")

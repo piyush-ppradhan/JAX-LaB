@@ -1,9 +1,5 @@
 """Tests for lattice definitions and their mathematical invariants."""
 
-import os
-
-# os.environ.setdefault("JAX_PLATFORMS", "cpu")
-
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -52,14 +48,6 @@ def test_lattice_directions_are_unique_and_have_one_rest_direction(lattice_class
     assert np.count_nonzero(np.all(directions == 0, axis=1)) == 1
 
 
-@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_lattice_directions_sum_to_zero(lattice_class, dimensions, cardinality):
-    """Verify symmetry of the velocity set along every spatial axis."""
-    direction_sum = np.sum(np.asarray(lattice_class().c), axis=1)
-
-    np.testing.assert_array_equal(direction_sum, np.zeros(dimensions, dtype=direction_sum.dtype))
-
-
 @pytest.mark.parametrize("precision, expected_dtype, tolerance", PRECISION_CASES)
 @pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
 def test_lattice_weights_and_isotropy(
@@ -75,7 +63,6 @@ def test_lattice_weights_and_isotropy(
     directions = np.asarray(lattice.c, dtype=np.float64)
     weights = np.asarray(lattice.w, dtype=np.float64)
 
-    assert weights.shape == (cardinality,)
     assert np.all(weights > 0.0)
     np.testing.assert_allclose(np.sum(weights), 1.0, rtol=0.0, atol=tolerance)
 

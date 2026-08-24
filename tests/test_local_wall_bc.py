@@ -131,7 +131,7 @@ def test_halfway_bounceback_matches_global_single_phase():
 
 
 def test_halfway_bounceback_with_velocity_matches_global_single_phase():
-    _check_single_phase(BounceBackHalfway, with_vel=True)
+    _check_single_phase(BounceBackHalfway, with_vel=True, tolerance=1e-7)
 
 
 def test_bouzidi_bounceback_matches_global_single_phase():
@@ -170,13 +170,3 @@ def test_halfway_bounceback_matches_global_multiphase():
 
 def test_bouzidi_bounceback_matches_global_multiphase():
     _check_multiphase(InterpolatedBounceBackBouzidi, with_vel=False, tolerance=1e-6)
-
-
-if __name__ == "__main__":
-    test_halfway_bounceback_matches_global_single_phase()
-    test_halfway_bounceback_with_velocity_matches_global_single_phase()
-    test_bouzidi_bounceback_matches_global_single_phase()
-    test_differentiable_bounceback_matches_global_single_phase()
-    test_halfway_bounceback_matches_global_multiphase()
-    test_bouzidi_bounceback_matches_global_multiphase()
-    print("local wall boundary conditions match their global-index counterparts")

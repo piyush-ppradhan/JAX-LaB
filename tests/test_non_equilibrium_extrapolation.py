@@ -1,14 +1,15 @@
-"""Verify NonEquilibriumExtrapolation and ExactNonEquilibriumExtrapolation (which evaluate density/velocity only
-at the boundary and neighbor nodes) produce finite results and, for the exact variant, match the prescribed
-boundary density.
-"""
+"""Verify local extrapolation boundary paths against their global-index computations."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from jax_lab.core.boundary_conditions import BounceBack, ExactNonEquilibriumExtrapolation, NonEquilibriumExtrapolation
+from jax_lab.core.eos import VanderWaals
 from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.models import BGKSim
+from jax_lab.core.multiphase import MultiphaseBGK
 
 DOMAIN = (16, 16, 16)
 PRECISION = "f32/f32"
@@ -52,13 +53,15 @@ def _random_fin(sim):
     return fin + jnp.asarray(rng.uniform(-0.05, 0.05, size=fin.shape), dtype=fin.dtype)
 
 
-def test_non_equilibrium_extrapolation_produces_finite_output():
+def test_local_non_equilibrium_extrapolation_matches_global_application():
     sim = _make_sim(NonEquilibriumExtrapolation)
     fin = _random_fin(sim)
+    bc = sim.BCs[1]
 
+    expected = jnp.array(fin).at[bc.indices].set(bc.apply(fin, fin))
     fout = sim.apply_bc(jnp.array(fin), fin, 0, "PostStreaming")
 
-    assert bool(jnp.all(jnp.isfinite(fout)))
+    np.testing.assert_allclose(np.asarray(fout), np.asarray(expected), rtol=0.0, atol=1e-6)
 
 
 def test_exact_non_equilibrium_extrapolation_matches_prescribed_density():
@@ -72,7 +75,40 @@ def test_exact_non_equilibrium_extrapolation_matches_prescribed_density():
     assert np.allclose(boundary_rho, 0.9, atol=1e-5)
 
 
-if __name__ == "__main__":
-    test_non_equilibrium_extrapolation_produces_finite_output()
-    test_exact_non_equilibrium_extrapolation_matches_prescribed_density()
-    print("NonEquilibriumExtrapolation and ExactNonEquilibriumExtrapolation behave correctly")
+@pytest.mark.skipif(jax.device_count() < 2, reason="Multiple devices required for local extrapolation-index coverage")
+def test_local_exact_extrapolation_supports_multiple_components():
+    class Sim(MultiphaseBGK):
+        def set_boundary_conditions(self):
+            for component, face, density in ((0, "top", 0.9), (1, "bottom", 1.1)):
+                indices = self.bounding_box_indices[face]
+                prescribed = density * jnp.ones((indices.shape[0], 1))
+                self.BCs[component].append(
+                    ExactNonEquilibriumExtrapolation(tuple(indices.T), self.grid_info, self.precision_policy, prescribed, "density")
+                )
+
+    nx, ny, nz = DOMAIN
+    sim = Sim(
+        lattice=LatticeD3Q19(PRECISION),
+        omega=[OMEGA, OMEGA],
+        nx=nx,
+        ny=ny,
+        nz=nz,
+        precision=PRECISION,
+        io_rate=0,
+        print_info_rate=0,
+        checkpoint_rate=0,
+        n_components=2,
+        g_kkprime=np.array([[-1.0, -0.2], [-0.2, -1.0]]),
+        k=[1.0, 1.0],
+        A=np.zeros((2, 2)),
+        EOS=VanderWaals(a=[9.0 / 49.0] * 2, b=[2.0 / 21.0] * 2, R=[1.0, 1.0], T=0.8 * 0.5714285714),
+    )
+    fin_tree = sim.assign_fields_sharded()
+    expected_tree = []
+    for component, fin in enumerate(fin_tree):
+        bc = sim.BCs[component][0]
+        expected_tree.append(jnp.array(fin).at[bc.indices].set(bc.apply(fin, fin)))
+    fout_tree = sim.apply_bc([jnp.array(fin) for fin in fin_tree], fin_tree, 0, "PostStreaming")
+    for component, face in ((0, "top"), (1, "bottom")):
+        indices = tuple(sim.bounding_box_indices[face].T)
+        assert np.allclose(np.asarray(fout_tree[component])[indices], np.asarray(expected_tree[component])[indices], atol=1e-6)

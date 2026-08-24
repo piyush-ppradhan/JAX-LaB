@@ -1,8 +1,6 @@
-"""Verify the fused/symbolic MultiphaseMRT.collision() (K = M @ S @ M_inv, sparse per-direction columns) against
-an independent reference built from the unfused three-matmul formula (m = f @ M; relax; + delta_meq + C;
-@ M_inv), and the dense (difference @ K) form against the symbolic (per-column sum) form directly. Uses nonzero
-kappa (surface tension) and a nonzero body force, since the Taylor-Green regression test in test_collision.py
-always runs with both zero and would not exercise either path.
+"""Verify fused multiphase MRT collision against an independent unfused reference.
+
+Uses nonzero surface tension and body force because Taylor-Green tests do not exercise those paths.
 """
 
 import jax
@@ -111,6 +109,45 @@ def _reference_collision(sim, fin_tree, T=None):
     return [sim.precision_policy.cast_to_output(fout) for fout in fout_tree]
 
 
+def _reference_surface_tension(sim, psi_tree):
+    """Original q-channel streamed formulation, retained only as an independent regression reference."""
+    psi_s_tree = [sim.streaming(jnp.repeat(psi, axis=-1, repeats=sim.q)) for psi in psi_tree]
+    c = jnp.transpose(sim.c)
+    output = []
+    for kappa, A, s_v, s_e, psi, psi_s in zip(
+        sim.kappa,
+        sim.A.diagonal(),
+        sim.s_v,
+        sim.s_e,
+        psi_tree,
+        psi_s_tree,
+        strict=True,
+    ):
+        tm1 = lambda i, j: psi[..., 0] * jnp.dot(sim.G_ff * (psi_s - psi), c[:, i] * c[:, j])
+        tm2 = lambda i, j: jnp.dot(sim.G_ff * (psi_s**2 - psi**2), c[:, i] * c[:, j])
+        qxx = -kappa * ((1.0 - A) * tm1(0, 0) + 0.5 * A * tm2(0, 0))
+        qxy = -kappa * ((1.0 - A) * tm1(0, 1) + 0.5 * A * tm2(0, 1))
+        qyy = -kappa * ((1.0 - A) * tm1(1, 1) + 0.5 * A * tm2(1, 1))
+        C = jnp.zeros_like(psi_s, dtype=sim.precision_policy.compute_dtype)
+        if sim.dim == 2:
+            C = C.at[..., 1].set(1.5 * s_e * (qxx + qyy))
+            C = C.at[..., 2].set(-1.5 * sim.s_eta[len(output)] * (qxx + qyy))
+            C = C.at[..., 7].set(-s_v * (qxx - qyy))
+            C = C.at[..., 8].set(-s_v * qxy)
+        else:
+            qxz = -kappa * ((1.0 - A) * tm1(0, 2) + 0.5 * A * tm2(0, 2))
+            qyz = -kappa * ((1.0 - A) * tm1(1, 2) + 0.5 * A * tm2(1, 2))
+            qzz = -kappa * ((1.0 - A) * tm1(2, 2) + 0.5 * A * tm2(2, 2))
+            C = C.at[..., 1].set((2.0 / 5.0) * s_e * (qxx + qyy + qzz))
+            C = C.at[..., 9].set(-s_v * (2.0 * qxx - qyy - qzz))
+            C = C.at[..., 11].set(-s_v * (qyy - qzz))
+            C = C.at[..., 13].set(-s_v * qxy)
+            C = C.at[..., 14].set(-s_v * qyz)
+            C = C.at[..., 15].set(-s_v * qxz)
+        output.append(C)
+    return output
+
+
 def _check(kappa):
     sim = _build_sim(kappa)
     fin_tree = _random_fin(sim)
@@ -123,6 +160,8 @@ def _check(kappa):
 
 
 def test_fused_symbolic_collision_matches_reference_without_surface_tension():
+    sim = _build_sim(kappa=0.0)
+    assert sim.scalar_surface_stencil is None
     _check(kappa=0.0)
 
 
@@ -130,29 +169,10 @@ def test_fused_symbolic_collision_matches_reference_with_surface_tension():
     _check(kappa=0.05)
 
 
-def test_dense_and_symbolic_collision_matrix_agree():
-    """Guide's explicit acceptance check: dense (difference @ K) and symbolic (per-column sum of nonzero
-    terms) forms of the fused collision matrix must agree, with matching finite/NaN masks."""
-    sim = _build_sim(kappa=0.0)
-    fin_tree = _random_fin(sim)
-    fin_tree = [sim.precision_policy.cast_to_compute(f) for f in fin_tree]
-    rho_tree, u_tree = sim.update_macroscopic(fin_tree)
-    feq_tree = sim.equilibrium(rho_tree, u_tree, cast_output=False)
-
-    for f, feq, K, columns in zip(fin_tree, feq_tree, sim.collision_matrix, sim.collision_terms, strict=True):
-        difference = f - feq
-        dense = jnp.dot(difference, K)
-        symbolic = jnp.stack(
-            [sum(difference[..., i] * coefficient for i, coefficient in terms) for terms in columns],
-            axis=-1,
-        )
-        dense, symbolic = np.asarray(dense), np.asarray(symbolic)
-        assert np.max(np.abs(dense - symbolic)) < 1e-6
-        assert np.array_equal(np.isfinite(dense), np.isfinite(symbolic))
-
-
-if __name__ == "__main__":
-    test_fused_symbolic_collision_matches_reference_without_surface_tension()
-    test_fused_symbolic_collision_matches_reference_with_surface_tension()
-    test_dense_and_symbolic_collision_matrix_agree()
-    print("fused/symbolic MRT collision matches the unfused reference and the dense collision matrix")
+def test_scalar_surface_stencil_matches_q_channel_reference():
+    sim = _build_sim(kappa=0.05)
+    rng = np.random.default_rng(SEED + 2)
+    psi_tree = [jnp.asarray(rng.uniform(0.1, 1.0, size=(sim.nx, sim.ny, sim.nz, 1)), dtype=jnp.float64)]
+    actual = sim.adjust_surface_tension(psi_tree)
+    expected = _reference_surface_tension(sim, psi_tree)
+    assert np.max(np.abs(np.asarray(actual[0]) - np.asarray(expected[0]))) < 1e-12

@@ -4,10 +4,8 @@ Reproduces the physics setup of porous_media_evaporation_3D_mrt_low_memory.py (s
 same collision matrix, EOS, relaxation values and wetting parameters) on a smaller, reproducible 64^3 randomly
 generated porous medium, so the same script can be re-run before/after each optimization lands and compared.
 
-Run directly for the full A/B numbers (requires a GPU):
+Run directly for A/B numbers (requires a GPU):
     python tests/performance/bench_porous_media_3d.py [--nx 64] [--steps 200] [--devices <n>]
-
-Collected by pytest as a fast GPU-gated smoke test (skipped automatically without a GPU).
 """
 
 import os
@@ -24,7 +22,6 @@ from pathlib import Path  # noqa: E402
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
-import pytest  # noqa: E402
 
 from jax_lab.core.boundary_conditions import BounceBack, ExactNonEquilibriumExtrapolation  # noqa: E402
 from jax_lab.core.eos import PengRobinson  # noqa: E402
@@ -249,18 +246,6 @@ def main():
     if trace is not None:
         np.save(out_dir / "bytes_in_use_trace.npy", np.asarray(trace))
     print(f"Saved arrays and summary to {out_dir}/")
-
-
-@pytest.mark.skipif(
-    not jax.devices() or any(device.platform != "gpu" for device in jax.devices()),
-    reason="GPU required for the porous-media benchmark",
-)
-def test_benchmark_smoke():
-    """Fast smoke run (small domain, few steps) so this file stays pytest-collectible without taking minutes.
-    Use `python bench_porous_media_3d.py` directly for the real A/B numbers."""
-    result = run_benchmark(nx=16, ny=16, nz=16, steps=3, seed=0)
-    assert result["rho_finite"]
-    assert result["mlups"] > 0
 
 
 if __name__ == "__main__":

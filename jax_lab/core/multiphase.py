@@ -21,10 +21,20 @@ from jax.sharding import NamedSharding, PartitionSpec
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from .base import WALL_BC_TYPES, LBMBase
+from .base import LBMBase
 
 # User-defined libraries
-from .boundary_conditions import BounceBack, BounceBackHalfway, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable
+from .boundary_conditions import (
+    NEQ_BC_TYPES,
+    WALL_BC_TYPES,
+    BounceBack,
+    BounceBackHalfway,
+    BounceBackMoving,
+    ExactNonEquilibriumExtrapolation,
+    InterpolatedBounceBackBouzidi,
+    InterpolatedBounceBackDifferentiable,
+    _neq_extrapolation_math,
+)
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from .utils import colored, downsample_field
 
@@ -76,6 +86,8 @@ class Multiphase(LBMBase):
         self.g_kkprime = kwargs.get("g_kkprime")  # Fluid-fluid interaction strength
         self.body_force = kwargs.get("body_force", None)
         self.wetting_formulation = kwargs.get("wetting_formulation")
+        self._uses_default_compute_force = type(self).compute_force is Multiphase.compute_force
+        self._uses_default_macroscopic_velocity = type(self).macroscopic_velocity is Multiphase.macroscopic_velocity
 
         self._has_wetting_bc = tuple(
             any(self._is_wetting_boundary_condition(bc) and bc.theta is not None for bc in component_bcs) for component_bcs in self.BCs
@@ -91,9 +103,46 @@ class Multiphase(LBMBase):
 
         self.G_ff = self.compute_ff_greens_function()
         self.g_kkprime = jnp.array(self.g_kkprime, dtype=self.precision_policy.compute_dtype)
+        A_host = np.asarray(self.A)
+        g_host = np.asarray(self.g_kkprime)
+        self._psi_interactions = tuple(
+            tuple((1.0 - A_host[output, source]) * g_host[output, source] != 0.0 for source in range(self.n_components))
+            for output in range(self.n_components)
+        )
+        self._U_interactions = tuple(
+            tuple(A_host[output, source] != 0.0 for source in range(self.n_components)) for output in range(self.n_components)
+        )
+        self._psi_stencil_components = tuple(
+            any(self._psi_interactions[output][source] for output in range(self.n_components)) for source in range(self.n_components)
+        )
+        self._U_stencil_components = tuple(
+            any(self._U_interactions[output][source] for output in range(self.n_components)) for source in range(self.n_components)
+        )
+        self._uses_psi_force = any(self._psi_stencil_components)
+        self._uses_U_force = any(self._U_stencil_components)
 
         P = PartitionSpec
         scalar_spec = P("x", None, None) if self.dim == 2 else P("x", None, None, None)
+        aux_spec = P("x", None, None)
+        self.local_improved_wetting = jit(
+            shard_map(
+                self.local_improved_wetting_m,
+                mesh=self.mesh,
+                in_specs=(scalar_spec, scalar_spec, aux_spec, aux_spec, aux_spec, aux_spec),
+                out_specs=scalar_spec,
+                check_vma=False,
+            )
+        )
+        self._uses_local_neq_bc = self.n_devices > 1 and any(type(bc) in NEQ_BC_TYPES for component_bcs in self.BCs for bc in component_bcs)
+        if self._uses_local_neq_bc:
+            self.neq_bc_data = self._make_local_neq_bc_data()
+            variants = {data[:2] for component_data in self.neq_bc_data for data in component_data if data is not None}
+            exact_bc = next(
+                (bc for component_bcs in self.BCs for bc in component_bcs if type(bc) is ExactNonEquilibriumExtrapolation),
+                None,
+            )
+            correction_weights = tuple(np.asarray(exact_bc.w_NEQ).tolist()) if exact_bc is not None else None
+            self.local_neq_bc_kernels = self._build_local_neq_bc_kernels(scalar_spec, variants, correction_weights)
         G_ff_host = np.array(self.G_ff)
         # scalar_neighbor_sum: G_ff-weighted scalar neighbor sum, used by the wetting/average-density
         # denominator. scalar_force_stencil: the same neighbor structure, weighted by G_ff*c (a per-direction
@@ -136,6 +185,11 @@ class Multiphase(LBMBase):
                     denominator.block_until_ready()
         self.geometric_wetting_data, self.geometric_fluid_mask = (
             self._create_geometric_wetting_data() if self.wetting_formulation == "geometric" and any(self._has_wetting_bc) else (None, None)
+        )
+        self.local_improved_wetting_data = (
+            self._make_local_improved_wetting_data()
+            if self.wetting_formulation == "improved_virtual_density" and any(self._has_wetting_bc) and self.n_devices > 1
+            else [[None] * len(component_bcs) for component_bcs in self.BCs]
         )
 
     @property
@@ -844,6 +898,32 @@ class Multiphase(LBMBase):
             total = total + base * jnp.asarray(w, dtype=self.precision_policy.compute_dtype)
         return total
 
+    def _surface_stencil_m(self, psi, weights):
+        """Compute first- and second-power scalar surface moments with one pair of x halo exchanges."""
+        psi = psi.astype(self.precision_policy.compute_dtype)
+        field = jnp.concatenate((psi, jnp.square(psi)), axis=-1)
+        x_shifted = {0: field}
+        for x_shift in (1, -1):
+            shifted = jnp.roll(field, x_shift, axis=0)
+            if x_shift == 1:
+                x_shifted[1] = shifted.at[:1].set(self.send_right(field[-1:], "x"))
+            else:
+                x_shifted[-1] = shifted.at[-1:].set(self.send_left(field[:1], "x"))
+
+        directions = np.asarray(self.lattice.c).T
+        n_moments = weights.shape[0]
+        total = jnp.zeros((*psi.shape[:-1], 2, n_moments), dtype=self.precision_policy.compute_dtype)
+        for q_index, direction in enumerate(directions):
+            weight = weights[:, q_index]
+            if np.all(weight == 0.0):
+                continue
+            base = x_shifted[int(direction[0])]
+            remaining_axes = tuple(int(component) for component in direction[1 : self.dim])
+            if any(remaining_axes):
+                base = jnp.roll(base, remaining_axes, axis=tuple(range(1, self.dim)))
+            total = total + base[..., :, None] * jnp.asarray(weight, dtype=self.precision_policy.compute_dtype)
+        return total.reshape((*psi.shape[:-1], 2 * n_moments))
+
     def _create_boundary_data(self):
         """
         Create boundary data for the Lattice Boltzmann simulation by setting boundary conditions,
@@ -919,6 +999,130 @@ class Multiphase(LBMBase):
             solid_pin_indices_by_component.append(self._distribute_local(self._collect_solid_pin_indices(BCs), jnp.int32))
         return wall_bc_data_by_component, solid_pin_indices_by_component
 
+    def local_neq_bc_m(
+        self,
+        fout,
+        local_indices,
+        local_neighbor_indices,
+        local_imissing,
+        local_prescribed,
+        *,
+        exact,
+        needs_halo,
+        correction_weights,
+    ):
+        """Apply one static non-equilibrium extrapolation boundary using shard-local indices."""
+        indices = local_indices[0]
+        neighbor_indices = local_neighbor_indices[0]
+        prescribed = local_prescribed[0]
+
+        if needs_halo:
+            left_halo = self.send_right(fout[-1:], "x")
+            right_halo = self.send_left(fout[:1], "x")
+            neighbor_field = jnp.concatenate((left_halo, fout, right_halo), axis=0)
+            neighbor_indices = neighbor_indices.at[:, 0].add(1)
+        else:
+            neighbor_field = fout
+
+        idx = tuple(indices[:, axis] for axis in range(self.dim))
+        neighbor_idx = tuple(neighbor_indices[:, axis] for axis in range(self.dim))
+        fbd = fout.at[idx].get(mode="fill", fill_value=0.0)
+        f_nbr = neighbor_field.at[neighbor_idx].get(mode="fill", fill_value=0.0)
+
+        c = jnp.asarray(self.lattice.c, dtype=self.precision_policy.compute_dtype)
+        imissing = local_imissing[0]
+        fbd = _neq_extrapolation_math(
+            fbd,
+            f_nbr,
+            prescribed,
+            imissing,
+            self.lattice.w,
+            c,
+            correction_weights if exact else None,
+        )
+
+        return fout.at[idx].set(fbd, mode="drop")
+
+    def _build_local_neq_bc_kernels(self, field_spec, variants, correction_weights):
+        """Build only extrapolation-kernel variants used by configured multiphase boundaries."""
+        P = PartitionSpec
+        aux_spec = P("x", None, None)
+        return {
+            (exact, needs_halo): jit(
+                shard_map(
+                    partial(
+                        self.local_neq_bc_m,
+                        exact=exact,
+                        needs_halo=needs_halo,
+                        correction_weights=correction_weights if exact else None,
+                    ),
+                    mesh=self.mesh,
+                    in_specs=(field_spec, aux_spec, aux_spec, aux_spec, aux_spec),
+                    out_specs=field_spec,
+                    check_vma=False,
+                )
+            )
+            for exact, needs_halo in variants
+        }
+
+    @staticmethod
+    def _expand_neq_prescribed(values, count):
+        """Normalize prescribed density to one row per boundary node."""
+        values = np.asarray(values)
+        if values.ndim == 0:
+            return np.full((count, 1), values.item(), dtype=values.dtype)
+        if values.ndim == 1:
+            if values.shape[0] == count:
+                return values[:, None]
+            return np.broadcast_to(values, (count, values.shape[0])).copy()
+        if values.shape[0] == count:
+            return values
+        return np.broadcast_to(values, (count, *values.shape)).copy()
+
+    def _collect_neq_bc_data(self, bc):
+        """Build local data for one multiphase non-equilibrium extrapolation boundary."""
+        if type(bc) not in NEQ_BC_TYPES:
+            return None
+        if not bc.neighbors_found:
+            bc.find_neighbors()
+            bc.neighbors_found = True
+
+        indices = np.asarray(bc.indices, dtype=np.int32).T
+        if len(indices) == 0:
+            return None
+        neighbor_indices = np.asarray(bc.indices_nbr, dtype=np.int32).T
+        prescribed = self._expand_neq_prescribed(bc.prescribed, len(indices))
+        imissing = np.asarray(bc.imissing)
+        local_indices, (local_neighbors, local_imissing, local_prescribed) = self._split_local_indices(
+            indices,
+            neighbor_indices,
+            imissing,
+            prescribed,
+        )
+
+        local_nx = self.nx // self.n_devices
+        owner = indices[:, 0] // local_nx
+        needs_halo = False
+        for device in range(self.n_devices):
+            count = int(np.count_nonzero(owner == device))
+            if count == 0:
+                continue
+            local_neighbors[device, :count, 0] -= device * local_nx
+            needs_halo = needs_halo or bool(np.any((local_neighbors[device, :count, 0] < 0) | (local_neighbors[device, :count, 0] >= local_nx)))
+
+        return (
+            type(bc) is ExactNonEquilibriumExtrapolation,
+            needs_halo,
+            self._distribute_local(local_indices, jnp.int32),
+            self._distribute_local(local_neighbors, jnp.int32),
+            self._distribute_local(local_imissing, jnp.uint8),
+            self._distribute_local(local_prescribed, self.precision_policy.compute_dtype),
+        )
+
+    def _make_local_neq_bc_data(self):
+        """Build local extrapolation data per component while preserving BC ordering."""
+        return [[self._collect_neq_bc_data(bc) for bc in component_bcs] for component_bcs in self.BCs]
+
     @partial(jit, static_argnums=(0, 3), inline=True)
     def equilibrium(self, rho_tree, u_tree, cast_output=True):
         """
@@ -951,6 +1155,55 @@ class Multiphase(LBMBase):
             return tree_map(lambda f_eq: self.precision_policy.cast_to_output(f_eq), feq_tree)
         else:
             return feq_tree
+
+    def local_improved_wetting_m(self, rho, rho_ave, local_indices, local_theta, local_phi, local_delta_rho):
+        """Apply improved-virtual-density wetting using local solid-node indices on each x shard."""
+        indices = local_indices[0]
+        idx = tuple(indices[:, axis] for axis in range(self.dim))
+        rho_ave_boundary = rho_ave.at[idx].get(mode="fill", fill_value=0.0)
+        theta = local_theta[0]
+        wall_density = (theta <= jnp.pi / 2) * (local_phi[0] * rho_ave_boundary) + (theta > jnp.pi / 2) * (rho_ave_boundary - local_delta_rho[0])
+        return rho.at[idx].set(wall_density, mode="drop")
+
+    def _wetting_parameter_at_indices(self, value, indices):
+        """Convert scalar, per-node, or full-domain wetting data to one scalar row per solid node."""
+        value = np.asarray(value)
+        count = len(indices)
+        if value.size == 1:
+            return np.full((count, 1), value.reshape(()).item(), dtype=value.dtype)
+        spatial_shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
+        if value.shape[: self.dim] == spatial_shape:
+            selected = value[tuple(indices.T)]
+            return np.asarray(selected).reshape(count, -1)
+        if value.shape[0] == count:
+            return value.reshape(count, -1)
+        raise ValueError("Wetting parameters must be scalar, per-boundary-node arrays, or full-domain fields.")
+
+    def _make_local_improved_wetting_data(self):
+        """Build static local wetting data per component and boundary condition."""
+        data_by_component = []
+        for component_bcs in self.BCs:
+            component_data = []
+            for bc in component_bcs:
+                if not self._is_wetting_boundary_condition(bc) or bc.theta is None or bc.is_dynamic:
+                    component_data.append(None)
+                    continue
+                indices = np.asarray(self._get_solid_indices(bc), dtype=np.int32).T
+                if len(indices) == 0:
+                    component_data.append(None)
+                    continue
+                theta = self._wetting_parameter_at_indices(bc.theta, indices)
+                phi = self._wetting_parameter_at_indices(bc.phi, indices)
+                delta_rho = self._wetting_parameter_at_indices(bc.delta_rho, indices)
+                local_indices, (local_theta, local_phi, local_delta_rho) = self._split_local_indices(indices, theta, phi, delta_rho)
+                component_data.append((
+                    self._distribute_local(local_indices, jnp.int32),
+                    self._distribute_local(local_theta, self.precision_policy.compute_dtype),
+                    self._distribute_local(local_phi, self.precision_policy.compute_dtype),
+                    self._distribute_local(local_delta_rho, self.precision_policy.compute_dtype),
+                ))
+            data_by_component.append(component_data)
+        return data_by_component
 
     @partial(jit, static_argnums=(0,))
     def compute_average_density(self, rho_tree):
@@ -1015,24 +1268,37 @@ class Multiphase(LBMBase):
         if self.wetting_formulation == "improved_virtual_density":
             rho_ave_tree = self.compute_average_density(rho_tree)
 
-            def set_contact_angle(rho, rho_ave, BC):
+            def set_contact_angle(rho, rho_ave, BC, local_component_data):
                 rho_min = jnp.min(rho)
                 rho_max = jnp.max(rho)
-                for bc in BC:
+                for bc_index, bc in enumerate(BC):
                     if isinstance(
                         bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable)
                     ):
                         if bc.theta is not None:
-                            indices = self._get_solid_indices(bc)
-                            rho = rho.at[indices].set(
-                                (bc.theta <= jnp.pi / 2) * (bc.phi * rho_ave[indices]) + (bc.theta > jnp.pi / 2) * (rho_ave[indices] - bc.delta_rho)
-                            )
+                            local_data = local_component_data[bc_index]
+                            if local_data is not None:
+                                local_indices, local_theta, local_phi, local_delta_rho = local_data
+                                rho = self.local_improved_wetting(rho, rho_ave, local_indices, local_theta, local_phi, local_delta_rho)
+                            else:
+                                indices = self._get_solid_indices(bc)
+                                rho = rho.at[indices].set(
+                                    (bc.theta <= jnp.pi / 2) * (bc.phi * rho_ave[indices])
+                                    + (bc.theta > jnp.pi / 2) * (rho_ave[indices] - bc.delta_rho)
+                                )
                         rho = jnp.clip(rho, min=rho_min, max=rho_max)
                 return rho
 
             return [
-                set_contact_angle(rho, rho_ave, BC) if has_wetting_bc else rho
-                for rho, rho_ave, BC, has_wetting_bc in zip(rho_tree, rho_ave_tree, self.BCs, self._has_wetting_bc, strict=True)
+                set_contact_angle(rho, rho_ave, BC, local_component_data) if has_wetting_bc else rho
+                for rho, rho_ave, BC, local_component_data, has_wetting_bc in zip(
+                    rho_tree,
+                    rho_ave_tree,
+                    self.BCs,
+                    self.local_improved_wetting_data,
+                    self._has_wetting_bc,
+                    strict=True,
+                )
             ]
         elif self.wetting_formulation == "geometric":
 
@@ -1348,6 +1614,22 @@ class Multiphase(LBMBase):
 
     # Compute the force using the effective mass (psi) and the interaction potential (phi)
     @partial(jit, static_argnums=(0,))
+    def _compute_force_fields(self, rho_tree, T=None):
+        """Return force plus the contact-angle-adjusted potentials used to construct it."""
+        rho_tree = self.apply_contact_angle(rho_tree)
+        psi_tree, U_tree = self.compute_potential(rho_tree, T=T)
+        fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree, U_tree)
+        # fluid_solid_force = self.compute_fluid_solid_force(rho_tree)
+        if self.body_force is not None:
+            force_tree = tree_map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
+        else:
+            force_tree = fluid_fluid_force
+        if self.wetting_formulation == "geometric" and any(self._has_wetting_bc):
+            force_tree = tree_map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
+        return force_tree, psi_tree, U_tree
+
+    # Compute the force using the effective mass (psi) and the interaction potential (phi)
+    @partial(jit, static_argnums=(0,))
     def compute_force(self, rho_tree, T=None):
         """
         Compute the force acting on each component(fluid). This includes fluid-fluid, fluid-solid, and body forces.
@@ -1362,16 +1644,7 @@ class Multiphase(LBMBase):
         -------
         fluid_fluid_force (pytree of jax.numpy.ndarray): Total force field.
         """
-        rho_tree = self.apply_contact_angle(rho_tree)
-        psi_tree, U_tree = self.compute_potential(rho_tree, T=T)
-        fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree, U_tree)
-        # fluid_solid_force = self.compute_fluid_solid_force(rho_tree)
-        if self.body_force is not None:
-            force_tree = tree_map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
-        else:
-            force_tree = fluid_fluid_force
-        if self.wetting_formulation == "geometric" and any(self._has_wetting_bc):
-            force_tree = tree_map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
+        force_tree, _, _ = self._compute_force_fields(rho_tree, T=T)
         return force_tree
 
     @partial(jit, static_argnums=(0,))
@@ -1402,28 +1675,27 @@ class Multiphase(LBMBase):
         vmap below, matching the original psi_s_tree/U_s_tree precompute (scalar_force_stencil is itself a
         shard_map'd call and must not be invoked from inside vmap).
         """
-        psi_stencil_tree = tree_map(lambda psi: self.scalar_force_stencil(psi), psi_tree)
-        U_stencil_tree = tree_map(lambda U: self.scalar_force_stencil(U), U_tree)
+        psi_stencil_tree = [
+            self.scalar_force_stencil(psi) if used else None for psi, used in zip(psi_tree, self._psi_stencil_components, strict=True)
+        ]
+        U_stencil_tree = [self.scalar_force_stencil(U) if used else None for U, used in zip(U_tree, self._U_stencil_components, strict=True)]
 
-        def ffk_1(Ai, g_kkprime):
-            """
-            Shan-Chen interaction force
-            g_kkprime is a row of self.gkkprime, as it represents the interaction between kth component with all components
-            """
-            return reduce(operator.add, tree_map(lambda A, G, stencil: (1 - A) * G * stencil, list(Ai), list(g_kkprime), psi_stencil_tree))
-
-        def ffk_2(Ai):
-            """
-            Zhang-Chen interaction force.
-            """
-            return reduce(operator.add, tree_map(lambda A, stencil: A * stencil, list(Ai), U_stencil_tree))
-
-        return tree_map(
-            lambda psi, nt_1, nt_2: psi * nt_1 + nt_2,
-            psi_tree,
-            list(vmap(ffk_1, in_axes=(0, 0))(self.A, self.g_kkprime)),
-            list(vmap(ffk_2, in_axes=(0))(self.A)),
-        )
+        force_tree = []
+        for output in range(self.n_components):
+            psi_terms = [
+                (1.0 - self.A[output, source]) * self.g_kkprime[output, source] * psi_stencil_tree[source]
+                for source in range(self.n_components)
+                if self._psi_interactions[output][source]
+            ]
+            U_terms = [self.A[output, source] * U_stencil_tree[source] for source in range(self.n_components) if self._U_interactions[output][source]]
+            force = psi_tree[output] * reduce(operator.add, psi_terms) if psi_terms else None
+            if U_terms:
+                U_force = reduce(operator.add, U_terms)
+                force = U_force if force is None else force + U_force
+            if force is None:
+                force = jnp.zeros((*psi_tree[output].shape[:-1], self.dim), dtype=self.precision_policy.compute_dtype)
+            force_tree.append(force)
+        return force_tree
 
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, f_postcollision_tree, feq_tree, rho_tree, u_tree, T=None):
@@ -1513,12 +1785,30 @@ class Multiphase(LBMBase):
                     fout = fout.at[bc.indices].set(bc.apply(fout, fin))
             return fout
 
-        def __apply_bc__(fout, fin, BCs):
-            for bc in BCs:
+        def __apply_bc__(fout, fin, BCs, component_neq_data=None):
+            for bc_index, bc in enumerate(BCs):
+                local_neq_data = component_neq_data[bc_index] if component_neq_data is not None else None
+                if local_neq_data is not None:
+                    exact, needs_halo, local_indices, local_neighbors, local_imissing, local_prescribed = local_neq_data
+                    if bc.implementation_step == implementation_step:
+                        fout = self.local_neq_bc_kernels[(exact, needs_halo)](
+                            fout,
+                            local_indices,
+                            local_neighbors,
+                            local_imissing,
+                            local_prescribed,
+                        )
+                    continue
                 fout = _apply_bc_(fin, fout, bc)
             return fout
 
-        fout_tree = tree_map(lambda fout, fin, BCs: __apply_bc__(fout, fin, BCs), fout_tree, fin_tree, self.BCs)
+        if self._uses_local_neq_bc:
+            fout_tree = [
+                __apply_bc__(fout, fin, BCs, component_neq_data)
+                for fout, fin, BCs, component_neq_data in zip(fout_tree, fin_tree, self.BCs, self.neq_bc_data, strict=True)
+            ]
+        else:
+            fout_tree = [__apply_bc__(fout, fin, BCs) for fout, fin, BCs in zip(fout_tree, fin_tree, self.BCs, strict=True)]
 
         if implementation_step == "PostCollision":
             fout_tree = [
@@ -1605,14 +1895,9 @@ class Multiphase(LBMBase):
             if latest_step is not None:  # existing checkpoint present
                 # Assert that the checkpoint manager is not None
                 assert self.mngr is not None, "Checkpoint manager does not exist."
-                state = {}
                 c_name = lambda i: f"component_{i}"
-                for i in range(self.n_components):
-                    state[c_name(i)] = f_tree[i]
-                # shardings = jax.map(lambda x: x.sharding, f_tree)
-                # restore_args = orb.checkpoint_utils.construct_restore_args(
-                #     f_tree, shardings
-                # )
+                restore_target = lambda value: jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=self.sharding)
+                state = jax.tree.map(restore_target, {c_name(i): f_tree[i] for i in range(self.n_components)})
                 try:
                     restored_state = self.mngr.restore(latest_step, args=orb.args.StandardRestore(state))
                     f_tree = [restored_state[c_name(i)] for i in range(self.n_components)]
@@ -1973,7 +2258,26 @@ class MultiphaseMRT(Multiphase):
         # Surface tension adjustment (adjust_surface_tension) is identically zero whenever every component's
         # kappa is zero - a static (non-traced) fact known here, so collision() can skip computing and adding
         # it entirely in that case, rather than multiplying by a provably-zero array every timestep.
-        self._has_surface_tension = any(float(kappa) != 0.0 for kappa in self.kappa)
+        self._surface_tension_components = tuple(float(kappa) != 0.0 for kappa in self.kappa)
+        self._has_surface_tension = any(self._surface_tension_components)
+        self.scalar_surface_stencil = None
+        self.surface_moment_center = None
+        if self._has_surface_tension and isinstance(self.lattice, (LatticeD2Q9, LatticeD3Q19)):
+            moment_pairs = ((0, 0), (0, 1), (1, 1)) if self.dim == 2 else ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
+            c_host = np.asarray(self.c)
+            surface_weights = np.stack([np.asarray(self.G_ff) * c_host[i] * c_host[j] for i, j in moment_pairs])
+            P = PartitionSpec
+            scalar_spec = P("x", None, None) if self.dim == 2 else P("x", None, None, None)
+            self.scalar_surface_stencil = jit(
+                shard_map(
+                    partial(self._surface_stencil_m, weights=surface_weights),
+                    mesh=self.mesh,
+                    in_specs=scalar_spec,
+                    out_specs=scalar_spec,
+                    check_vma=False,
+                )
+            )
+            self.surface_moment_center = jnp.asarray(np.sum(surface_weights, axis=1), dtype=self.precision_policy.compute_dtype)
 
     @property
     def omega(self):
@@ -1997,73 +2301,64 @@ class MultiphaseMRT(Multiphase):
 
     @partial(jit, static_argnums=(0,))
     def adjust_surface_tension(self, psi_tree):
-        psi_s_tree = tree_map(lambda psi: self.streaming(jnp.repeat(psi, axis=-1, repeats=self.q)), psi_tree)
-        c = jnp.transpose(self.c)
-        if isinstance(self.lattice, LatticeD2Q9):
-            tm1 = lambda i, j, psi, psi_s: psi[..., 0] * jnp.dot(self.G_ff * (psi_s - psi), c[:, i] * c[:, j])
-            tm2 = lambda i, j, psi, psi_s: jnp.dot(self.G_ff * (psi_s**2 - psi**2), c[:, i] * c[:, j])
+        if not isinstance(self.lattice, (LatticeD2Q9, LatticeD3Q19)):
+            raise NotImplementedError("MRT model with D3Q27 model has not been implemented")
 
-            def compute_C(kappa, A, s_v, s_e, s_eta, psi, psi_s):
-                C = jnp.zeros_like(
-                    psi_s,
-                    dtype=self.precision_policy.compute_dtype,
-                )
-                qxx = -kappa * ((1 - A) * tm1(0, 0, psi, psi_s) + 0.5 * A * tm2(0, 0, psi, psi_s))
-                qxy = -kappa * ((1 - A) * tm1(0, 1, psi, psi_s) + 0.5 * A * tm2(0, 1, psi, psi_s))
-                qyy = -kappa * ((1 - A) * tm1(1, 1, psi, psi_s) + 0.5 * A * tm2(1, 1, psi, psi_s))
+        n_moments = 3 if self.dim == 2 else 6
+        C_tree = []
+        for component, (kappa, A, s_v, s_e, s_eta, psi) in enumerate(
+            zip(self.kappa, self.A.diagonal(), self.s_v, self.s_e, self.s_eta, psi_tree, strict=True)
+        ):
+            if not self._surface_tension_components[component]:
+                C_tree.append(jnp.zeros((*psi.shape[:-1], self.q), dtype=self.precision_policy.compute_dtype))
+                continue
+
+            moments = self.scalar_surface_stencil(psi)
+            psi_moments = moments[..., :n_moments]
+            psi_squared_moments = moments[..., n_moments:]
+            centered_psi = psi_moments - psi * self.surface_moment_center
+            centered_psi_squared = psi_squared_moments - jnp.square(psi) * self.surface_moment_center
+            tm1 = psi * centered_psi
+            tm2 = centered_psi_squared
+            qmoments = -kappa * ((1.0 - A) * tm1 + 0.5 * A * tm2)
+            C = jnp.zeros((*psi.shape[:-1], self.q), dtype=self.precision_policy.compute_dtype)
+            if self.dim == 2:
+                qxx, qxy, qyy = (qmoments[..., index] for index in range(3))
                 C = C.at[..., 1].set(1.5 * s_e * (qxx + qyy))
                 C = C.at[..., 2].set(-1.5 * s_eta * (qxx + qyy))
                 C = C.at[..., 7].set(-s_v * (qxx - qyy))
                 C = C.at[..., 8].set(-s_v * qxy)
-                return C
-
-            C_tree = tree_map(
-                lambda kappa, A, s_v, s_e, s_eta, psi, psi_s: compute_C(kappa, A, s_v, s_e, s_eta, psi, psi_s),
-                self.kappa,
-                list(self.A.diagonal()),
-                self.s_v,
-                self.s_e,
-                self.s_eta,
-                psi_tree,
-                psi_s_tree,
-            )
-            return C_tree
-        elif isinstance(self.lattice, LatticeD3Q19):
-            tm1 = lambda i, j, psi, psi_s: psi[..., 0] * jnp.dot(self.G_ff * (psi_s - psi), c[:, i] * c[:, j])
-            tm2 = lambda i, j, psi, psi_s: jnp.dot(self.G_ff * (psi_s**2 - psi**2), c[:, i] * c[:, j])
-
-            def compute_C(kappa, A, s_v, s_e, s_eta, psi, psi_s):
-                C = jnp.zeros_like(
-                    psi_s,
-                    dtype=self.precision_policy.compute_dtype,
-                )
-                qxx = -kappa * ((1 - A) * tm1(0, 0, psi, psi_s) + 0.5 * A * tm2(0, 0, psi, psi_s))
-                qxy = -kappa * ((1 - A) * tm1(0, 1, psi, psi_s) + 0.5 * A * tm2(0, 1, psi, psi_s))
-                qxz = -kappa * ((1 - A) * tm1(0, 2, psi, psi_s) + 0.5 * A * tm2(0, 2, psi, psi_s))
-                qyy = -kappa * ((1 - A) * tm1(1, 1, psi, psi_s) + 0.5 * A * tm2(1, 1, psi, psi_s))
-                qyz = -kappa * ((1 - A) * tm1(1, 2, psi, psi_s) + 0.5 * A * tm2(1, 2, psi, psi_s))
-                qzz = -kappa * ((1 - A) * tm1(2, 2, psi, psi_s) + 0.5 * A * tm2(2, 2, psi, psi_s))
-                C = C.at[..., 1].set((2 / 5) * s_e * (qxx + qyy + qzz))
-                C = C.at[..., 9].set(-s_v * (2 * qxx - qyy - qzz))
+            else:
+                qxx, qxy, qxz, qyy, qyz, qzz = (qmoments[..., index] for index in range(6))
+                C = C.at[..., 1].set((2.0 / 5.0) * s_e * (qxx + qyy + qzz))
+                C = C.at[..., 9].set(-s_v * (2.0 * qxx - qyy - qzz))
                 C = C.at[..., 11].set(-s_v * (qyy - qzz))
                 C = C.at[..., 13].set(-s_v * qxy)
                 C = C.at[..., 14].set(-s_v * qyz)
                 C = C.at[..., 15].set(-s_v * qxz)
-                return C
+            C_tree.append(C)
+        return C_tree
 
-            C_tree = tree_map(
-                lambda kappa, A, s_v, s_e, s_eta, psi, psi_s: compute_C(kappa, A, s_v, s_e, s_eta, psi, psi_s),
-                self.kappa,
-                list(self.A.diagonal()),
-                self.s_v,
-                self.s_e,
-                self.s_eta,
-                psi_tree,
-                psi_s_tree,
-            )
-            return C_tree
-        else:
-            raise NotImplementedError("MRT model with D3Q27 model has not been implemented")
+    @partial(jit, static_argnums=(0,), inline=True)
+    def _force_delta_feq(self, rho_tree, u_tree, F_tree):
+        """Compute compact EDM population differences from an already evaluated force."""
+        du_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
+
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        cu_tree = tree_map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
+        dcu_tree = tree_map(lambda du: 3.0 * jnp.dot(du, c), du_tree)
+        delta_usqr_tree = tree_map(
+            lambda u, du: 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True)),
+            u_tree,
+            du_tree,
+        )
+        return tree_map(
+            lambda rho, cu, dcu, delta_usqr: rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr),
+            rho_tree,
+            cu_tree,
+            dcu_tree,
+            delta_usqr_tree,
+        )
 
     @partial(jit, static_argnums=(0,), inline=True)
     def _compute_force_delta_feq(self, rho_tree, u_tree, T=None):
@@ -2086,24 +2381,7 @@ class MultiphaseMRT(Multiphase):
         -------
         (pytree of jax.numpy.ndarray): Real-space delta_feq for all components.
         """
-        F_tree = self.compute_force(rho_tree, T=T)
-        du_tree = tree_map(lambda F, rho: F / rho, F_tree, rho_tree)
-
-        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
-        cu_tree = tree_map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
-        dcu_tree = tree_map(lambda du: 3.0 * jnp.dot(du, c), du_tree)
-        delta_usqr_tree = tree_map(
-            lambda u, du: 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True)),
-            u_tree,
-            du_tree,
-        )
-        return tree_map(
-            lambda rho, cu, dcu, delta_usqr: rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr),
-            rho_tree,
-            cu_tree,
-            dcu_tree,
-            delta_usqr_tree,
-        )
+        return self._force_delta_feq(rho_tree, u_tree, self.compute_force(rho_tree, T=T))
 
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, m_tree, meq_tree, rho_tree, u_tree, T=None):
@@ -2161,7 +2439,14 @@ class MultiphaseMRT(Multiphase):
         fin_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
-        delta_feq_tree = self._compute_force_delta_feq(rho_tree, u_tree, T=T)
+        surface_psi_tree = None
+        if self._has_surface_tension and self._uses_default_compute_force:
+            F_tree, force_psi_tree, _ = self._compute_force_fields(rho_tree, T=T)
+            delta_feq_tree = self._force_delta_feq(rho_tree, u_tree, F_tree)
+            if self.wetting_formulation is None or not any(self._has_wetting_bc):
+                surface_psi_tree = force_psi_tree
+        else:
+            delta_feq_tree = self._compute_force_delta_feq(rho_tree, u_tree, T=T)
 
         fout_tree = []
         for f, feq, delta_feq, columns in zip(fin_tree, feq_tree, delta_feq_tree, self.collision_terms, strict=True):
@@ -2173,9 +2458,19 @@ class MultiphaseMRT(Multiphase):
             fout_tree.append(jnp.stack(outputs, axis=-1))
 
         if self._has_surface_tension:
-            psi_tree, _ = self.compute_potential(rho_tree, T=T)
-            C_tree = self.adjust_surface_tension(psi_tree)
-            fout_tree = tree_map(lambda fout, C, M_inv: fout + jnp.dot(C, M_inv), fout_tree, C_tree, self.M_inv)
+            if surface_psi_tree is None:
+                surface_psi_tree, _ = self.compute_potential(rho_tree, T=T)
+            C_tree = self.adjust_surface_tension(surface_psi_tree)
+            fout_tree = [
+                fout + jnp.dot(C, M_inv) if has_surface_tension else fout
+                for fout, C, M_inv, has_surface_tension in zip(
+                    fout_tree,
+                    C_tree,
+                    self.M_inv,
+                    self._surface_tension_components,
+                    strict=True,
+                )
+            ]
 
         if self.wetting_formulation == "geometric" and self.dim == 3:
             # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
@@ -2198,6 +2493,7 @@ class MultiphaseCascade(Multiphase):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._uses_default_cascade_apply_force = type(self).apply_force is MultiphaseCascade.apply_force
         self.sigma = kwargs.get("sigma")
         self.s_0 = kwargs.get("s_0")
         self.s_1 = kwargs.get("s_1")
@@ -3133,6 +3429,13 @@ class MultiphaseCascade(Multiphase):
         return tree_map(lambda F, sigma, psi, s_b: f(F, sigma, psi, s_b), F_tree, self.sigma, psi_tree, self.s_b)
 
     @partial(jit, static_argnums=(0,), inline=True)
+    def _apply_force_fields(self, Tdash_tree, F_tree, psi_tree):
+        """Apply Cascaded forcing from force and potential fields already evaluated by collision."""
+        C_tree = self.compute_force_central_moments(F_tree, psi_tree)
+        Tf_tree = tree_map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
+        return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
+
+    @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, Tdash_tree, rho_tree, u_tree, T=None):
         """
         Modified version of the apply_force defined in LBMBase to account for modified force.
@@ -3153,9 +3456,7 @@ class MultiphaseCascade(Multiphase):
         """
         F_tree = self.compute_force(rho_tree, T=T)
         psi_tree, _ = self.compute_potential(rho_tree, T=T)
-        C_tree = self.compute_force_central_moments(F_tree, psi_tree)
-        Tf_tree = tree_map(lambda S, C: jnp.dot(C, jnp.eye(self.lattice.q) - 0.5 * S), self.S, C_tree)
-        return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
+        return self._apply_force_fields(Tdash_tree, F_tree, psi_tree)
 
     @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
@@ -3164,15 +3465,34 @@ class MultiphaseCascade(Multiphase):
         T is forwarded to the pressure and force computations for thermal EOS.
         """
         fin_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), fin_tree)
-        rho_tree, _ = self.update_macroscopic(fin_tree)
-        u_tree = self.macroscopic_velocity(fin_tree, rho_tree, T=T)
+        rho_tree, raw_u_tree = self.update_macroscopic(fin_tree)
+        force_psi_tree = None
+        F_tree = None
+        if not self._uses_default_cascade_apply_force:
+            u_tree = self.macroscopic_velocity(fin_tree, rho_tree, T=T)
+        elif self._uses_default_macroscopic_velocity:
+            if self._uses_default_compute_force:
+                F_tree, force_psi_tree, _ = self._compute_force_fields(rho_tree, T=T)
+            else:
+                F_tree = self.compute_force(rho_tree, T=T)
+            u_tree = tree_map(lambda rho, u, F: u + 0.5 * F / rho, rho_tree, raw_u_tree, F_tree)
+        else:
+            u_tree = self.macroscopic_velocity(fin_tree, rho_tree, T=T)
+            F_tree = self.compute_force(rho_tree, T=T)
         T_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         Tdash_tree = self.compute_central_moment(T_tree, u_tree)
         Tdash_eq_tree = self.compute_eq_central_moments(rho_tree)
         Tout_tree = tree_map(
             lambda Tdash, Tdash_eq, S: jnp.dot(Tdash, jnp.eye(self.lattice.q) - S) + jnp.dot(Tdash_eq, S), Tdash_tree, Tdash_eq_tree, self.S
         )
-        Tout_tree = self.apply_force(Tout_tree, rho_tree, u_tree, T=T)
+        if not self._uses_default_cascade_apply_force:
+            Tout_tree = self.apply_force(Tout_tree, rho_tree, u_tree, T=T)
+        else:
+            if force_psi_tree is None or (self.wetting_formulation is not None and any(self._has_wetting_bc)):
+                psi_tree, _ = self.compute_potential(rho_tree, T=T)
+            else:
+                psi_tree = force_psi_tree
+            Tout_tree = self._apply_force_fields(Tout_tree, F_tree, psi_tree)
         Tout_tree = self.compute_central_moment_inverse(Tout_tree, u_tree)
         fout_tree = tree_map(lambda T, Minv: jnp.dot(T, Minv), Tout_tree, self.M_inv)
         if self.wetting_formulation == "geometric" and self.dim == 3:

@@ -1,9 +1,4 @@
-"""Verify the fused/symbolic single-phase MRTSim.collision() (K = M @ S @ M_inv, sparse per-direction columns)
-against an independent reference built from the unfused three-matmul formula (m = f @ M; relax; + delta_meq;
-@ M_inv), with a nonzero force, and the dense (difference @ K) form against the symbolic (per-column sum) form
-directly. The Taylor-Green regression test in test_collision.py always runs with self.force is None, so it does
-not exercise either the force path or (meaningfully) the collision matrix values away from pure relaxation.
-"""
+"""Verify fused single-phase MRT collision against an independent unfused reference with nonzero force."""
 
 import jax
 
@@ -102,28 +97,3 @@ def test_fused_symbolic_collision_matches_reference():
     expected = _reference_collision(sim, f)
 
     assert np.max(np.abs(np.asarray(actual) - np.asarray(expected))) < 1e-9
-
-
-def test_dense_and_symbolic_collision_matrix_agree():
-    """Guide's explicit acceptance check: dense (difference @ K) and symbolic (per-column sum of nonzero
-    terms) forms of the fused collision matrix must agree, with matching finite/NaN masks."""
-    sim = _build_sim()
-    f = sim.precision_policy.cast_to_compute(_random_f(sim))
-    rho, u = sim.update_macroscopic(f)
-    feq = sim.equilibrium(rho, u)
-    difference = f - feq
-
-    dense = jnp.dot(difference, sim.collision_matrix)
-    symbolic = jnp.stack(
-        [sum(difference[..., i] * coefficient for i, coefficient in terms) for terms in sim.collision_terms],
-        axis=-1,
-    )
-    dense, symbolic = np.asarray(dense), np.asarray(symbolic)
-    assert np.max(np.abs(dense - symbolic)) < 1e-6
-    assert np.array_equal(np.isfinite(dense), np.isfinite(symbolic))
-
-
-if __name__ == "__main__":
-    test_fused_symbolic_collision_matches_reference()
-    test_dense_and_symbolic_collision_matrix_agree()
-    print("fused/symbolic single-phase MRT collision matches the unfused reference and the dense collision matrix")

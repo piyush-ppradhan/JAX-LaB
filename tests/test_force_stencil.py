@@ -94,9 +94,3 @@ def test_compute_fluid_fluid_force_matches_reference_3d():
 
 def test_compute_fluid_fluid_force_matches_reference_2d():
     _check(DOMAIN_2D, LatticeD2Q9)
-
-
-if __name__ == "__main__":
-    test_compute_fluid_fluid_force_matches_reference_3d()
-    test_compute_fluid_fluid_force_matches_reference_2d()
-    print("compute_fluid_fluid_force matches the independent reference")

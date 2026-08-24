@@ -56,3 +56,4 @@ local_scheme = "no-local-version"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: integration tests with substantial compile or I/O cost"]

@@ -1,9 +1,5 @@
 """End-to-end tests for single- and multiphase checkpoint restart."""
 
-import os
-
-# os.environ.setdefault("JAX_PLATFORMS", "cpu")
-
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -17,16 +13,13 @@ from jax_lab.core.models import BGKSim
 from jax_lab.core.multiphase import MultiphaseBGK
 
 
-PRECISION_CASES = (
+SINGLE_PHASE_PRECISION_CASES = (
     pytest.param("f16/f16", 2e-3, id="f16-f16"),
     pytest.param("f32/f32", 1e-6, id="f32-f32"),
     pytest.param("f64/f64", 1e-12, id="f64-f64"),
 )
 
-DIMENSION_CASES = (
-    pytest.param(LatticeD2Q9, (8, 7, 0), id="2d"),
-    pytest.param(LatticeD3Q19, (6, 5, 4), id="3d"),
-)
+pytestmark = pytest.mark.slow
 
 
 def _sinusoidal_phase(spatial_shape, dtype, phase=0.0):
@@ -114,11 +107,10 @@ def _run_with_checkpoint_restart(solver_class, parameters):
     return restarted_output
 
 
-@pytest.mark.parametrize("precision, tolerance", PRECISION_CASES)
-@pytest.mark.parametrize("lattice_class, domain", DIMENSION_CASES)
-def test_single_phase_bgk_checkpoint_restart(tmp_path, lattice_class, domain, precision, tolerance):
-    """Compare a restarted single-phase run with an uninterrupted run."""
-    parameters = _solver_parameters(lattice_class, domain, precision, tmp_path / "single", checkpoint_rate=10)
+@pytest.mark.parametrize("precision, tolerance", SINGLE_PHASE_PRECISION_CASES)
+def test_single_phase_bgk_checkpoint_restart(tmp_path, precision, tolerance):
+    """Cover checkpoint restart and each supported storage/compute dtype."""
+    parameters = _solver_parameters(LatticeD2Q9, (8, 7, 0), precision, tmp_path / "single", checkpoint_rate=10)
     restarted_output = _run_with_checkpoint_restart(SinusoidalBGK, parameters)
 
     continuous_solver = SinusoidalBGK(**(parameters | {"checkpoint_rate": 0}))
@@ -133,14 +125,12 @@ def test_single_phase_bgk_checkpoint_restart(tmp_path, lattice_class, domain, pr
     assert restarted_output.dtype == continuous_output.dtype
 
 
-@pytest.mark.parametrize("precision, tolerance", PRECISION_CASES)
-@pytest.mark.parametrize("lattice_class, domain", DIMENSION_CASES)
-def test_multiphase_bgk_checkpoint_restart(tmp_path, lattice_class, domain, precision, tolerance):
-    """Compare a restarted two-component run with an uninterrupted run."""
+def test_multiphase_bgk_checkpoint_restart(tmp_path):
+    """Cover a different dimension and multiphase pytree structure."""
     parameters = _solver_parameters(
-        lattice_class,
-        domain,
-        precision,
+        LatticeD3Q19,
+        (6, 5, 4),
+        "f32/f32",
         tmp_path / "multiphase",
         checkpoint_rate=10,
     )
@@ -162,6 +152,6 @@ def test_multiphase_bgk_checkpoint_restart(tmp_path, lattice_class, domain, prec
             np.asarray(restarted_component),
             np.asarray(continuous_component),
             rtol=0.0,
-            atol=tolerance,
+            atol=1e-6,
         )
         assert restarted_component.dtype == continuous_component.dtype

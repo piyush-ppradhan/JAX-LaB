@@ -1300,6 +1300,33 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         return fbd
 
 
+def _halfway_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
+    """Halfway bounce-back formula shared by global and shard-local application paths."""
+    del weights
+    fbd = BounceBackHalfway.reflect_missing(fout_bd, fin_bd, imissing, iknown)
+    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
+
+
+def _bouzidi_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
+    """Bouzidi interpolation formula shared by global and shard-local application paths."""
+    fbd = InterpolatedBounceBackBouzidi.interpolate_missing(fout_bd, fin_bd, fout_bd, imissing, iknown, weights)
+    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
+
+
+def _differentiable_wall_math(fout_bd, fin_bd, imissing, iknown, vel, weights, w, c):
+    """Differentiable interpolation formula shared by global and shard-local application paths."""
+    fbd = InterpolatedBounceBackDifferentiable.interpolate_missing(fout_bd, fin_bd, fout_bd, imissing, iknown, weights)
+    return BounceBackHalfway.velocity_correction(fbd, imissing, iknown, vel, w, c)
+
+
+# Concrete type, shard-local formula, and whether it carries per-node interpolation weights.
+WALL_BC_TYPES = (
+    (BounceBackHalfway, _halfway_wall_math, False),
+    (InterpolatedBounceBackBouzidi, _bouzidi_wall_math, True),
+    (InterpolatedBounceBackDifferentiable, _differentiable_wall_math, True),
+)
+
+
 class ConvectiveOutflow(BoundaryCondition):
     """
     Extrapolation outflow boundary condition for a lattice Boltzmann method simulation.
@@ -1436,6 +1463,31 @@ class ExtrapolationOutflowMultiphase(BoundaryCondition):
         # fbd = fbd.at[self.bindex, ...].set(2 * f_nbr[self.bindex, ...] - f_next_nbr[self.bindex, ...])
         fbd = fbd.at[self.bindex, self.imissing].set(2 * f_nbr[self.bindex, self.imissing] - f_next_nbr[self.bindex, self.imissing])
         return fbd
+
+
+def _neq_extrapolation_math(fbd, f_nbr, prescribed, imissing, w, c, correction_weights=None):
+    """Non-equilibrium extrapolation formula for shard-local data access."""
+    rho_nbr = jnp.sum(f_nbr, axis=-1, keepdims=True)
+    vel_nbr = jnp.dot(f_nbr, c.T) / rho_nbr
+
+    def equilibrium(rho, velocity):
+        rho = rho.astype(c.dtype)
+        velocity = velocity.astype(c.dtype)
+        cu = 3.0 * jnp.dot(velocity, c)
+        usqr = 1.5 * jnp.sum(velocity**2, axis=-1, keepdims=True)
+        return rho * w * (1.0 + cu + 0.5 * cu**2 - usqr)
+
+    feq_nbr = equilibrium(rho_nbr, vel_nbr)
+    feq = equilibrium(prescribed, vel_nbr)
+    bindex = jnp.arange(fbd.shape[0])[:, None]
+    fbd = fbd.at[bindex, imissing].set(feq[bindex, imissing] + (f_nbr - feq_nbr)[bindex, imissing])
+
+    if correction_weights is not None:
+        rho_incorrect = jnp.sum(fbd, axis=-1, keepdims=True)
+        missing_weights = jnp.asarray(correction_weights, dtype=c.dtype)[imissing]
+        beta = missing_weights * (prescribed - rho_incorrect) / jnp.sum(missing_weights, axis=-1, keepdims=True)
+        fbd = fbd.at[bindex, imissing].set(fbd[bindex, imissing] + beta)
+    return fbd
 
 
 class NonEquilibriumExtrapolation(BoundaryCondition):
@@ -1617,6 +1669,9 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         beta = w_missing * (self.prescribed - rho_incorrect) / jnp.sum(w_missing, axis=-1, keepdims=True)
         fbd = fbd.at[bindex, self.imissing].set(fbd[bindex, self.imissing] + beta[bindex, self.imissing])
         return fbd
+
+
+NEQ_BC_TYPES = (NonEquilibriumExtrapolation, ExactNonEquilibriumExtrapolation)
 
 
 class ThermalBoundaryCondition(object):

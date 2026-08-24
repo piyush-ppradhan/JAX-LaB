@@ -108,9 +108,3 @@ def test_mrt_buoyancy_is_transformed_to_moment_space():
     # transform) gives a different, wrong result when m/meq are moments - not just float64-noise different.
     wrong = m + _manual_buoyancy_delta_feq(thermal, rho, u)
     assert np.max(np.abs(np.asarray(actual) - np.asarray(wrong))) > 1e-5
-
-
-if __name__ == "__main__":
-    test_bgk_buoyancy_stays_population_space()
-    test_mrt_buoyancy_is_transformed_to_moment_space()
-    print("Thermal buoyancy is applied correctly for both population-space and moment-space fluid solvers")
