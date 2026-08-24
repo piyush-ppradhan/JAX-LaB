@@ -25,7 +25,7 @@ import h5py
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 # config.update("jax_default_matmul_precision", "float32")

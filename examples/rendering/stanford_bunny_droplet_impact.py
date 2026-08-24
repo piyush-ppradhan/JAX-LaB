@@ -19,7 +19,7 @@ from jax_lab.render.render_utils import smooth_scalar_field
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 

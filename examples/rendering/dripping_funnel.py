@@ -20,7 +20,7 @@ from jax_lab.render import Light, Scene, SurfaceRendering
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 

@@ -30,7 +30,7 @@ from jax_lab.core.utils import save_fields_vtk, save_BCs_vtk, save_image
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 # Use 8 CPU devices

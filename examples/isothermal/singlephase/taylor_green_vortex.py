@@ -18,7 +18,7 @@ from jax_lab.core.lattice import LatticeD2Q9
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 

@@ -26,7 +26,7 @@ from jax_lab.core.boundary_conditions import DoNothing, BounceBack, EquilibriumB
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 # Use 8 CPU devices

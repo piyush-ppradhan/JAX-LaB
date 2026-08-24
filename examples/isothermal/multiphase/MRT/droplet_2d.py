@@ -13,12 +13,11 @@ import numpy as np
 
 from jax_lab.core.lattice import LatticeD2Q9
 from jax_lab.core.eos import VanderWaals
-from jax_lab.core.utils import save_fields_vtk
 from jax_lab.core.multiphase import MultiphaseMRT
 
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 # config.update("jax_default_matmul_precision", "float32")
@@ -72,9 +71,9 @@ class Droplet2D(MultiphaseMRT):
         pressure_difference = p[self.nx // 2, self.ny // 2, 0] - 0.25 * (p_north + p_south + p_west + p_east)
         logger.info(f"Pressure difference: {pressure_difference}")
         # HDF5/XDMF output option:
-        # from jax_lab.core.utils import save_fields_hdf5_xdmf
-        # save_fields_hdf5_xdmf(timestep, fields, "output", "data")
-        save_fields_vtk(timestep, fields, "output", "data")
+        from jax_lab.core.utils import save_fields_hdf5_xdmf
+
+        save_fields_hdf5_xdmf(timestep, fields, "output", "data")
 
 
 if __name__ == "__main__":
