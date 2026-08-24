@@ -28,95 +28,61 @@ PRECISION_CASES = (
 
 
 @pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_lattice_array_shapes(lattice_class, dimensions, cardinality):
-    """Verify the shapes of velocities, weights, and second moments."""
+def test_lattice_structure(lattice_class, dimensions, cardinality):
+    """Verify lattice shapes, directions, index groups, and stored moments."""
     lattice = lattice_class()
+    directions = np.asarray(lattice.c).T
 
     assert lattice.d == dimensions
     assert lattice.q == cardinality
     assert lattice.c.shape == (dimensions, cardinality)
     assert lattice.w.shape == (cardinality,)
     assert lattice.cc.shape == (cardinality, dimensions * (dimensions + 1) // 2)
-
-
-@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_lattice_directions_are_unique_and_have_one_rest_direction(lattice_class, dimensions, cardinality):
-    """Verify that the velocity set has no duplicates and one zero vector."""
-    directions = np.asarray(lattice_class().c).T
-
     assert np.unique(directions, axis=0).shape[0] == cardinality
     assert np.count_nonzero(np.all(directions == 0, axis=1)) == 1
 
-
-@pytest.mark.parametrize("precision, expected_dtype, tolerance", PRECISION_CASES)
-@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_lattice_weights_and_isotropy(
-    lattice_class,
-    dimensions,
-    cardinality,
-    precision,
-    expected_dtype,
-    tolerance,
-):
-    """Verify normalized positive weights and first- and second-order isotropy."""
-    lattice = lattice_class(precision=precision)
-    directions = np.asarray(lattice.c, dtype=np.float64)
-    weights = np.asarray(lattice.w, dtype=np.float64)
-
-    assert np.all(weights > 0.0)
-    np.testing.assert_allclose(np.sum(weights), 1.0, rtol=0.0, atol=tolerance)
-
-    first_moment = directions @ weights
-    np.testing.assert_allclose(first_moment, np.zeros(dimensions), rtol=0.0, atol=tolerance)
-
-    second_moment = (directions * weights) @ directions.T
-    expected_second_moment = np.eye(dimensions) * lattice.cs2
-    np.testing.assert_allclose(second_moment, expected_second_moment, rtol=0.0, atol=tolerance)
-
-    assert lattice.w.dtype == expected_dtype
-    assert lattice.cc.dtype == expected_dtype
-
-
-@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_opposite_indices_are_an_involution(lattice_class, dimensions, cardinality):
-    """Verify that every velocity maps to, and back from, its opposite."""
-    lattice = lattice_class()
-    directions = np.asarray(lattice.c).T
     opposite_indices = np.asarray(lattice.opp_indices, dtype=np.int64)
-
     np.testing.assert_array_equal(directions[opposite_indices], -directions)
     np.testing.assert_array_equal(opposite_indices[opposite_indices], np.arange(cardinality))
 
-
-@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_direction_index_groups_match_their_definitions(lattice_class, dimensions, cardinality):
-    """Verify main, left, and right direction index groups."""
-    lattice = lattice_class()
-    directions = np.asarray(lattice.c).T
     main_indices = np.asarray(lattice.main_indices, dtype=np.int64)
     left_indices = np.asarray(lattice.left_indices, dtype=np.int64)
     right_indices = np.asarray(lattice.right_indices, dtype=np.int64)
-
     expected_main = np.flatnonzero(np.sum(np.abs(directions), axis=1) == 1)
     expected_left = np.flatnonzero(directions[:, 0] == -1)
     expected_right = np.flatnonzero(directions[:, 0] == 1)
-
     np.testing.assert_array_equal(main_indices, expected_main)
     np.testing.assert_array_equal(left_indices, expected_left)
     np.testing.assert_array_equal(right_indices, expected_right)
 
-
-@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
-def test_lattice_moments_match_velocity_products(lattice_class, dimensions, cardinality):
-    """Verify every stored symmetric second-moment component."""
-    lattice = lattice_class()
-    directions = np.asarray(lattice.c).T
     expected_moments = np.stack(
         [directions[:, first_axis] * directions[:, second_axis] for first_axis in range(dimensions) for second_axis in range(first_axis, dimensions)],
         axis=-1,
     )
-
     np.testing.assert_array_equal(np.asarray(lattice.cc), expected_moments)
+
+
+@pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
+def test_lattice_weights_and_isotropy(lattice_class, dimensions, cardinality):
+    """Verify each lattice's normalized weights and isotropy in high precision."""
+    lattice = lattice_class(precision="f64/f64")
+    directions = np.asarray(lattice.c, dtype=np.float64)
+    weights = np.asarray(lattice.w, dtype=np.float64)
+
+    assert np.all(weights > 0.0)
+    np.testing.assert_allclose(np.sum(weights), 1.0, rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(directions @ weights, np.zeros(dimensions), rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose((directions * weights) @ directions.T, np.eye(dimensions) * lattice.cs2, rtol=0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("precision, expected_dtype, tolerance", PRECISION_CASES)
+def test_lattice_precision_policy(precision, expected_dtype, tolerance):
+    """Verify shared precision handling once, independent of lattice definition."""
+    lattice = LatticeD2Q9(precision=precision)
+
+    assert lattice.w.dtype == expected_dtype
+    assert lattice.cc.dtype == expected_dtype
+    np.testing.assert_allclose(np.sum(np.asarray(lattice.w, dtype=np.float64)), 1.0, rtol=0.0, atol=tolerance)
 
 
 def test_unsupported_lattice_name_raises_value_error():

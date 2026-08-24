@@ -175,6 +175,9 @@ def test_no_wetting_does_not_build_average_density_data():
 
     assert sim.scalar_neighbor_sum is None
     assert sim.average_density_denominator is None
+    assert sim.local_geometric_wetting is None
+    assert sim.geometric_wetting_data is None
+    assert sim.geometric_fluid_mask is None
 
 
 def test_wetting_boundary_requires_explicit_formulation():
@@ -227,6 +230,92 @@ def test_local_improved_wetting_matches_reference_for_multiple_components():
     expected = [np.clip(value, np.min(np.asarray(rho)), np.max(np.asarray(rho))) for value, rho in zip(expected, rho_tree, strict=True)]
 
     actual = sim.apply_contact_angle(rho_tree)
+    assert sim.local_geometric_wetting is None
+    assert sim.geometric_wetting_data is None
+    assert sim.geometric_fluid_mask is None
     assert all(data is not None for data in (sim.local_improved_wetting_data[0][0], sim.local_improved_wetting_data[1][0]))
     for actual_component, expected_component in zip(actual, expected, strict=True):
         assert np.max(np.abs(np.asarray(actual_component) - expected_component)) < 1e-6
+
+
+def _reference_geometric_wetting(rho, component_data, fluid_mask):
+    rho = rho.copy()
+    rho_min = np.min(rho[fluid_mask])
+    rho_max = np.max(rho[fluid_mask])
+
+    def interpolate(point_data):
+        if rho.ndim == 3:
+            x0, y0, x1, y1, w00, w10, w01, w11 = point_data
+            return w00[:, None] * rho[x0, y0] + w10[:, None] * rho[x1, y0] + w01[:, None] * rho[x0, y1] + w11[:, None] * rho[x1, y1]
+        x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point_data
+        return (
+            w000[:, None] * rho[x0, y0, z0]
+            + w100[:, None] * rho[x1, y0, z0]
+            + w010[:, None] * rho[x0, y1, z0]
+            + w110[:, None] * rho[x1, y1, z0]
+            + w001[:, None] * rho[x0, y0, z1]
+            + w101[:, None] * rho[x1, y0, z1]
+            + w011[:, None] * rho[x0, y1, z1]
+            + w111[:, None] * rho[x1, y1, z1]
+        )
+
+    for data in component_data:
+        point_data = data["points"] if rho.ndim == 4 else (data["point_1"], data["point_2"])
+        samples = np.stack([interpolate(point) for point in point_data], axis=-2)
+        wall_density = np.where(data["theta"] <= np.pi / 2, np.max(samples, axis=-2), np.min(samples, axis=-2))
+        rho[data["indices"]] = np.clip(wall_density, rho_min, rho_max)
+    return rho
+
+
+@pytest.mark.skipif(jax.device_count() < 2, reason="Multiple devices required for local geometric-wetting coverage")
+@pytest.mark.parametrize(
+    "domain, lattice_class, n_components",
+    (
+        pytest.param((8, 7, 0), LatticeD2Q9, 2, id="2d-multicomponent"),
+        pytest.param((4, 4, 4), LatticeD3Q19, 1, id="3d"),
+    ),
+)
+def test_local_geometric_wetting_matches_global_reference(domain, lattice_class, n_components):
+    class GeometricWetting(MultiphaseBGK):
+        def set_boundary_conditions(self):
+            cases = ((0, "bottom", np.pi / 3), (1, "top", 2.0 * np.pi / 3))
+            for component, face, theta in cases[:n_components]:
+                indices = self.bounding_box_indices[face]
+                self.BCs[component].append(BounceBack(tuple(indices.T), self.grid_info, self.precision_policy, theta))
+
+    nx, ny, nz = domain
+    sim = GeometricWetting(
+        lattice=lattice_class(PRECISION),
+        omega=[1.0] * n_components,
+        nx=nx,
+        ny=ny,
+        nz=nz,
+        precision=PRECISION,
+        io_rate=0,
+        print_info_rate=0,
+        checkpoint_rate=0,
+        n_components=n_components,
+        g_kkprime=-np.eye(n_components),
+        k=[1.0] * n_components,
+        A=np.zeros((n_components, n_components)),
+        EOS=VanderWaals(a=[9.0 / 49.0] * n_components, b=[2.0 / 21.0] * n_components, R=[1.0] * n_components, T=0.8 * 0.5714285714),
+        wetting_formulation="geometric",
+    )
+    global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
+    spatial_shape = domain[:2] if nz == 0 else domain
+    rng = np.random.default_rng(SEED + 4)
+    rho_host_tree = [rng.uniform(0.5, 4.0, size=(*spatial_shape, 1)).astype(np.float32) for _ in range(n_components)]
+    rho_tree = [sim.distributed_array_init(rho.shape, jnp.float32, init_val=rho) for rho in rho_host_tree]
+
+    actual_tree = sim.apply_contact_angle(rho_tree)
+    expected_tree = [
+        _reference_geometric_wetting(rho, data, np.asarray(mask)[..., 0])
+        for rho, data, mask in zip(rho_host_tree, global_data, global_masks, strict=True)
+    ]
+
+    for component_data in sim.geometric_wetting_data:
+        for data in component_data:
+            assert data["local_indices"].dtype == jnp.int32
+            assert data["request_indices"].dtype == jnp.int32
+    for actual, expected in zip(actual_tree, expected_tree, strict=True):
+        assert np.max(np.abs(np.asarray(actual) - expected)) < 1e-6

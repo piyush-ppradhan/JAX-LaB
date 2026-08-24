@@ -98,7 +98,11 @@ class Multiphase(LBMBase):
                 "Supported schemes: geometric and improved_virtual_density."
             )
 
-        if self.wetting_formulation == "geometric":
+        has_wetting_bc = any(self._has_wetting_bc)
+        uses_geometric_wetting = self.wetting_formulation == "geometric" and has_wetting_bc
+        uses_improved_wetting = self.wetting_formulation == "improved_virtual_density" and has_wetting_bc
+
+        if uses_geometric_wetting:
             self.computed_nearest_next_nearest_nbr = False
 
         self.G_ff = self.compute_ff_greens_function()
@@ -124,15 +128,30 @@ class Multiphase(LBMBase):
         P = PartitionSpec
         scalar_spec = P("x", None, None) if self.dim == 2 else P("x", None, None, None)
         aux_spec = P("x", None, None)
-        self.local_improved_wetting = jit(
-            shard_map(
-                self.local_improved_wetting_m,
-                mesh=self.mesh,
-                in_specs=(scalar_spec, scalar_spec, aux_spec, aux_spec, aux_spec, aux_spec),
-                out_specs=scalar_spec,
-                check_vma=False,
+        self.local_improved_wetting = None
+        if uses_improved_wetting and self.n_devices > 1:
+            self.local_improved_wetting = jit(
+                shard_map(
+                    self.local_improved_wetting_m,
+                    mesh=self.mesh,
+                    in_specs=(scalar_spec, scalar_spec, aux_spec, aux_spec, aux_spec, aux_spec),
+                    out_specs=scalar_spec,
+                    check_vma=False,
+                )
             )
-        )
+        self.local_geometric_wetting = None
+        if uses_geometric_wetting and self.n_devices > 1:
+            slot_spec = P("x", None)
+            request_spec = P("x", None, None, None)
+            self.local_geometric_wetting = jit(
+                shard_map(
+                    self.local_geometric_wetting_m,
+                    mesh=self.mesh,
+                    in_specs=(scalar_spec, P(), P(), aux_spec, aux_spec, slot_spec, request_spec, request_spec),
+                    out_specs=scalar_spec,
+                    check_vma=False,
+                )
+            )
         self._uses_local_neq_bc = self.n_devices > 1 and any(type(bc) in NEQ_BC_TYPES for component_bcs in self.BCs for bc in component_bcs)
         if self._uses_local_neq_bc:
             self.neq_bc_data = self._make_local_neq_bc_data()
@@ -158,7 +177,7 @@ class Multiphase(LBMBase):
                     check_vma=False,
                 )
             )
-            if self.wetting_formulation == "improved_virtual_density" and any(self._has_wetting_bc)
+            if uses_improved_wetting
             else None
         )
         self.scalar_force_stencil = jit(
@@ -183,12 +202,10 @@ class Multiphase(LBMBase):
             for denominator in self.average_density_denominator:
                 if denominator is not None:
                     denominator.block_until_ready()
-        self.geometric_wetting_data, self.geometric_fluid_mask = (
-            self._create_geometric_wetting_data() if self.wetting_formulation == "geometric" and any(self._has_wetting_bc) else (None, None)
-        )
+        self.geometric_wetting_data, self.geometric_fluid_mask = self._create_geometric_wetting_data() if uses_geometric_wetting else (None, None)
         self.local_improved_wetting_data = (
             self._make_local_improved_wetting_data()
-            if self.wetting_formulation == "improved_virtual_density" and any(self._has_wetting_bc) and self.n_devices > 1
+            if uses_improved_wetting and self.n_devices > 1
             else [[None] * len(component_bcs) for component_bcs in self.BCs]
         )
 
@@ -534,9 +551,10 @@ class Multiphase(LBMBase):
         data (tuple): Index arrays and weights for multilinear interpolation.
         """
         floor_points = np.floor(points)
-        lower = floor_points.astype(np.int64)
+        lower = floor_points.astype(np.int32)
         upper = lower + 1
         frac = points - floor_points
+        compute_dtype = np.dtype(self.precision_policy.compute_dtype)
 
         if self.dim == 2:
             x0 = np.clip(lower[:, 0], 0, self.nx - 1)
@@ -547,14 +565,14 @@ class Multiphase(LBMBase):
             wy = frac[:, 1]
 
             return (
-                jnp.array(x0, dtype=jnp.int32),
-                jnp.array(y0, dtype=jnp.int32),
-                jnp.array(x1, dtype=jnp.int32),
-                jnp.array(y1, dtype=jnp.int32),
-                jnp.array((1.0 - wx) * (1.0 - wy), dtype=self.precision_policy.compute_dtype),
-                jnp.array(wx * (1.0 - wy), dtype=self.precision_policy.compute_dtype),
-                jnp.array((1.0 - wx) * wy, dtype=self.precision_policy.compute_dtype),
-                jnp.array(wx * wy, dtype=self.precision_policy.compute_dtype),
+                np.asarray(x0, dtype=np.int32),
+                np.asarray(y0, dtype=np.int32),
+                np.asarray(x1, dtype=np.int32),
+                np.asarray(y1, dtype=np.int32),
+                np.asarray((1.0 - wx) * (1.0 - wy), dtype=compute_dtype),
+                np.asarray(wx * (1.0 - wy), dtype=compute_dtype),
+                np.asarray((1.0 - wx) * wy, dtype=compute_dtype),
+                np.asarray(wx * wy, dtype=compute_dtype),
             )
 
         x0 = np.clip(lower[:, 0], 0, self.nx - 1)
@@ -568,20 +586,20 @@ class Multiphase(LBMBase):
         wz = frac[:, 2]
 
         return (
-            jnp.array(x0, dtype=jnp.int32),
-            jnp.array(y0, dtype=jnp.int32),
-            jnp.array(z0, dtype=jnp.int32),
-            jnp.array(x1, dtype=jnp.int32),
-            jnp.array(y1, dtype=jnp.int32),
-            jnp.array(z1, dtype=jnp.int32),
-            jnp.array((1.0 - wx) * (1.0 - wy) * (1.0 - wz), dtype=self.precision_policy.compute_dtype),
-            jnp.array(wx * (1.0 - wy) * (1.0 - wz), dtype=self.precision_policy.compute_dtype),
-            jnp.array((1.0 - wx) * wy * (1.0 - wz), dtype=self.precision_policy.compute_dtype),
-            jnp.array(wx * wy * (1.0 - wz), dtype=self.precision_policy.compute_dtype),
-            jnp.array((1.0 - wx) * (1.0 - wy) * wz, dtype=self.precision_policy.compute_dtype),
-            jnp.array(wx * (1.0 - wy) * wz, dtype=self.precision_policy.compute_dtype),
-            jnp.array((1.0 - wx) * wy * wz, dtype=self.precision_policy.compute_dtype),
-            jnp.array(wx * wy * wz, dtype=self.precision_policy.compute_dtype),
+            np.asarray(x0, dtype=np.int32),
+            np.asarray(y0, dtype=np.int32),
+            np.asarray(z0, dtype=np.int32),
+            np.asarray(x1, dtype=np.int32),
+            np.asarray(y1, dtype=np.int32),
+            np.asarray(z1, dtype=np.int32),
+            np.asarray((1.0 - wx) * (1.0 - wy) * (1.0 - wz), dtype=compute_dtype),
+            np.asarray(wx * (1.0 - wy) * (1.0 - wz), dtype=compute_dtype),
+            np.asarray((1.0 - wx) * wy * (1.0 - wz), dtype=compute_dtype),
+            np.asarray(wx * wy * (1.0 - wz), dtype=compute_dtype),
+            np.asarray((1.0 - wx) * (1.0 - wy) * wz, dtype=compute_dtype),
+            np.asarray(wx * (1.0 - wy) * wz, dtype=compute_dtype),
+            np.asarray((1.0 - wx) * wy * wz, dtype=compute_dtype),
+            np.asarray(wx * wy * wz, dtype=compute_dtype),
         )
 
     def _build_geometric_3d_lattice_data(self, indices, normals, solid_mask):
@@ -725,7 +743,7 @@ class Multiphase(LBMBase):
             point_data.append(self._build_interpolation_data(points))
         return tuple(point_data)
 
-    def _create_geometric_wetting_data(self):
+    def _create_geometric_wetting_data(self, localize=True):
         """
         Precompute interpolation data for geometric wetting.
 
@@ -755,7 +773,8 @@ class Multiphase(LBMBase):
         characteristics_time = 0.0
         for BC in self.BCs:
             solid_mask = self._create_component_solid_mask(BC)
-            geometric_fluid_mask.append(jnp.array(~solid_mask[..., None], dtype=jnp.bool_))
+            fluid_mask_host = ~solid_mask[..., None]
+            geometric_fluid_mask.append(self.distributed_array_init(fluid_mask_host.shape, jnp.bool_, init_val=fluid_mask_host))
             component_data = []
             for bc in BC:
                 if not self._is_wetting_boundary_condition(bc):
@@ -763,7 +782,7 @@ class Multiphase(LBMBase):
                 if bc.theta is None:
                     continue
 
-                indices = np.array(self._get_solid_indices(bc), dtype=np.int64).T
+                indices = np.array(self._get_solid_indices(bc), dtype=np.int32).T
                 theta = np.asarray(bc.theta, dtype=np.float64).reshape(-1)
                 if theta.size == 1:
                     theta = np.full((indices.shape[0],), theta.item(), dtype=np.float64)
@@ -784,11 +803,14 @@ class Multiphase(LBMBase):
                     characteristics_start = time.perf_counter()
                     points = self._build_geometric_3d_characteristic_data(indices, normals, theta, solid_mask)
                     characteristics_time += time.perf_counter() - characteristics_start
-                    component_data.append({
-                        "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
-                        "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precision_policy.compute_dtype),
+                    data = {
+                        "indices": tuple(np.asarray(index, dtype=np.int32) for index in indices.T),
+                        "theta": np.asarray(theta.reshape(-1, 1), dtype=np.dtype(self.precision_policy.compute_dtype)),
                         "points": points,
-                    })
+                    }
+                    component_data.append(
+                        self._localize_geometric_wetting_data(data) if localize and self.local_geometric_wetting is not None else data
+                    )
                     continue
 
                 # Characteristics determination for density interpolation
@@ -811,12 +833,13 @@ class Multiphase(LBMBase):
                 points_1 = self._first_fluid_mesh_intersection(indices, direction_1, solid_mask)
                 points_2 = self._first_fluid_mesh_intersection(indices, direction_2, solid_mask)
                 characteristics_time += time.perf_counter() - characteristics_start
-                component_data.append({
-                    "indices": tuple(jnp.array(index, dtype=jnp.int32) for index in indices.T),
-                    "theta": jnp.array(theta.reshape(-1, 1), dtype=self.precision_policy.compute_dtype),
+                data = {
+                    "indices": tuple(np.asarray(index, dtype=np.int32) for index in indices.T),
+                    "theta": np.asarray(theta.reshape(-1, 1), dtype=np.dtype(self.precision_policy.compute_dtype)),
                     "point_1": self._build_interpolation_data(points_1),
                     "point_2": self._build_interpolation_data(points_2),
-                })
+                }
+                component_data.append(self._localize_geometric_wetting_data(data) if localize and self.local_geometric_wetting is not None else data)
             geometric_wetting_data.append(component_data)
 
         logger.info(f"Time taken to determine geometric wetting characteristics: {characteristics_time:.6f} seconds")
@@ -1165,6 +1188,91 @@ class Multiphase(LBMBase):
         wall_density = (theta <= jnp.pi / 2) * (local_phi[0] * rho_ave_boundary) + (theta > jnp.pi / 2) * (rho_ave_boundary - local_delta_rho[0])
         return rho.at[idx].set(wall_density, mode="drop")
 
+    def local_geometric_wetting_m(
+        self,
+        rho,
+        rho_min,
+        rho_max,
+        local_indices,
+        local_theta,
+        local_sample_indices,
+        request_indices,
+        request_weights,
+    ):
+        """Apply geometric wetting from shard-local interpolation requests."""
+        indices = local_indices[0]
+        theta = local_theta[0]
+        interpolation_indices = request_indices[0]
+        weights = request_weights[0]
+
+        if self.dim == 2:
+            x0, y0, x1, y1 = (interpolation_indices[..., index] for index in range(4))
+            samples = (
+                weights[..., 0, None] * rho.at[x0, y0].get(mode="fill", fill_value=0.0)
+                + weights[..., 1, None] * rho.at[x1, y0].get(mode="fill", fill_value=0.0)
+                + weights[..., 2, None] * rho.at[x0, y1].get(mode="fill", fill_value=0.0)
+                + weights[..., 3, None] * rho.at[x1, y1].get(mode="fill", fill_value=0.0)
+            )
+        else:
+            x0, y0, z0, x1, y1, z1 = (interpolation_indices[..., index] for index in range(6))
+            samples = (
+                weights[..., 0, None] * rho.at[x0, y0, z0].get(mode="fill", fill_value=0.0)
+                + weights[..., 1, None] * rho.at[x1, y0, z0].get(mode="fill", fill_value=0.0)
+                + weights[..., 2, None] * rho.at[x0, y1, z0].get(mode="fill", fill_value=0.0)
+                + weights[..., 3, None] * rho.at[x1, y1, z0].get(mode="fill", fill_value=0.0)
+                + weights[..., 4, None] * rho.at[x0, y0, z1].get(mode="fill", fill_value=0.0)
+                + weights[..., 5, None] * rho.at[x1, y0, z1].get(mode="fill", fill_value=0.0)
+                + weights[..., 6, None] * rho.at[x0, y1, z1].get(mode="fill", fill_value=0.0)
+                + weights[..., 7, None] * rho.at[x1, y1, z1].get(mode="fill", fill_value=0.0)
+            )
+
+        samples = jax.lax.psum(samples, "x")
+        samples = samples[local_sample_indices[0]]
+        rho_wall = jnp.where(
+            theta <= jnp.pi / 2,
+            jnp.max(samples, axis=-2),
+            jnp.min(samples, axis=-2),
+        )
+        idx = tuple(indices[:, axis] for axis in range(self.dim))
+        return rho.at[idx].set(jnp.clip(rho_wall, rho_min, rho_max), mode="drop")
+
+    def _localize_geometric_wetting_data(self, data):
+        """Convert one geometric boundary's interpolation data to sharded int32 requests."""
+        wall_indices = np.stack(data["indices"], axis=-1).astype(np.int32, copy=False)
+        theta = np.asarray(data["theta"], dtype=np.dtype(self.precision_policy.compute_dtype))
+        point_data = data["points"] if self.dim == 3 else (data["point_1"], data["point_2"])
+        index_count = 6 if self.dim == 3 else 4
+        sample_indices = np.stack([np.stack(point[:index_count], axis=-1) for point in point_data], axis=1).astype(np.int32, copy=False)
+        sample_weights = np.stack([np.stack(point[index_count:], axis=-1) for point in point_data], axis=1).astype(
+            np.dtype(self.precision_policy.compute_dtype),
+            copy=False,
+        )
+
+        sample_rows = np.arange(len(wall_indices), dtype=np.int32)
+        local_indices, (local_theta, local_sample_indices) = self._split_local_indices(wall_indices, theta, sample_rows)
+        local_nx = self.nx // self.n_devices
+        sample_count = sample_indices.shape[1]
+        x_positions = (0, 3) if self.dim == 3 else (0, 2)
+        source_ids = np.arange(self.n_devices, dtype=np.int32)[:, None, None]
+        source_offsets = source_ids * local_nx
+        request_indices = np.broadcast_to(sample_indices[None], (self.n_devices,) + sample_indices.shape).copy()
+        request_indices[..., x_positions[0]] -= source_offsets
+        request_indices[..., x_positions[1]] -= source_offsets
+
+        request_weights = np.broadcast_to(sample_weights[None], (self.n_devices,) + sample_weights.shape).copy()
+        x0_owner = sample_indices[..., x_positions[0]] // local_nx
+        x1_owner = sample_indices[..., x_positions[1]] // local_nx
+        request_weights[..., 0::2] *= (x0_owner[None] == source_ids)[..., None]
+        request_weights[..., 1::2] *= (x1_owner[None] == source_ids)[..., None]
+
+        return {
+            "local_indices": self._distribute_local(local_indices, jnp.int32),
+            "local_theta": self._distribute_local(local_theta, self.precision_policy.compute_dtype),
+            "local_sample_indices": self._distribute_local(local_sample_indices, jnp.int32),
+            "request_indices": self._distribute_local(request_indices, jnp.int32),
+            "request_weights": self._distribute_local(request_weights, self.precision_policy.compute_dtype),
+        }
+
     def _wetting_parameter_at_indices(self, value, indices):
         """Convert scalar, per-node, or full-domain wetting data to one scalar row per solid node."""
         value = np.asarray(value)
@@ -1355,10 +1463,22 @@ class Multiphase(LBMBase):
                 rho_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
                 rho_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
                 for data in component_data:
-                    if self.dim == 2:
+                    if "local_indices" in data:
+                        rho = self.local_geometric_wetting(
+                            rho,
+                            rho_min,
+                            rho_max,
+                            data["local_indices"],
+                            data["local_theta"],
+                            data["local_sample_indices"],
+                            data["request_indices"],
+                            data["request_weights"],
+                        )
+                    elif self.dim == 2:
                         rho_1 = interpolate_density(rho, data["point_1"])
                         rho_2 = interpolate_density(rho, data["point_2"])
                         rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, jnp.maximum(rho_1, rho_2), jnp.minimum(rho_1, rho_2))
+                        rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
                     else:
                         rho_samples = [interpolate_density(rho, point_data) for point_data in data["points"]]
                         rho_sample_min = rho_samples[0]
@@ -1367,7 +1487,7 @@ class Multiphase(LBMBase):
                             rho_sample_min = jnp.minimum(rho_sample_min, rho_sample)
                             rho_sample_max = jnp.maximum(rho_sample_max, rho_sample)
                         rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, rho_sample_max, rho_sample_min)
-                    rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
+                        rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
                 return rho
 
             return tree_map(
