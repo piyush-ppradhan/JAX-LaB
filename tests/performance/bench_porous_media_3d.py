@@ -148,6 +148,7 @@ def build_simulation(nx, ny, nz, seed):
         "s_3": s_3,
         "s_4": s_4,
         "kappa": [0.0],
+        "wetting_formulation": "improved_virtual_density",
         "s_rho": s_0,
         "s_e": s_b,
         "s_eta": s_b,

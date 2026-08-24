@@ -166,6 +166,6 @@ if __name__ == "__main__":
         "restore_checkpoint": False,
     }
 
-    subprocess.run("rm -rf output*/ *.vtk", shell=True, check=True)
+    subprocess.run("rm -rf output*/", shell=True, check=True)
     sim = Droplet3D(**kwargs)
     sim.run(30000)

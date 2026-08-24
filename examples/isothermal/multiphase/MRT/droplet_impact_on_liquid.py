@@ -220,6 +220,7 @@ if __name__ == "__main__":
         "s_v": [1.0],
         "M": [M],
         "kappa": [0.0],
+        "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "io_rate": 100,
         "compute_MLUPS": False,

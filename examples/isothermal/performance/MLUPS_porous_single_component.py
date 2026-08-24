@@ -149,6 +149,7 @@ if __name__ == "__main__":
             "nz": nz,
             "g_kkprime": g_kkprime,
             "omega": [1.0],
+            "wetting_formulation": "improved_virtual_density",
             "precision": precision,
             "body_force": [0.0, 0.0, 0.0],
             "k": [0],

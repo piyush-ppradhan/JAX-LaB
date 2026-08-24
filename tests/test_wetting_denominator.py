@@ -3,6 +3,7 @@ G_ff-weighted neighbor-average reference computed with plain (periodic) numpy ro
 """
 
 import numpy as np
+import pytest
 
 from jax_lab.core.boundary_conditions import BounceBack
 from jax_lab.core.eos import VanderWaals
@@ -58,6 +59,12 @@ class RandomSolidWetting(MultiphaseMRT):
         self.BCs[0].append(BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, np.pi / 3, 1.1, 0.0))
 
 
+class RandomSolidNoWetting(RandomSolidWetting):
+    def set_boundary_conditions(self):
+        ind = np.array(np.where(self._mask)).T
+        self.BCs[0].append(BounceBack(tuple(ind.T), self.grid_info, self.precision_policy))
+
+
 def _mrt_matrix(lattice):
     e = np.asarray(lattice.c).T
     en = np.linalg.norm(e, axis=1)
@@ -97,7 +104,7 @@ def _mrt_matrix(lattice):
     return matrix
 
 
-def _build_sim(domain, lattice_class, mask):
+def _simulation_kwargs(domain, lattice_class):
     nx, ny, nz = domain
     lattice = lattice_class(PRECISION)
     omega = 0.8
@@ -128,6 +135,12 @@ def _build_sim(domain, lattice_class, mask):
     }
     if lattice.d == 3:
         kwargs |= {"s_pi": s, "s_m": s}
+    return kwargs
+
+
+def _build_sim(domain, lattice_class, mask):
+    kwargs = _simulation_kwargs(domain, lattice_class)
+    kwargs["wetting_formulation"] = "improved_virtual_density"
     return RandomSolidWetting(mask, **kwargs)
 
 
@@ -152,6 +165,23 @@ def test_compute_average_density_matches_reference_3d():
 
 def test_compute_average_density_matches_reference_2d():
     _check(DOMAIN_2D, LatticeD2Q9)
+
+
+def test_no_wetting_does_not_build_average_density_data():
+    mask = _random_solid_mask(DOMAIN_2D)
+    sim = RandomSolidNoWetting(mask, **_simulation_kwargs(DOMAIN_2D, LatticeD2Q9))
+
+    assert sim.wetting_formulation is None
+    assert sim._has_wetting_bc == (False,)
+    assert sim.scalar_neighbor_sum is None
+    assert sim.solid_mask_streamed is None
+    assert sim.average_density_denominator is None
+
+
+def test_wetting_boundary_requires_explicit_formulation():
+    mask = _random_solid_mask(DOMAIN_2D)
+    with pytest.raises(ValueError, match="wetting_formulation must be selected"):
+        RandomSolidWetting(mask, **_simulation_kwargs(DOMAIN_2D, LatticeD2Q9))
 
 
 if __name__ == "__main__":

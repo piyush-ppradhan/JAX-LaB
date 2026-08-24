@@ -49,6 +49,9 @@ class Multiphase(LBMBase):
 
     g_kkprime (numpy.ndarray): Symmetric component-interaction matrix with shape ``(n_components, n_components)``.
 
+    wetting_formulation (str or None, optional): Contact-angle scheme. Select ``"geometric"`` or
+    ``"improved_virtual_density"`` when a boundary condition defines ``theta``. Defaults to ``None``.
+
     References
     ----------
     1. Shan, Xiaowen, and Hudong Chen. “Lattice Boltzmann Model for Simulating Flows with Multiple Phases and Components.”
@@ -72,7 +75,16 @@ class Multiphase(LBMBase):
         self.eos = kwargs.get("EOS", None)
         self.g_kkprime = kwargs.get("g_kkprime")  # Fluid-fluid interaction strength
         self.body_force = kwargs.get("body_force", None)
-        self.wetting_formulation = kwargs.get("wetting_formulation", "improved_virtual_density")  # "geometric" or "improved_virtual_density"
+        self.wetting_formulation = kwargs.get("wetting_formulation")
+
+        self._has_wetting_bc = tuple(
+            any(self._is_wetting_boundary_condition(bc) and bc.theta is not None for bc in component_bcs) for component_bcs in self.BCs
+        )
+        if self.wetting_formulation is None and any(self._has_wetting_bc):
+            raise ValueError(
+                "A wetting_formulation must be selected when a boundary condition defines theta. "
+                "Supported schemes: geometric and improved_virtual_density."
+            )
 
         if self.wetting_formulation == "geometric":
             self.computed_nearest_next_nearest_nbr = False
@@ -87,14 +99,18 @@ class Multiphase(LBMBase):
         # denominator. scalar_force_stencil: the same neighbor structure, weighted by G_ff*c (a per-direction
         # vector instead of a scalar), used by the Shan-Chen/Zhang-Chen fluid-fluid force - both share
         # _neighbor_stencil_m's one-x-halo-exchange machinery, bound to their own static weights.
-        self.scalar_neighbor_sum = jit(
-            shard_map(
-                partial(self._neighbor_stencil_m, weights=G_ff_host),
-                mesh=self.mesh,
-                in_specs=scalar_spec,
-                out_specs=scalar_spec,
-                check_vma=False,
+        self.scalar_neighbor_sum = (
+            jit(
+                shard_map(
+                    partial(self._neighbor_stencil_m, weights=G_ff_host),
+                    mesh=self.mesh,
+                    in_specs=scalar_spec,
+                    out_specs=scalar_spec,
+                    check_vma=False,
+                )
             )
+            if self.wetting_formulation == "improved_virtual_density" and any(self._has_wetting_bc)
+            else None
         )
         self.scalar_force_stencil = jit(
             shard_map(
@@ -106,16 +122,20 @@ class Multiphase(LBMBase):
             )
         )
 
-        self.solid_mask_streamed = self.get_solid_mask_streamed()
-        self.average_density_denominator = (
-            [self.scalar_neighbor_sum(1 - mask) for mask in self.solid_mask_streamed]
-            if self.wetting_formulation == "improved_virtual_density"
-            else None
-        )
+        self.solid_mask_streamed = None
+        self.average_density_denominator = None
+        if self.scalar_neighbor_sum is not None:
+            self.solid_mask_streamed = self.get_solid_mask_streamed()
+            self.average_density_denominator = [
+                self.scalar_neighbor_sum(1 - mask) if has_wetting_bc else None
+                for mask, has_wetting_bc in zip(self.solid_mask_streamed, self._has_wetting_bc, strict=True)
+            ]
         if self.average_density_denominator is not None:
-            tree_map(lambda denominator: denominator.block_until_ready(), self.average_density_denominator)
+            for denominator in self.average_density_denominator:
+                if denominator is not None:
+                    denominator.block_until_ready()
         self.geometric_wetting_data, self.geometric_fluid_mask = (
-            self._create_geometric_wetting_data() if self.wetting_formulation == "geometric" else (None, None)
+            self._create_geometric_wetting_data() if self.wetting_formulation == "geometric" and any(self._has_wetting_bc) else (None, None)
         )
 
     @property
@@ -205,10 +225,10 @@ class Multiphase(LBMBase):
 
     @wetting_formulation.setter
     def wetting_formulation(self, value):
-        if value in ["geometric", "improved_virtual_density"]:
+        if value is None or value in ["geometric", "improved_virtual_density"]:
             self._wetting_formulation = value
         else:
-            raise ValueError("Invalid wetting scheme type. Supported schemes: geometric and improved_virtual_density.")
+            raise ValueError("Invalid wetting scheme type. Supported schemes: None, geometric, and improved_virtual_density.")
 
     def _is_wetting_boundary_condition(self, bc):
         """
@@ -757,19 +777,20 @@ class Multiphase(LBMBase):
 
         Returns
         -------
-        solid_mask array: (jax.numpy.ndarray) Dimension: (nx, ny, 1) for d == 2 and (nx, ny, nz, 1) for d == 3
+        list of jax.Array or None: Component masks with shape (nx, ny, 1) for d == 2 or (nx, ny, nz, 1) for d == 3.
+        Components without a wetting boundary contain None.
         """
-        solid_mask = []
-        solid_indices = [[] for i in range(self.n_components)]
-        for i in range(self.n_components):
-            for bc in self.BCs[i]:
-                if isinstance(bc, BounceBack) or isinstance(bc, BounceBackHalfway) or isinstance(bc, BounceBackMoving):
-                    solid_indices[i].append(np.array(self._get_solid_indices(bc)).T)
         shape = (self.nx, self.ny, 1) if self.dim == 2 else (self.nx, self.ny, self.nz, 1)
-        for i in range(self.n_components):
+        solid_mask = []
+        for component_bcs, has_wetting_bc in zip(self.BCs, self._has_wetting_bc, strict=True):
+            if not has_wetting_bc:
+                solid_mask.append(None)
+                continue
+
+            solid_indices = [np.array(self._get_solid_indices(bc)).T for bc in component_bcs if self._is_wetting_boundary_condition(bc)]
             mask_host = np.zeros(shape, dtype=np.int8)
-            if len(solid_indices[i]) != 0:
-                index = np.vstack(solid_indices[i])
+            if solid_indices:
+                index = np.vstack(solid_indices)
                 mask_host[tuple(index.T)] = 1
             mask = self.distributed_array_init(shape, jnp.int8, init_val=mask_host)
             solid_mask.append(mask)
@@ -948,12 +969,18 @@ class Multiphase(LBMBase):
         pytree of jax.Array
             Averaged component density fields with the same shapes as the inputs.
         """
-        return tree_map(
-            lambda rho, solid_mask, denominator: self.scalar_neighbor_sum(rho * (1 - solid_mask)) / denominator,
-            rho_tree,
-            self.solid_mask_streamed,
-            self.average_density_denominator,
-        )
+        if self.scalar_neighbor_sum is None or self.average_density_denominator is None:
+            return rho_tree
+
+        return [
+            self.scalar_neighbor_sum(rho * (1 - solid_mask)) / denominator if denominator is not None else rho
+            for rho, solid_mask, denominator in zip(
+                rho_tree,
+                self.solid_mask_streamed,
+                self.average_density_denominator,
+                strict=True,
+            )
+        ]
 
     @partial(jit, static_argnums=(0,))
     def apply_contact_angle(self, rho_tree):
@@ -982,6 +1009,9 @@ class Multiphase(LBMBase):
         3. Wang, Lei, Hai-bo Huang, and Xi-Yun Lu. “Scheme for Contact Angle and Its Hysteresis in a Multiphase Lattice
         Boltzmann Method.” Physical Review E 87, no. 1 (2013): 013301.
         """
+        if self.wetting_formulation is None or not any(self._has_wetting_bc):
+            return rho_tree
+
         if self.wetting_formulation == "improved_virtual_density":
             rho_ave_tree = self.compute_average_density(rho_tree)
 
@@ -1000,8 +1030,11 @@ class Multiphase(LBMBase):
                         rho = jnp.clip(rho, min=rho_min, max=rho_max)
                 return rho
 
-            return tree_map(lambda rho, rho_ave, BC: set_contact_angle(rho, rho_ave, BC), rho_tree, rho_ave_tree, self.BCs)
-        else:
+            return [
+                set_contact_angle(rho, rho_ave, BC) if has_wetting_bc else rho
+                for rho, rho_ave, BC, has_wetting_bc in zip(rho_tree, rho_ave_tree, self.BCs, self._has_wetting_bc, strict=True)
+            ]
+        elif self.wetting_formulation == "geometric":
 
             def interpolate_density(rho, interpolation_data):
                 """
@@ -1077,6 +1110,8 @@ class Multiphase(LBMBase):
                 self.geometric_wetting_data,
                 self.geometric_fluid_mask,
             )
+
+        return rho_tree
 
     @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
@@ -1335,7 +1370,7 @@ class Multiphase(LBMBase):
             force_tree = tree_map(lambda ff, rho: ff + self.body_force * rho, fluid_fluid_force, rho_tree)
         else:
             force_tree = fluid_fluid_force
-        if self.wetting_formulation == "geometric":
+        if self.wetting_formulation == "geometric" and any(self._has_wetting_bc):
             force_tree = tree_map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
         return force_tree
 
@@ -1598,34 +1633,34 @@ class Multiphase(LBMBase):
             print_iter_flag = self.print_info_rate > 0 and timestep % self.print_info_rate == 0
             checkpoint_flag = self.checkpoint_rate > 0 and timestep % self.checkpoint_rate == 0
 
-            if io_flag:
-                # Update the macroscopic variables and save the previous values (for error computation)
-                rho_prev_tree, _ = self.update_macroscopic(f_tree)
-                # update_macroscopic sums f_tree directly, so rho_prev_tree inherits f_tree's storage precision.
-                # macroscopic_velocity -> compute_force -> apply_contact_angle scatters into rho at its own dtype
-                # using values derived from G_ff (permanently fixed at compute precision), so under mixed
-                # precision (storage narrower than compute) that scatter's source and target dtypes mismatch.
-                # Cast to compute precision first, matching the convention collision() already uses.
-                rho_prev_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_prev_tree)
-                u_prev_tree = self.macroscopic_velocity(f_tree, rho_prev_tree)
-                rho_prev_tree = tree_map(
-                    lambda rho_prev: downsample_field(rho_prev, self.downsampling_factor),
-                    rho_prev_tree,
-                )
-                psi_prev_tree, _ = self.compute_potential(rho_prev_tree)
-                p_prev_tree = self.compute_pressure(rho_prev_tree, psi_prev_tree)
-                p_prev_total = self.compute_total_pressure(p_prev_tree, rho_prev_tree)
-                p_prev_total = downsample_field(p_prev_total, self.downsampling_factor)
-                u_prev_tree = tree_map(lambda u_prev: downsample_field(u_prev, self.downsampling_factor), u_prev_tree)
-                rho_total_prev = self.compute_total_density(rho_prev_tree)
-                u_total_prev = self.compute_total_velocity(rho_prev_tree, u_prev_tree)
+            # if io_flag:
+            #     # Update the macroscopic variables and save the previous values (for error computation)
+            #     rho_prev_tree, _ = self.update_macroscopic(f_tree)
+            #     # update_macroscopic sums f_tree directly, so rho_prev_tree inherits f_tree's storage precision.
+            #     # macroscopic_velocity -> compute_force -> apply_contact_angle scatters into rho at its own dtype
+            #     # using values derived from G_ff (permanently fixed at compute precision), so under mixed
+            #     # precision (storage narrower than compute) that scatter's source and target dtypes mismatch.
+            #     # Cast to compute precision first, matching the convention collision() already uses.
+            #     rho_prev_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_prev_tree)
+            #     u_prev_tree = self.macroscopic_velocity(f_tree, rho_prev_tree)
+            #     rho_prev_tree = tree_map(
+            #         lambda rho_prev: downsample_field(rho_prev, self.downsampling_factor),
+            #         rho_prev_tree,
+            #     )
+            #     psi_prev_tree, _ = self.compute_potential(rho_prev_tree)
+            #     p_prev_tree = self.compute_pressure(rho_prev_tree, psi_prev_tree)
+            #     p_prev_total = self.compute_total_pressure(p_prev_tree, rho_prev_tree)
+            #     p_prev_total = downsample_field(p_prev_total, self.downsampling_factor)
+            #     u_prev_tree = tree_map(lambda u_prev: downsample_field(u_prev, self.downsampling_factor), u_prev_tree)
+            #     rho_total_prev = self.compute_total_density(rho_prev_tree)
+            #     u_total_prev = self.compute_total_velocity(rho_prev_tree, u_prev_tree)
 
-                # Gather the data from all processes and convert it to numpy arrays (move to host memory)
-                p_prev_total = process_allgather(p_prev_total)
-                rho_prev_tree = tree_map(lambda rho_prev: process_allgather(rho_prev), rho_prev_tree)
-                u_prev_tree = tree_map(lambda u_prev: process_allgather(u_prev), u_prev_tree)
-                rho_total_prev = process_allgather(rho_total_prev)
-                u_total_prev = process_allgather(u_total_prev)
+            #     # Gather the data from all processes and convert it to numpy arrays (move to host memory)
+            #     p_prev_total = process_allgather(p_prev_total)
+            #     rho_prev_tree = tree_map(lambda rho_prev: process_allgather(rho_prev), rho_prev_tree)
+            #     u_prev_tree = tree_map(lambda u_prev: process_allgather(u_prev), u_prev_tree)
+            #     rho_total_prev = process_allgather(rho_total_prev)
+            #     u_total_prev = process_allgather(u_total_prev)
 
             # Perform one time-step (collision, streaming, and boundary conditions)
             f_tree, fstar_tree = self.step(f_tree, timestep)
@@ -1644,7 +1679,7 @@ class Multiphase(LBMBase):
                 # Save the simulation data
                 logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho_tree, _ = self.update_macroscopic(f_tree)
-                # See the cast_to_compute comment on rho_prev_tree above: same fix, same reason.
+                # # See the cast_to_compute comment on rho_prev_tree above: same fix, same reason.
                 rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
                 u_tree = self.macroscopic_velocity(f_tree, rho_tree)
                 psi_tree, _ = self.compute_potential(rho_tree)
@@ -1678,12 +1713,12 @@ class Multiphase(LBMBase):
                     u_total,
                     rho_total,
                     rho_tree,
-                    p_prev_tree,
-                    p_prev_total,
-                    u_total_prev,
-                    u_prev_tree,
-                    rho_total_prev,
-                    rho_prev_tree,
+                    # p_prev_tree,
+                    # p_prev_total,
+                    # u_total_prev,
+                    # u_prev_tree,
+                    # rho_total_prev,
+                    # rho_prev_tree,
                 )
 
             if checkpoint_flag:
@@ -1749,12 +1784,12 @@ class Multiphase(LBMBase):
         u_total,
         rho_total,
         rho_tree,
-        p_prev_tree,
-        p_prev_total,
-        u_total_prev,
-        u_prev_tree,
-        rho_total_prev,
-        rho_prev_tree,
+        # p_prev_tree,
+        # p_prev_total,
+        # u_total_prev,
+        # u_prev_tree,
+        # rho_total_prev,
+        # rho_prev_tree,
     ):
         """
         This function handles the input/output (I/O) operations at each time step of the simulation.
@@ -1782,17 +1817,17 @@ class Multiphase(LBMBase):
 
         rho_tree (pytree of jax.numpy.ndarray): Density field at the current time step.
 
-        p_prev_tree (pytree of jax.numpy.ndarray): Pressure field at the previous time step.
+        # p_prev_tree (pytree of jax.numpy.ndarray): Pressure field at the previous time step.
 
-        p_prev_total (jax.numpy.ndarray): Total pressure field at the previous time step.
+        # p_prev_total (jax.numpy.ndarray): Total pressure field at the previous time step.
 
-        u_total_prev (jax.numpy.ndarray): Total velocity field at the previous time step.
+        # u_total_prev (jax.numpy.ndarray): Total velocity field at the previous time step.
 
-        u_prev_tree (pytree of jax.numpy.ndarray): Velocity field at the previous time step.
+        # u_prev_tree (pytree of jax.numpy.ndarray): Velocity field at the previous time step.
 
-        rho_total_prev (jax.numpy.ndarray): Total density field at the previous time step.
+        # rho_total_prev (jax.numpy.ndarray): Total density field at the previous time step.
 
-        rho_prev_tree (pytree of jax.numpy.ndarray): Density field at the previous time step.
+        # rho_prev_tree (pytree of jax.numpy.ndarray): Density field at the previous time step.
 
         Returns
         -------
@@ -1807,12 +1842,12 @@ class Multiphase(LBMBase):
             "p": p_total,
             "u_total": u_total,
             "u_tree": u_tree,
-            "rho_total_prev": rho_total_prev,
-            "rho_prev_tree": rho_prev_tree,
-            "p_prev_tree": p_prev_tree,
-            "p_prev": p_prev_total,
-            "u_total_prev": u_total_prev,
-            "u_prev_tree": u_prev_tree,
+            # "rho_total_prev": rho_total_prev,
+            # "rho_prev_tree": rho_prev_tree,
+            # "p_prev_tree": p_prev_tree,
+            # "p_prev": p_prev_total,
+            # "u_total_prev": u_total_prev,
+            # "u_prev_tree": u_prev_tree,
             "f_poststreaming_tree": f_tree,
             "f_postcollision_tree": fstar_tree,
         }

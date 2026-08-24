@@ -167,6 +167,7 @@ if __name__ == "__main__":
         "s_q": s_q,
         "s_v": s_v,
         "kappa": [1.0],
+        "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "io_rate": 10000,
         "compute_MLUPS": False,

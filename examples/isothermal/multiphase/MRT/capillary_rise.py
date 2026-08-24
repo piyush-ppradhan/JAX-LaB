@@ -159,7 +159,7 @@ class CapillaryRise2D(MultiphaseMRT):
         self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls], phi[walls], delta_rho[walls]))
 
     def output_data(self, **kwargs):
-        rho = np.array(kwargs["rho_prev_tree"][0][0, ...])
+        rho = np.array(kwargs["rho_tree"][0][0, ...])
         p = np.array(kwargs["p_tree"][0][...])
         u = np.array(kwargs["u_tree"][0][0, ...])
         timestep = kwargs["timestep"]
@@ -296,6 +296,7 @@ if __name__ == "__main__":
             "s_q": s_q,
             "s_v": s_v,
             "kappa": [0.5],
+            "wetting_formulation": "improved_virtual_density",
             "precision": precision,
             "io_rate": 40000,
             "EOS": eos,
@@ -334,6 +335,7 @@ if __name__ == "__main__":
         "s_v": s_v,
         "kappa": [0.5],
         "EOS": eos,
+        "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "io_rate": 1000,
         "print_info_rate": 1000,

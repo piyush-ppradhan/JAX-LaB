@@ -161,6 +161,7 @@ if __name__ == "__main__":
         "nz": nz,
         "g_kkprime": g_kkprime,
         "omega": [1.0],
+        "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "k": [0],
         "A": np.zeros((1, 1)),

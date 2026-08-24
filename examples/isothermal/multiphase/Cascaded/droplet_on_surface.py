@@ -273,6 +273,7 @@ if __name__ == "__main__":
         "s_3": s_3,
         "s_4": s_4,
         "sigma": [0.102],
+        "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "io_rate": 100,
         "print_info_rate": 100,

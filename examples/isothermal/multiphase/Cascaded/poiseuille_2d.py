@@ -136,6 +136,7 @@ if __name__ == "__main__":
         "s_3": s_3,
         "s_4": s_4,
         "sigma": [0.0],
+        "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "io_rate": 1000,
         "compute_MLUPS": False,
