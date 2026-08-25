@@ -267,6 +267,72 @@ def _reference_geometric_wetting(rho, component_data, fluid_mask):
     return rho
 
 
+def _assert_geometric_samples_use_fluid_nodes(component_data, fluid_mask):
+    for data in component_data:
+        point_data = data["points"] if fluid_mask.ndim == 3 else (data["point_1"], data["point_2"])
+        for point in point_data:
+            if fluid_mask.ndim == 2:
+                x0, y0, x1, y1, w00, w10, w01, w11 = point
+                samples = ((x0, y0, w00), (x1, y0, w10), (x0, y1, w01), (x1, y1, w11))
+            else:
+                x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point
+                samples = (
+                    (x0, y0, z0, w000),
+                    (x1, y0, z0, w100),
+                    (x0, y1, z0, w010),
+                    (x1, y1, z0, w110),
+                    (x0, y0, z1, w001),
+                    (x1, y0, z1, w101),
+                    (x0, y1, z1, w011),
+                    (x1, y1, z1, w111),
+                )
+            for *sample_indices, weights in samples:
+                assert np.all(fluid_mask[tuple(sample_indices)] | (weights <= 1e-12))
+
+
+def test_geometric_3d_rejects_rays_crossing_solid_and_underresolved_force_nodes():
+    domain = (16, 15, 15)
+    solid = np.ones(domain, dtype=bool)
+    wall = np.array([[7, 7, 3]], dtype=np.int32)
+    solid[7, 7:9, 4] = False  # One local fluid-side interpolation stencil.
+    solid[:, :, 10:] = False  # Remote pore reached only after crossing solid.
+    sim = RandomSolidNoWetting(solid, **_simulation_kwargs(domain, LatticeD3Q19))
+    sim.geometric_preprocessing_backend = "cpu"
+
+    points = sim._build_geometric_3d_characteristic_data(
+        wall,
+        normals=np.array([[0.0, 0.0, 1.0]]),
+        theta=np.array([np.pi / 3]),
+        solid_mask=solid,
+    )
+    for point_data in points:
+        x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point_data
+        weights = np.stack((w000, w100, w010, w110, w001, w101, w011, w111), axis=1)
+        corners = np.stack(
+            (
+                np.column_stack((x0, y0, z0)),
+                np.column_stack((x1, y0, z0)),
+                np.column_stack((x0, y1, z0)),
+                np.column_stack((x1, y1, z0)),
+                np.column_stack((x0, y0, z1)),
+                np.column_stack((x1, y0, z1)),
+                np.column_stack((x0, y1, z1)),
+                np.column_stack((x1, y1, z1)),
+            ),
+            axis=1,
+        )
+        sample = np.sum(weights[..., None] * corners, axis=1)
+        np.testing.assert_allclose(sample, np.array([[7.0, 7.0, 4.0]]), rtol=0.0, atol=1e-6)
+
+    fluid = np.zeros((5, 5, 5), dtype=bool)
+    fluid[2, 2, 2] = True
+    fluid[3, 2, 2] = True
+    fluid[2, 3, 2] = True
+    assert not sim._create_geometric_force_mask(fluid)[2, 2, 2]
+    fluid[1, 2, 2] = True
+    assert sim._create_geometric_force_mask(fluid)[2, 2, 2]
+
+
 @pytest.mark.skipif(jax.device_count() < 2, reason="Multiple devices required for local geometric-wetting coverage")
 @pytest.mark.parametrize(
     "domain, lattice_class, n_components",
@@ -278,8 +344,10 @@ def _reference_geometric_wetting(rho, component_data, fluid_mask):
 def test_local_geometric_wetting_matches_global_reference(domain, lattice_class, n_components):
     class GeometricWetting(MultiphaseBGK):
         def set_boundary_conditions(self):
-            cases = ((0, "bottom", np.pi / 3), (1, "top", 2.0 * np.pi / 3))
-            for component, face, theta in cases[:n_components]:
+            cases = (
+                ((0, "bottom", np.pi / 3), (0, "left", 2.0 * np.pi / 3)) if self.dim == 3 else ((0, "bottom", np.pi / 3), (1, "top", 2.0 * np.pi / 3))
+            )
+            for component, face, theta in cases:
                 indices = self.bounding_box_indices[face]
                 self.BCs[component].append(BounceBack(tuple(indices.T), self.grid_info, self.precision_policy, theta))
 
@@ -300,8 +368,19 @@ def test_local_geometric_wetting_matches_global_reference(domain, lattice_class,
         A=np.zeros((n_components, n_components)),
         EOS=VanderWaals(a=[9.0 / 49.0] * n_components, b=[2.0 / 21.0] * n_components, R=[1.0] * n_components, T=0.8 * 0.5714285714),
         wetting_formulation="geometric",
+        geometric_preprocessing_backend="gpu" if nz != 0 else "cpu",
     )
-    global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
+    if nz != 0:
+        sim.geometric_preprocessing_backend = "cpu"
+        global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
+        sim.geometric_preprocessing_backend = "gpu"
+        gpu_data, _ = sim._create_geometric_wetting_data(localize=False)
+        for gpu_leaf, cpu_leaf in zip(jax.tree.leaves(gpu_data), jax.tree.leaves(global_data), strict=True):
+            np.testing.assert_array_equal(gpu_leaf, cpu_leaf)
+    else:
+        global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
+    for component_data, fluid_mask in zip(global_data, global_masks, strict=True):
+        _assert_geometric_samples_use_fluid_nodes(component_data, np.asarray(fluid_mask)[..., 0])
     spatial_shape = domain[:2] if nz == 0 else domain
     rng = np.random.default_rng(SEED + 4)
     rho_host_tree = [rng.uniform(0.5, 4.0, size=(*spatial_shape, 1)).astype(np.float32) for _ in range(n_components)]
@@ -316,6 +395,14 @@ def test_local_geometric_wetting_matches_global_reference(domain, lattice_class,
     for component_data in sim.geometric_wetting_data:
         for data in component_data:
             assert data["local_indices"].dtype == jnp.int32
+            assert data["local_select_max"].dtype == jnp.bool_
             assert data["request_indices"].dtype == jnp.int32
+            if "request_slots" in data:
+                assert data["request_slots"].dtype == jnp.int32
+                template = data.get("reduce_scatter_template", data.get("sample_template"))
+                assert template.dtype == jnp.bool_
+                assert data["request_indices"].shape[1] < np.prod(template.shape[1:])
+            else:
+                assert data["local_sample_indices"].dtype == jnp.int32
     for actual, expected in zip(actual_tree, expected_tree, strict=True):
         assert np.max(np.abs(np.asarray(actual) - expected)) < 1e-6

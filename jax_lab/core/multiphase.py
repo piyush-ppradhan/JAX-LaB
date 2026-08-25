@@ -62,6 +62,12 @@ class Multiphase(LBMBase):
     wetting_formulation (str or None, optional): Contact-angle scheme. Select ``"geometric"`` or
     ``"improved_virtual_density"`` when a boundary condition defines ``theta``. Defaults to ``None``.
 
+    geometric_preprocessing_backend (str, optional): ``"auto"`` uses GPU preprocessing when available, ``"gpu"``
+        requires it, and ``"cpu"`` keeps the NumPy implementation. Used only by geometric wetting. Defaults to ``"auto"``.
+
+    geometric_preprocessing_batch_size (int, optional): Rays processed per GPU at once. Used only by geometric
+        wetting. Defaults to 65536.
+
     References
     ----------
     1. Shan, Xiaowen, and Hudong Chen. “Lattice Boltzmann Model for Simulating Flows with Multiple Phases and Components.”
@@ -104,6 +110,12 @@ class Multiphase(LBMBase):
 
         if uses_geometric_wetting:
             self.computed_nearest_next_nearest_nbr = False
+            self.geometric_preprocessing_backend = kwargs.get("geometric_preprocessing_backend", "auto")
+            if self.geometric_preprocessing_backend not in ("auto", "cpu", "gpu"):
+                raise ValueError("geometric_preprocessing_backend must be 'auto', 'cpu', or 'gpu'.")
+            self.geometric_preprocessing_batch_size = int(kwargs.get("geometric_preprocessing_batch_size", 65536))
+            if self.geometric_preprocessing_batch_size <= 0:
+                raise ValueError("geometric_preprocessing_batch_size must be positive.")
 
         self.G_ff = self.compute_ff_greens_function()
         self.g_kkprime = jnp.array(self.g_kkprime, dtype=self.precision_policy.compute_dtype)
@@ -140,18 +152,6 @@ class Multiphase(LBMBase):
                 )
             )
         self.local_geometric_wetting = None
-        if uses_geometric_wetting and self.n_devices > 1:
-            slot_spec = P("x", None)
-            request_spec = P("x", None, None, None)
-            self.local_geometric_wetting = jit(
-                shard_map(
-                    self.local_geometric_wetting_m,
-                    mesh=self.mesh,
-                    in_specs=(scalar_spec, P(), P(), aux_spec, aux_spec, slot_spec, request_spec, request_spec),
-                    out_specs=scalar_spec,
-                    check_vma=False,
-                )
-            )
         self._uses_local_neq_bc = self.n_devices > 1 and any(type(bc) in NEQ_BC_TYPES for component_bcs in self.BCs for bc in component_bcs)
         if self._uses_local_neq_bc:
             self.neq_bc_data = self._make_local_neq_bc_data()
@@ -202,7 +202,10 @@ class Multiphase(LBMBase):
             for denominator in self.average_density_denominator:
                 if denominator is not None:
                     denominator.block_until_ready()
+        self.geometric_force_mask = None
         self.geometric_wetting_data, self.geometric_fluid_mask = self._create_geometric_wetting_data() if uses_geometric_wetting else (None, None)
+        if uses_geometric_wetting and self.n_devices > 1:
+            self.local_geometric_wetting = self._build_local_geometric_wetting_kernels(scalar_spec)
         self.local_improved_wetting_data = (
             self._make_local_improved_wetting_data()
             if uses_improved_wetting and self.n_devices > 1
@@ -359,7 +362,22 @@ class Multiphase(LBMBase):
                 solid_mask[tuple(indices[:, valid])] = True
         return solid_mask
 
-    def _compute_geometric_normals(self, bc, solid_mask):
+    def _create_geometric_force_mask(self, fluid_mask):
+        """Disable geometric force where no opposite D3Q lattice-neighbor pair resolves a pore passage."""
+        if self.dim != 3:
+            return fluid_mask
+        resolved = np.zeros_like(fluid_mask)
+        directions = np.asarray(self.lattice.c, dtype=np.int32).T
+        for direction in directions:
+            nonzero = np.flatnonzero(direction)
+            if len(nonzero) == 0 or direction[nonzero[0]] < 0:
+                continue
+            positive = np.roll(fluid_mask, tuple(direction), axis=tuple(range(self.dim)))
+            negative = np.roll(fluid_mask, tuple(-direction), axis=tuple(range(self.dim)))
+            resolved |= positive & negative
+        return fluid_mask & resolved
+
+    def _compute_geometric_normals(self, bc, solid_mask, indices=None, source_rows=None):
         """
         Compute normals for geometric wetting using boundary data and solid mask.
 
@@ -369,37 +387,50 @@ class Multiphase(LBMBase):
 
         solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
 
+        indices (numpy.ndarray, optional): Boundary-node subset. Defaults to all solid indices belonging to ``bc``.
+
+        source_rows (numpy.ndarray, optional): Rows of ``bc`` corresponding to ``indices``, used when boundary-provided
+            normals are available.
+
         Returns
         -------
         normals (numpy.ndarray): Unit normals pointing from wall nodes toward fluid nodes.
         """
-        indices = np.array(self._get_solid_indices(bc), dtype=np.int64).T
+        all_indices = np.array(self._get_solid_indices(bc), dtype=np.int64).T
+        if indices is None:
+            indices = all_indices
+            source_rows = np.arange(len(all_indices), dtype=np.int64)
+        else:
+            indices = np.asarray(indices, dtype=np.int64)
         normals = np.zeros((indices.shape[0], self.dim), dtype=np.float64)
 
         # bc.normals rows correspond to bc.indices; for halfway bounce-back those are the shifted
         # fluid nodes, not the solid nodes used here, so fall back to the neighbor-based normals.
         if bc.is_solid and hasattr(bc, "normals") and not hasattr(bc, "solid_indices"):
             bc_normals = np.asarray(bc.normals, dtype=np.float64)
-            if bc_normals.shape == normals.shape:
+            if bc_normals.shape == (len(all_indices), self.dim):
+                if source_rows is not None:
+                    bc_normals = bc_normals[source_rows]
                 normal_norm = np.linalg.norm(bc_normals, axis=1, keepdims=True)
                 normals = np.divide(bc_normals, normal_norm, out=normals, where=normal_norm > 1e-12)
 
         c = np.array(self.lattice.c).T
         c = c[np.linalg.norm(c, axis=1) > 0]
         missing_normal = np.linalg.norm(normals, axis=1) <= 1e-12
-        for i in np.where(missing_normal)[0]:
-            idx = indices[i]
-            normal = np.zeros((self.dim,), dtype=np.float64)
-            for ci in c:
-                nbr = idx + ci
-                in_bounds = (0 <= nbr[0] < self.nx) and (0 <= nbr[1] < self.ny)
-                if self.dim == 3:
-                    in_bounds = in_bounds and (0 <= nbr[2] < self.nz)
-                if in_bounds and not solid_mask[tuple(nbr)]:
-                    normal += ci / np.linalg.norm(ci)
-            normal_norm = np.linalg.norm(normal)
-            if normal_norm > 1e-12:
-                normals[i] = normal / normal_norm
+        missing_rows = np.flatnonzero(missing_normal)
+        accumulated = np.zeros((len(missing_rows), self.dim), dtype=np.float64)
+        domain_shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        # Keep lattice-direction accumulation order unchanged, but evaluate every boundary node together.
+        for direction in c:
+            neighbors = indices[missing_rows] + direction
+            in_bounds = np.all((neighbors >= 0) & (neighbors < domain_shape), axis=1)
+            in_bounds_rows = np.flatnonzero(in_bounds)
+            if len(in_bounds_rows) == 0:
+                continue
+            fluid = ~solid_mask[tuple(neighbors[in_bounds_rows].T)]
+            accumulated[in_bounds_rows[fluid]] += direction / np.linalg.norm(direction)
+        normal_norm = np.linalg.norm(accumulated, axis=1, keepdims=True)
+        normals[missing_rows] = np.divide(accumulated, normal_norm, out=np.zeros_like(accumulated), where=normal_norm > 1e-12)
 
         return normals
 
@@ -417,19 +448,22 @@ class Multiphase(LBMBase):
         -------
         interface (numpy.ndarray): Boolean mask with True for solid-fluid interface nodes.
         """
-        lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
-        lattice_directions = lattice_directions[np.linalg.norm(lattice_directions, axis=1) > 0]
+        directions = np.array(self.lattice.c, dtype=np.int64).T
+        directions = directions[np.linalg.norm(directions, axis=1) > 0]
         interface = np.zeros((indices.shape[0],), dtype=bool)
-
-        for i, index in enumerate(indices):
-            for direction in lattice_directions:
-                nbr = index + direction
-                in_bounds = (0 <= nbr[0] < self.nx) and (0 <= nbr[1] < self.ny)
-                if self.dim == 3:
-                    in_bounds = in_bounds and (0 <= nbr[2] < self.nz)
-                if in_bounds and not solid_mask[tuple(nbr)]:
-                    interface[i] = True
-                    break
+        domain_shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        # Preserve direction order and early acceptance while replacing the per-node Python loop with bulk indexing.
+        for direction in directions:
+            unresolved_rows = np.flatnonzero(~interface)
+            if len(unresolved_rows) == 0:
+                break
+            neighbors = indices[unresolved_rows] + direction
+            in_bounds = np.all((neighbors >= 0) & (neighbors < domain_shape), axis=1)
+            in_bounds_rows = np.flatnonzero(in_bounds)
+            if len(in_bounds_rows) == 0:
+                continue
+            fluid = ~solid_mask[tuple(neighbors[in_bounds_rows].T)]
+            interface[unresolved_rows[in_bounds_rows[fluid]]] = True
 
         return interface
 
@@ -491,6 +525,31 @@ class Multiphase(LBMBase):
                 return False
         return True
 
+    def _uses_only_fluid_nodes_batch(self, points, solid_mask):
+        """Vectorized equivalent of ``_uses_only_fluid_nodes`` for a batch of interpolation points."""
+        eps = 1e-12
+        floor_points = np.floor(points)
+        lower = floor_points.astype(np.int64)
+        upper = lower + 1
+        frac = points - floor_points
+        domain_shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        valid = np.ones((len(points),), dtype=bool)
+        for corner in np.ndindex(*(2 for _ in range(self.dim))):
+            corner = np.asarray(corner, dtype=bool)
+            interpolation_indices = np.where(corner, upper, lower)
+            weights = np.prod(np.where(corner, frac, 1.0 - frac), axis=1)
+            active_rows = np.flatnonzero((weights > eps) & valid)
+            if len(active_rows) == 0:
+                continue
+            active_indices = interpolation_indices[active_rows]
+            in_bounds = np.all((active_indices >= 0) & (active_indices < domain_shape), axis=1)
+            active_valid = np.zeros((len(active_rows),), dtype=bool)
+            in_bounds_rows = np.flatnonzero(in_bounds)
+            if len(in_bounds_rows) > 0:
+                active_valid[in_bounds_rows] = ~solid_mask[tuple(active_indices[in_bounds_rows].T)]
+            valid[active_rows] &= active_valid
+        return valid
+
     def _first_fluid_mesh_intersection(self, indices, directions, solid_mask, return_valid=False, max_intersections=None):
         """
         Find first mesh-line intersections with fluid-only interpolation stencils.
@@ -513,27 +572,63 @@ class Multiphase(LBMBase):
         (points, valid), where valid is a boolean mask for accepted intersections.
         """
         eps = 1e-12
+        indices = np.asarray(indices)
+        directions = np.asarray(directions)
         points = self._first_mesh_intersection(indices, directions)
         valid = np.zeros((indices.shape[0],), dtype=bool)
         max_steps = self.nx + self.ny if self.dim == 2 else self.nx + self.ny + self.nz
-        for i, (idx, direction) in enumerate(zip(indices, directions)):
-            candidates = []
-            for component in direction:
-                if np.abs(component) > eps:
-                    candidates.append(np.arange(1, max_steps + 1, dtype=np.float64) / np.abs(component))
-            if not candidates:
-                continue
-            t_candidates = np.unique(np.round(np.sort(np.concatenate(candidates)), decimals=12))
-            for candidate_count, t in enumerate(t_candidates):
-                if max_intersections is not None and candidate_count >= max_intersections:
+        if len(indices) == 0:
+            return (points, valid) if return_valid else points
+
+        # Bound temporary host memory while vectorizing rays. Each batch holds at most about two million float64
+        # candidates, independent of domain size or porous-interface area.
+        candidate_slots = self.dim * max_steps
+        batch_size = max(1, min(len(indices), 2_000_000 // candidate_slots))
+        steps = np.arange(1, max_steps + 1, dtype=np.float64)
+        for start in range(0, len(indices), batch_size):
+            stop = min(start + batch_size, len(indices))
+            batch_indices = indices[start:stop]
+            batch_directions = directions[start:stop]
+            absolute_directions = np.abs(batch_directions)
+            candidates = np.full((len(batch_indices), self.dim, max_steps), np.inf, dtype=np.float64)
+            np.divide(
+                steps[None, None, :],
+                absolute_directions[..., None],
+                out=candidates,
+                where=absolute_directions[..., None] > eps,
+            )
+            candidates = np.round(np.sort(candidates.reshape(len(batch_indices), -1), axis=1), decimals=12)
+            unresolved = np.any(absolute_directions > eps, axis=1)
+            candidate_counts = np.zeros((len(batch_indices),), dtype=np.int32)
+            batch_points = points[start:stop]
+            batch_valid = valid[start:stop]
+
+            for candidate_index in range(candidates.shape[1]):
+                values = candidates[:, candidate_index]
+                unique = np.isfinite(values)
+                if candidate_index > 0:
+                    unique &= values != candidates[:, candidate_index - 1]
+                eligible = unresolved & unique
+                if max_intersections is not None:
+                    eligible &= candidate_counts < max_intersections
+                eligible_rows = np.flatnonzero(eligible)
+                if len(eligible_rows) > 0:
+                    candidate_points = batch_indices[eligible_rows] + values[eligible_rows, None] * batch_directions[eligible_rows]
+                    rounded = np.round(candidate_points)
+                    candidate_points = np.where(np.isclose(candidate_points, rounded, atol=eps), rounded, candidate_points)
+                    accepted = self._uses_only_fluid_nodes_batch(candidate_points, solid_mask)
+                    accepted_rows = eligible_rows[accepted]
+                    batch_points[accepted_rows] = candidate_points[accepted]
+                    batch_valid[accepted_rows] = True
+                    unresolved[accepted_rows] = False
+                candidate_counts += unique
+                if max_intersections is not None:
+                    unresolved &= candidate_counts < max_intersections
+                if not np.any(unresolved):
                     break
-                point = idx + t * direction
-                rounded = np.round(point)
-                point = np.where(np.isclose(point, rounded, atol=eps), rounded, point)
-                if self._uses_only_fluid_nodes(point, solid_mask):
-                    points[i] = point
-                    valid[i] = True
-                    break
+
+            points[start:stop] = batch_points
+            valid[start:stop] = batch_valid
         if return_valid:
             return points, valid
         return points
@@ -697,6 +792,219 @@ class Multiphase(LBMBase):
             jnp.array(tangent_pair_valid[:, active], dtype=jnp.bool_),
         )
 
+    def _build_geometric_gpu_ray_kernel(self, ray_count):
+        """Build a Pallas kernel that traces one independent geometric ray per GPU program."""
+        from jax.experimental import pallas as pl
+        from jax.experimental.pallas import triton as pltriton
+
+        nx, ny, nz = self.nx, self.ny, self.nz
+        max_steps = nx + ny + nz
+        candidate_slots = self.dim * max_steps
+
+        def round_half_to_even(value, scale=1.0):
+            scaled = value * scale
+            lower = jnp.floor(scaled)
+            fraction = scaled - lower
+            upper = lower + 1.0
+            even_lower = jnp.floor(lower * 0.5) * 2.0 == lower
+            tie = jnp.where(even_lower, lower, upper)
+            return jnp.where(fraction < 0.5, lower, jnp.where(fraction > 0.5, upper, tie)) / scale
+
+        def ray_kernel(indices_ref, directions_ref, solid_ref, points_ref, valid_ref):
+            ray = pl.program_id(0)
+            index = tuple(indices_ref[ray, axis] for axis in range(3))
+            direction = tuple(directions_ref[ray, axis] for axis in range(3))
+            absolute = tuple(jnp.abs(value) for value in direction)
+            active = tuple(value > 1e-12 for value in absolute)
+            first_t = jnp.minimum(
+                jnp.minimum(
+                    jnp.where(active[0], 1.0 / absolute[0], jnp.inf),
+                    jnp.where(active[1], 1.0 / absolute[1], jnp.inf),
+                ),
+                jnp.where(active[2], 1.0 / absolute[2], jnp.inf),
+            )
+            first_t = jnp.where(jnp.isfinite(first_t), first_t, 1.0)
+            initial_point = tuple(index[axis] + first_t * direction[axis] for axis in range(3))
+            initial_point = tuple(
+                jnp.where(
+                    jnp.isclose(value, rounded := round_half_to_even(value), atol=1e-12),
+                    rounded,
+                    value,
+                )
+                for value in initial_point
+            )
+
+            def condition(state):
+                iteration, _, _, _, _, _, _, _, done = state
+                return (iteration < candidate_slots) & ~done
+
+            def body(state):
+                iteration, k0, k1, k2, out0, out1, out2, found, _ = state
+                t0 = jnp.where(active[0] & (k0 <= max_steps), round_half_to_even(k0 / absolute[0], 1e12), jnp.inf)
+                t1 = jnp.where(active[1] & (k1 <= max_steps), round_half_to_even(k1 / absolute[1], 1e12), jnp.inf)
+                t2 = jnp.where(active[2] & (k2 <= max_steps), round_half_to_even(k2 / absolute[2], 1e12), jnp.inf)
+                value = jnp.minimum(jnp.minimum(t0, t1), t2)
+                finite = jnp.isfinite(value)
+                safe_value = jnp.where(finite, value, 0.0)
+                point = tuple(index[axis] + safe_value * direction[axis] for axis in range(3))
+                point = tuple(
+                    jnp.where(
+                        jnp.isclose(component, rounded := round_half_to_even(component), atol=1e-12),
+                        rounded,
+                        component,
+                    )
+                    for component in point
+                )
+                lower = tuple(jnp.floor(component).astype(jnp.int32) for component in point)
+                upper = tuple(component + 1 for component in lower)
+                frac = tuple(point[axis] - lower[axis] for axis in range(3))
+                fluid = finite
+                for corner in np.ndindex(2, 2, 2):
+                    coordinates = tuple(upper[axis] if corner[axis] else lower[axis] for axis in range(3))
+                    weight = (
+                        (frac[0] if corner[0] else 1.0 - frac[0])
+                        * (frac[1] if corner[1] else 1.0 - frac[1])
+                        * (frac[2] if corner[2] else 1.0 - frac[2])
+                    )
+                    in_bounds = (
+                        (coordinates[0] >= 0)
+                        & (coordinates[0] < nx)
+                        & (coordinates[1] >= 0)
+                        & (coordinates[1] < ny)
+                        & (coordinates[2] >= 0)
+                        & (coordinates[2] < nz)
+                    )
+                    safe = (
+                        jnp.clip(coordinates[0], 0, nx - 1),
+                        jnp.clip(coordinates[1], 0, ny - 1),
+                        jnp.clip(coordinates[2], 0, nz - 1),
+                    )
+                    fluid &= (weight <= 1e-12) | (in_bounds & ~solid_ref[safe])
+                return (
+                    iteration + 1,
+                    k0 + (t0 == value),
+                    k1 + (t1 == value),
+                    k2 + (t2 == value),
+                    jnp.where(fluid, point[0], out0),
+                    jnp.where(fluid, point[1], out1),
+                    jnp.where(fluid, point[2], out2),
+                    found | fluid,
+                    fluid | ~finite,
+                )
+
+            result = jax.lax.while_loop(condition, body, (0, 1, 1, 1, *initial_point, False, False))
+            points_ref[ray, 0] = result[4]
+            points_ref[ray, 1] = result[5]
+            points_ref[ray, 2] = result[6]
+            valid_ref[ray] = result[7]
+
+        return pl.pallas_call(
+            ray_kernel,
+            out_shape=(
+                jax.ShapeDtypeStruct((ray_count, 3), jnp.float64),
+                jax.ShapeDtypeStruct((ray_count,), jnp.bool_),
+            ),
+            grid=(ray_count,),
+            compiler_params=pltriton.CompilerParams(num_warps=1),
+            name="geometric_fluid_intersections",
+        )
+
+    def _first_fluid_mesh_intersection_gpu(self, indices, directions, solid_mask):
+        """Trace 3D characteristic rays on every local GPU with bounded temporary device memory."""
+        devices = tuple(device for device in jax.local_devices() if device.platform == "gpu")
+        if not devices:
+            raise RuntimeError("GPU geometric preprocessing requested, but no local GPU is available.")
+
+        indices = np.asarray(indices, dtype=np.int32)
+        directions = np.asarray(directions, dtype=np.float64)
+        points = np.empty_like(directions)
+        valid = np.empty((len(indices),), dtype=bool)
+        batch_size = self.geometric_preprocessing_batch_size
+
+        with jax.enable_x64():
+            kernel = getattr(self, "_geometric_gpu_ray_kernel", None)
+            if kernel is None:
+                kernel = self._build_geometric_gpu_ray_kernel(batch_size)
+                self._geometric_gpu_ray_kernel = kernel
+            device_masks = tuple(jax.device_put(jnp.asarray(solid_mask, dtype=jnp.bool_), device) for device in devices)
+            group_size = batch_size * len(devices)
+            for group_start in range(0, len(indices), group_size):
+                pending = []
+                for device_index, (device, device_mask) in enumerate(zip(devices, device_masks, strict=True)):
+                    start = group_start + device_index * batch_size
+                    stop = min(start + batch_size, len(indices))
+                    if start >= stop:
+                        continue
+                    count = stop - start
+                    batch_indices = np.zeros((batch_size, 3), dtype=np.int32)
+                    batch_directions = np.zeros((batch_size, 3), dtype=np.float64)
+                    batch_indices[:count] = indices[start:stop]
+                    batch_directions[:count] = directions[start:stop]
+                    with jax.default_device(device):
+                        output = kernel(
+                            jax.device_put(batch_indices, device),
+                            jax.device_put(batch_directions, device),
+                            device_mask,
+                        )
+                    pending.append((start, stop, output))
+                for start, stop, output in pending:
+                    count = stop - start
+                    points[start:stop] = np.asarray(output[0])[:count]
+                    valid[start:stop] = np.asarray(output[1])[:count]
+        return points, valid
+
+    def _nearest_fluid_lattice_points(self, indices, normals, solid_mask):
+        """Select the adjacent fluid lattice node most aligned with each wall normal."""
+        if len(indices) == 0:
+            return np.empty((0, self.dim), dtype=np.float64)
+
+        directions = np.asarray(self.lattice.c, dtype=np.int32).T
+        directions = directions[np.any(directions != 0, axis=1)]
+        candidates = np.asarray(indices, dtype=np.int32)[:, None, :] + directions[None, :, :]
+        domain_shape = np.asarray(solid_mask.shape, dtype=np.int32)
+        in_bounds = np.all((candidates >= 0) & (candidates < domain_shape), axis=-1)
+        safe_candidates = np.clip(candidates, 0, domain_shape - 1)
+        fluid = in_bounds & ~solid_mask[tuple(np.moveaxis(safe_candidates, -1, 0))]
+        if not np.all(np.any(fluid, axis=1)):
+            raise RuntimeError("Geometric wetting interface node has no adjacent fluid lattice node.")
+
+        unit_directions = directions / np.linalg.norm(directions, axis=1, keepdims=True)
+        alignment = np.asarray(normals, dtype=np.float64) @ unit_directions.T
+        choice = np.argmax(np.where(fluid, alignment, -np.inf), axis=1)
+        return np.asarray(candidates[np.arange(len(indices)), choice], dtype=np.float64)
+
+    def _repair_invalid_geometric_point_data(self, point_data, validity, indices, normals, solid_mask, fallback_points):
+        """Replace unresolved characteristic samples with fluid-only samples during preprocessing."""
+        invalid_count = sum(np.count_nonzero(~valid) for valid in validity)
+        if invalid_count == 0:
+            return tuple(point_data)
+
+        has_valid = np.logical_or.reduce(validity)
+        all_invalid = ~has_valid
+        if np.any(all_invalid):
+            fallback_points[all_invalid] = self._nearest_fluid_lattice_points(
+                indices[all_invalid],
+                normals[all_invalid],
+                solid_mask,
+            )
+
+        repaired_data = []
+        for data, valid in zip(point_data, validity, strict=True):
+            invalid_rows = np.flatnonzero(~valid)
+            if len(invalid_rows):
+                replacements = self._build_interpolation_data(fallback_points[invalid_rows])
+                for values, replacement in zip(data, replacements, strict=True):
+                    values[invalid_rows] = replacement
+            repaired_data.append(data)
+
+        logger.info(
+            "Replaced %d unresolved geometric rays at %d wall nodes (%d had no valid ray).",
+            invalid_count,
+            np.count_nonzero(~np.logical_and.reduce(validity)),
+            np.count_nonzero(all_invalid),
+        )
+        return tuple(repaired_data)
+
     def _build_geometric_3d_characteristic_data(self, indices, normals, theta, solid_mask):
         """
         Build cone-sampled interpolation data for 3D geometric wetting.
@@ -735,13 +1043,61 @@ class Multiphase(LBMBase):
         angle = np.pi / 2 - theta
         cos_angle = np.cos(angle)
         sin_angle = np.sin(angle)
+        gpu_devices = tuple(device for device in jax.local_devices() if device.platform == "gpu")
+        use_gpu = self.geometric_preprocessing_backend == "gpu" or (
+            self.geometric_preprocessing_backend == "auto" and bool(gpu_devices) and len(indices) * sample_count >= 262144
+        )
+        if self.geometric_preprocessing_backend == "gpu" and not gpu_devices:
+            raise RuntimeError("GPU geometric preprocessing requested, but no local GPU is available.")
         point_data = []
+        validity = []
+        fallback_points = np.zeros_like(normals)
+        has_fallback = np.zeros((len(indices),), dtype=bool)
+        crosses_solid = np.zeros((len(indices),), dtype=bool)
         for azimuth in azimuths:
             tangent_direction = np.cos(azimuth) * tangent_1 + np.sin(azimuth) * tangent_2
             directions = cos_angle[:, None] * normals + sin_angle[:, None] * tangent_direction
-            points = self._first_fluid_mesh_intersection(indices, directions, solid_mask)
+            if use_gpu:
+                try:
+                    points, valid = self._first_fluid_mesh_intersection_gpu(indices, directions, solid_mask)
+                except Exception as error:
+                    if self.geometric_preprocessing_backend == "gpu":
+                        raise
+                    logger.warning("GPU geometric preprocessing failed; using CPU fallback: %s", error)
+                    use_gpu = False
+                    points, valid = self._first_fluid_mesh_intersection(indices, directions, solid_mask, return_valid=True)
+            else:
+                points, valid = self._first_fluid_mesh_intersection(indices, directions, solid_mask, return_valid=True)
+            # A characteristic belongs to this wall only when its first mesh crossing is fluid.  Continuing through
+            # solid until a remote pore is found can import a density from the opposite side of a grain.  In thin
+            # throats, the extrema selection then creates a liquid-density wall inside vapor and can drive the
+            # adjacent fluid density negative in one step.  Treat later crossings like unresolved rays so they use a
+            # local same-wall sample (or the nearest adjacent fluid node when every ray is unresolved).
+            first_points = self._first_mesh_intersection(indices, directions)
+            first_distance = np.linalg.norm(first_points - indices, axis=1)
+            point_distance = np.linalg.norm(points - indices, axis=1)
+            local = point_distance <= first_distance + 1e-10
+            crosses_solid |= valid & ~local
+            valid &= local
+            first_valid = valid & ~has_fallback
+            fallback_points[first_valid] = points[first_valid]
+            has_fallback |= valid
+            validity.append(valid)
             point_data.append(self._build_interpolation_data(points))
-        return tuple(point_data)
+        # A partial contact-angle cone has a directional bias.  If any otherwise-valid ray first crossed solid,
+        # replace the whole cone at that wall by its nearest adjacent fluid node.  Fully resolved cones—and thus
+        # ordinary flat/curved-wall behavior—remain unchanged.
+        if np.any(crosses_solid):
+            for valid in validity:
+                valid[crosses_solid] = False
+        return self._repair_invalid_geometric_point_data(
+            point_data,
+            validity,
+            indices,
+            normals,
+            solid_mask,
+            fallback_points,
+        )
 
     def _create_geometric_wetting_data(self, localize=True):
         """
@@ -770,11 +1126,14 @@ class Multiphase(LBMBase):
         """
         geometric_wetting_data = []
         geometric_fluid_mask = []
+        geometric_force_mask = []
         characteristics_time = 0.0
         for BC in self.BCs:
             solid_mask = self._create_component_solid_mask(BC)
             fluid_mask_host = ~solid_mask[..., None]
             geometric_fluid_mask.append(self.distributed_array_init(fluid_mask_host.shape, jnp.bool_, init_val=fluid_mask_host))
+            force_mask_host = self._create_geometric_force_mask(fluid_mask_host[..., 0])[..., None]
+            geometric_force_mask.append(self.distributed_array_init(force_mask_host.shape, jnp.bool_, init_val=force_mask_host))
             component_data = []
             for bc in BC:
                 if not self._is_wetting_boundary_condition(bc):
@@ -789,15 +1148,19 @@ class Multiphase(LBMBase):
                 if theta.shape[0] != indices.shape[0]:
                     raise ValueError("Geometric wetting theta must be scalar or match the number of boundary nodes.")
 
-                normals = self._compute_geometric_normals(bc, solid_mask)
-                normal_norm = np.linalg.norm(normals, axis=1)
                 interface = self._solid_fluid_interface_mask(indices, solid_mask)
-                valid = interface & (normal_norm > 1e-12)
-                if not np.any(valid):
+                if not np.any(interface):
                     continue
-                indices = indices[valid]
-                theta = theta[valid]
-                normals = normals[valid]
+                source_rows = np.flatnonzero(interface)
+                indices = indices[interface]
+                theta = theta[interface]
+                normals = self._compute_geometric_normals(bc, solid_mask, indices=indices, source_rows=source_rows)
+                valid_normal = np.linalg.norm(normals, axis=1) > 1e-12
+                if not np.any(valid_normal):
+                    continue
+                indices = indices[valid_normal]
+                theta = theta[valid_normal]
+                normals = normals[valid_normal]
 
                 if self.dim == 3:
                     characteristics_start = time.perf_counter()
@@ -808,9 +1171,7 @@ class Multiphase(LBMBase):
                         "theta": np.asarray(theta.reshape(-1, 1), dtype=np.dtype(self.precision_policy.compute_dtype)),
                         "points": points,
                     }
-                    component_data.append(
-                        self._localize_geometric_wetting_data(data) if localize and self.local_geometric_wetting is not None else data
-                    )
+                    component_data.append(self._localize_geometric_wetting_data(data) if localize and self.n_devices > 1 else data)
                     continue
 
                 # Characteristics determination for density interpolation
@@ -830,19 +1191,32 @@ class Multiphase(LBMBase):
                     -normals[:, 0] * sin_angle + normals[:, 1] * cos_angle,
                 ))
 
-                points_1 = self._first_fluid_mesh_intersection(indices, direction_1, solid_mask)
-                points_2 = self._first_fluid_mesh_intersection(indices, direction_2, solid_mask)
+                points_1, valid_1 = self._first_fluid_mesh_intersection(indices, direction_1, solid_mask, return_valid=True)
+                points_2, valid_2 = self._first_fluid_mesh_intersection(indices, direction_2, solid_mask, return_valid=True)
                 characteristics_time += time.perf_counter() - characteristics_start
+                fallback_points = np.zeros_like(normals)
+                fallback_points[valid_1] = points_1[valid_1]
+                fallback_points[~valid_1 & valid_2] = points_2[~valid_1 & valid_2]
+                point_1, point_2 = self._repair_invalid_geometric_point_data(
+                    [self._build_interpolation_data(points_1), self._build_interpolation_data(points_2)],
+                    [valid_1, valid_2],
+                    indices,
+                    normals,
+                    solid_mask,
+                    fallback_points,
+                )
                 data = {
                     "indices": tuple(np.asarray(index, dtype=np.int32) for index in indices.T),
                     "theta": np.asarray(theta.reshape(-1, 1), dtype=np.dtype(self.precision_policy.compute_dtype)),
-                    "point_1": self._build_interpolation_data(points_1),
-                    "point_2": self._build_interpolation_data(points_2),
+                    "point_1": point_1,
+                    "point_2": point_2,
                 }
-                component_data.append(self._localize_geometric_wetting_data(data) if localize and self.local_geometric_wetting is not None else data)
+                component_data.append(self._localize_geometric_wetting_data(data) if localize and self.n_devices > 1 else data)
             geometric_wetting_data.append(component_data)
 
         logger.info(f"Time taken to determine geometric wetting characteristics: {characteristics_time:.6f} seconds")
+
+        self.geometric_force_mask = geometric_force_mask
 
         return geometric_wetting_data, geometric_fluid_mask
 
@@ -1191,55 +1565,68 @@ class Multiphase(LBMBase):
     def local_geometric_wetting_m(
         self,
         rho,
-        rho_min,
-        rho_max,
-        local_indices,
-        local_theta,
-        local_sample_indices,
-        request_indices,
-        request_weights,
+        fluid_mask,
+        component_data,
     ):
-        """Apply geometric wetting from shard-local interpolation requests."""
-        indices = local_indices[0]
-        theta = local_theta[0]
-        interpolation_indices = request_indices[0]
-        weights = request_weights[0]
+        """Apply all geometric boundaries for one component inside one shard-local kernel."""
+        local_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
+        local_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
+        rho_min = jax.lax.pmin(local_min, "x")
+        rho_max = jax.lax.pmax(local_max, "x")
 
-        if self.dim == 2:
-            x0, y0, x1, y1 = (interpolation_indices[..., index] for index in range(4))
-            samples = (
-                weights[..., 0, None] * rho.at[x0, y0].get(mode="fill", fill_value=0.0)
-                + weights[..., 1, None] * rho.at[x1, y0].get(mode="fill", fill_value=0.0)
-                + weights[..., 2, None] * rho.at[x0, y1].get(mode="fill", fill_value=0.0)
-                + weights[..., 3, None] * rho.at[x1, y1].get(mode="fill", fill_value=0.0)
-            )
-        else:
-            x0, y0, z0, x1, y1, z1 = (interpolation_indices[..., index] for index in range(6))
-            samples = (
-                weights[..., 0, None] * rho.at[x0, y0, z0].get(mode="fill", fill_value=0.0)
-                + weights[..., 1, None] * rho.at[x1, y0, z0].get(mode="fill", fill_value=0.0)
-                + weights[..., 2, None] * rho.at[x0, y1, z0].get(mode="fill", fill_value=0.0)
-                + weights[..., 3, None] * rho.at[x1, y1, z0].get(mode="fill", fill_value=0.0)
-                + weights[..., 4, None] * rho.at[x0, y0, z1].get(mode="fill", fill_value=0.0)
-                + weights[..., 5, None] * rho.at[x1, y0, z1].get(mode="fill", fill_value=0.0)
-                + weights[..., 6, None] * rho.at[x0, y1, z1].get(mode="fill", fill_value=0.0)
-                + weights[..., 7, None] * rho.at[x1, y1, z1].get(mode="fill", fill_value=0.0)
-            )
+        for data in component_data:
+            indices = data["local_indices"][0]
+            interpolation_indices = data["request_indices"][0]
+            weights = data["request_weights"][0]
 
-        samples = jax.lax.psum(samples, "x")
-        samples = samples[local_sample_indices[0]]
-        rho_wall = jnp.where(
-            theta <= jnp.pi / 2,
-            jnp.max(samples, axis=-2),
-            jnp.min(samples, axis=-2),
-        )
-        idx = tuple(indices[:, axis] for axis in range(self.dim))
-        return rho.at[idx].set(jnp.clip(rho_wall, rho_min, rho_max), mode="drop")
+            if self.dim == 2:
+                x0, y0, x1, y1 = (interpolation_indices[..., index] for index in range(4))
+                contributions = (
+                    weights[..., 0, None] * rho.at[x0, y0].get(mode="fill", fill_value=0.0)
+                    + weights[..., 1, None] * rho.at[x1, y0].get(mode="fill", fill_value=0.0)
+                    + weights[..., 2, None] * rho.at[x0, y1].get(mode="fill", fill_value=0.0)
+                    + weights[..., 3, None] * rho.at[x1, y1].get(mode="fill", fill_value=0.0)
+                )
+            else:
+                x0, y0, z0, x1, y1, z1 = (interpolation_indices[..., index] for index in range(6))
+                contributions = (
+                    weights[..., 0, None] * rho.at[x0, y0, z0].get(mode="fill", fill_value=0.0)
+                    + weights[..., 1, None] * rho.at[x1, y0, z0].get(mode="fill", fill_value=0.0)
+                    + weights[..., 2, None] * rho.at[x0, y1, z0].get(mode="fill", fill_value=0.0)
+                    + weights[..., 3, None] * rho.at[x1, y1, z0].get(mode="fill", fill_value=0.0)
+                    + weights[..., 4, None] * rho.at[x0, y0, z1].get(mode="fill", fill_value=0.0)
+                    + weights[..., 5, None] * rho.at[x1, y0, z1].get(mode="fill", fill_value=0.0)
+                    + weights[..., 6, None] * rho.at[x0, y1, z1].get(mode="fill", fill_value=0.0)
+                    + weights[..., 7, None] * rho.at[x1, y1, z1].get(mode="fill", fill_value=0.0)
+                )
+
+            if "request_slots" in data:
+                template = data["reduce_scatter_template"][0] if "reduce_scatter_template" in data else data["sample_template"][0]
+                samples = jnp.zeros((*template.shape, rho.shape[-1]), dtype=rho.dtype)
+                samples = samples.reshape((-1, rho.shape[-1])).at[data["request_slots"][0]].set(contributions, mode="drop")
+                samples = samples.reshape((*template.shape, rho.shape[-1]))
+                if "reduce_scatter_template" in data:
+                    samples = jax.lax.psum_scatter(samples, "x", scatter_dimension=0)
+                else:
+                    samples = jax.lax.psum(samples, "x")
+                    samples = samples[data["local_sample_indices"][0]]
+            else:
+                samples = jax.lax.psum(contributions, "x")
+                samples = samples[data["local_sample_indices"][0]]
+            rho_wall = jnp.where(
+                data["local_select_max"][0],
+                jnp.max(samples, axis=-2),
+                jnp.min(samples, axis=-2),
+            )
+            idx = tuple(indices[:, axis] for axis in range(self.dim))
+            rho = rho.at[idx].set(jnp.clip(rho_wall, rho_min, rho_max), mode="drop")
+        return rho
 
     def _localize_geometric_wetting_data(self, data):
         """Convert one geometric boundary's interpolation data to sharded int32 requests."""
         wall_indices = np.stack(data["indices"], axis=-1).astype(np.int32, copy=False)
         theta = np.asarray(data["theta"], dtype=np.dtype(self.precision_policy.compute_dtype))
+        select_max = theta <= np.asarray(np.pi / 2, dtype=theta.dtype)
         point_data = data["points"] if self.dim == 3 else (data["point_1"], data["point_2"])
         index_count = 6 if self.dim == 3 else 4
         sample_indices = np.stack([np.stack(point[:index_count], axis=-1) for point in point_data], axis=1).astype(np.int32, copy=False)
@@ -1249,29 +1636,105 @@ class Multiphase(LBMBase):
         )
 
         sample_rows = np.arange(len(wall_indices), dtype=np.int32)
-        local_indices, (local_theta, local_sample_indices) = self._split_local_indices(wall_indices, theta, sample_rows)
+        local_indices, (local_select_max, local_sample_indices) = self._split_local_indices(wall_indices, select_max, sample_rows)
         local_nx = self.nx // self.n_devices
         sample_count = sample_indices.shape[1]
         x_positions = (0, 3) if self.dim == 3 else (0, 2)
-        source_ids = np.arange(self.n_devices, dtype=np.int32)[:, None, None]
-        source_offsets = source_ids * local_nx
-        request_indices = np.broadcast_to(sample_indices[None], (self.n_devices,) + sample_indices.shape).copy()
-        request_indices[..., x_positions[0]] -= source_offsets
-        request_indices[..., x_positions[1]] -= source_offsets
+        wall_owner = wall_indices[:, 0] // local_nx
+        max_local = local_indices.shape[1]
+        local_wall_slot = np.empty(len(wall_indices), dtype=np.int32)
+        for destination in range(self.n_devices):
+            destination_rows = wall_owner == destination
+            local_wall_slot[destination_rows] = np.arange(np.count_nonzero(destination_rows), dtype=np.int32)
+        # Route balanced wall rows directly to their destination shard. If destination padding exceeds 12.5%,
+        # keep the compact all-reduce layout to prevent an imbalanced wall from increasing temporary memory.
+        use_reduce_scatter = self.n_devices * max_local <= int(np.ceil(1.125 * len(wall_indices)))
 
-        request_weights = np.broadcast_to(sample_weights[None], (self.n_devices,) + sample_weights.shape).copy()
         x0_owner = sample_indices[..., x_positions[0]] // local_nx
         x1_owner = sample_indices[..., x_positions[1]] // local_nx
-        request_weights[..., 0::2] *= (x0_owner[None] == source_ids)[..., None]
-        request_weights[..., 1::2] *= (x1_owner[None] == source_ids)[..., None]
+        active = [(x0_owner == source) | (x1_owner == source) for source in range(self.n_devices)]
+        max_requests = max(np.count_nonzero(source_active) for source_active in active)
+        dense_request_count = len(wall_indices) * sample_count
+        # Compaction needs a scatter into collective slots. Retain the direct dense kernel when fewer than
+        # 12.5% of gathers would be removed, avoiding a slowdown for walls whose samples all live on one shard.
+        if max_requests > 0.875 * dense_request_count:
+            source_ids = np.arange(self.n_devices, dtype=np.int32)[:, None, None]
+            request_indices = np.broadcast_to(sample_indices[None], (self.n_devices,) + sample_indices.shape).copy()
+            request_indices[..., x_positions[0]] -= source_ids * local_nx
+            request_indices[..., x_positions[1]] -= source_ids * local_nx
+            request_weights = np.broadcast_to(sample_weights[None], (self.n_devices,) + sample_weights.shape).copy()
+            request_weights[..., 0::2] *= (x0_owner[None] == source_ids)[..., None]
+            request_weights[..., 1::2] *= (x1_owner[None] == source_ids)[..., None]
+            return {
+                "local_indices": self._distribute_local(local_indices, jnp.int32),
+                "local_select_max": self._distribute_local(local_select_max, jnp.bool_),
+                "local_sample_indices": self._distribute_local(local_sample_indices, jnp.int32),
+                "request_indices": self._distribute_local(request_indices, jnp.int32),
+                "request_weights": self._distribute_local(request_weights, self.precision_policy.compute_dtype),
+            }
 
-        return {
+        request_indices = np.zeros((self.n_devices, max_requests, index_count), dtype=np.int32)
+        request_indices[..., x_positions[0]] = local_nx
+        request_indices[..., x_positions[1]] = local_nx
+        request_weights = np.zeros((self.n_devices, max_requests, sample_weights.shape[-1]), dtype=sample_weights.dtype)
+        sample_buffer_size = (self.n_devices * max_local if use_reduce_scatter else len(wall_indices)) * sample_count
+        request_slots = np.full((self.n_devices, max_requests), sample_buffer_size, dtype=np.int32)
+
+        for source, source_active in enumerate(active):
+            rows, samples = np.nonzero(source_active)
+            count = len(rows)
+            localized = sample_indices[rows, samples].copy()
+            localized[..., x_positions[0]] -= source * local_nx
+            localized[..., x_positions[1]] -= source * local_nx
+            request_indices[source, :count] = localized
+
+            source_weights = sample_weights[rows, samples].copy()
+            source_weights[..., 0::2] *= (x0_owner[rows, samples] == source)[:, None]
+            source_weights[..., 1::2] *= (x1_owner[rows, samples] == source)[:, None]
+            request_weights[source, :count] = source_weights
+            if use_reduce_scatter:
+                request_slots[source, :count] = wall_owner[rows] * max_local * sample_count + local_wall_slot[rows] * sample_count + samples
+            else:
+                request_slots[source, :count] = rows * sample_count + samples
+
+        localized = {
             "local_indices": self._distribute_local(local_indices, jnp.int32),
-            "local_theta": self._distribute_local(local_theta, self.precision_policy.compute_dtype),
-            "local_sample_indices": self._distribute_local(local_sample_indices, jnp.int32),
+            "local_select_max": self._distribute_local(local_select_max, jnp.bool_),
             "request_indices": self._distribute_local(request_indices, jnp.int32),
             "request_weights": self._distribute_local(request_weights, self.precision_policy.compute_dtype),
+            "request_slots": self._distribute_local(request_slots, jnp.int32),
         }
+        if use_reduce_scatter:
+            localized["reduce_scatter_template"] = self._distribute_local(
+                np.zeros((self.n_devices, self.n_devices, max_local, sample_count), dtype=np.bool_), jnp.bool_
+            )
+        else:
+            localized["local_sample_indices"] = self._distribute_local(local_sample_indices, jnp.int32)
+            localized["sample_template"] = self._distribute_local(
+                np.zeros((self.n_devices, len(wall_indices), sample_count), dtype=np.bool_), jnp.bool_
+            )
+        return localized
+
+    def _build_local_geometric_wetting_kernels(self, scalar_spec):
+        """Build one fused shard-local geometric-wetting kernel per active component."""
+        kernels = []
+        for component_data in self.geometric_wetting_data:
+            if not component_data:
+                kernels.append(None)
+                continue
+            data_specs = tree_map(lambda array: PartitionSpec("x", *([None] * (array.ndim - 1))), component_data)
+            kernels.append(
+                jit(
+                    shard_map(
+                        self.local_geometric_wetting_m,
+                        mesh=self.mesh,
+                        in_specs=(scalar_spec, scalar_spec, data_specs),
+                        out_specs=scalar_spec,
+                        check_vma=False,
+                    )
+                )
+            )
+        return tuple(kernels)
 
     def _wetting_parameter_at_indices(self, value, indices):
         """Convert scalar, per-node, or full-domain wetting data to one scalar row per solid node."""
@@ -1409,6 +1872,17 @@ class Multiphase(LBMBase):
                 )
             ]
         elif self.wetting_formulation == "geometric":
+            if self.local_geometric_wetting is not None:
+                return [
+                    kernel(rho, fluid_mask, component_data) if kernel is not None else rho
+                    for rho, fluid_mask, component_data, kernel in zip(
+                        rho_tree,
+                        self.geometric_fluid_mask,
+                        self.geometric_wetting_data,
+                        self.local_geometric_wetting,
+                        strict=True,
+                    )
+                ]
 
             def interpolate_density(rho, interpolation_data):
                 """
@@ -1463,18 +1937,7 @@ class Multiphase(LBMBase):
                 rho_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
                 rho_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
                 for data in component_data:
-                    if "local_indices" in data:
-                        rho = self.local_geometric_wetting(
-                            rho,
-                            rho_min,
-                            rho_max,
-                            data["local_indices"],
-                            data["local_theta"],
-                            data["local_sample_indices"],
-                            data["request_indices"],
-                            data["request_weights"],
-                        )
-                    elif self.dim == 2:
+                    if self.dim == 2:
                         rho_1 = interpolate_density(rho, data["point_1"])
                         rho_2 = interpolate_density(rho, data["point_2"])
                         rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, jnp.maximum(rho_1, rho_2), jnp.minimum(rho_1, rho_2))
@@ -1745,7 +2208,7 @@ class Multiphase(LBMBase):
         else:
             force_tree = fluid_fluid_force
         if self.wetting_formulation == "geometric" and any(self._has_wetting_bc):
-            force_tree = tree_map(lambda force, fluid_mask: force * fluid_mask, force_tree, self.geometric_fluid_mask)
+            force_tree = tree_map(lambda force, force_mask: force * force_mask, force_tree, self.geometric_force_mask)
         return force_tree, psi_tree, U_tree
 
     # Compute the force using the effective mass (psi) and the interaction potential (phi)

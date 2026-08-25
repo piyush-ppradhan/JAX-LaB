@@ -5,7 +5,7 @@ same collision matrix, EOS, relaxation values and wetting parameters) on a small
 generated porous medium, so the same script can be re-run before/after each optimization lands and compared.
 
 Run directly for A/B numbers (requires a GPU):
-    python tests/performance/bench_porous_media_3d.py [--nx 64] [--steps 200] [--devices <n>]
+    python tests/performance/bench_porous_media_3d.py [--nx 64] [--steps 200]
 """
 
 import os
@@ -119,7 +119,7 @@ class PorousMediaBenchmark(MultiphaseMRT):
         self.BCs[0].append(BounceBack(tuple(porous_indices.T), self.grid_info, self.precision_policy, THETA_W, PHI_W, DELTA_RHO_W))
 
 
-def build_simulation(nx, ny, nz, seed):
+def build_simulation(nx, ny, nz, seed, wetting_formulation="improved_virtual_density"):
     n_devices = jax.device_count()
     if nx % n_devices:
         nx += n_devices - nx % n_devices
@@ -145,7 +145,7 @@ def build_simulation(nx, ny, nz, seed):
         "s_3": s_3,
         "s_4": s_4,
         "kappa": [0.0],
-        "wetting_formulation": "improved_virtual_density",
+        "wetting_formulation": wetting_formulation,
         "s_rho": s_0,
         "s_e": s_b,
         "s_eta": s_b,
@@ -163,7 +163,16 @@ def build_simulation(nx, ny, nz, seed):
     return PorousMediaBenchmark(mask, **kwargs)
 
 
-def run_benchmark(nx=64, ny=64, nz=64, steps=200, seed=0, sample_memory=False):
+def run_benchmark(
+    nx=64,
+    ny=64,
+    nz=64,
+    steps=200,
+    seed=0,
+    sample_memory=False,
+    wetting_formulation="improved_virtual_density",
+    save_arrays=True,
+):
     """
     sample_memory (bool): When True, block and read device.memory_stats()['bytes_in_use'] after every step
     instead of only before/after the loop, to see the live allocator footprint fluctuate step to step (the
@@ -172,7 +181,7 @@ def run_benchmark(nx=64, ny=64, nz=64, steps=200, seed=0, sample_memory=False):
     it is a memory-fluctuation diagnostic, not the throughput number.
     """
     require_gpu()
-    sim = build_simulation(nx, ny, nz, seed)
+    sim = build_simulation(nx, ny, nz, seed, wetting_formulation)
 
     f_tree = sim.assign_fields_sharded()
     f_tree, _ = sim.step(f_tree, 0)  # compile, excluded from timing
@@ -193,7 +202,6 @@ def run_benchmark(nx=64, ny=64, nz=64, steps=200, seed=0, sample_memory=False):
 
     memory_after = device.memory_stats() or {}
     rho_tree, _ = sim.update_macroscopic(f_tree)
-    force_tree = sim.compute_force(rho_tree)
 
     rho = np.asarray(rho_tree[0])
     voxels = sim.nx * sim.ny * sim.nz
@@ -203,6 +211,8 @@ def run_benchmark(nx=64, ny=64, nz=64, steps=200, seed=0, sample_memory=False):
         "nz": sim.nz,
         "n_devices": jax.device_count(),
         "steps": steps,
+        "wetting_formulation": wetting_formulation,
+        "solid_fraction": float(np.mean(sim._mask)),
         "elapsed_seconds": elapsed,
         "mlups": voxels * steps / elapsed / 1e6,
         "bytes_in_use": memory_after.get("bytes_in_use"),
@@ -211,9 +221,10 @@ def run_benchmark(nx=64, ny=64, nz=64, steps=200, seed=0, sample_memory=False):
         "rho_max": float(rho.max()),
         "rho_total_mass": float(rho.sum()),
         "rho_finite": bool(np.isfinite(rho).all()),
-        "population": np.asarray(f_tree[0]),
-        "force": np.asarray(force_tree[0]),
     }
+    if save_arrays:
+        result["population"] = np.asarray(f_tree[0])
+        result["force"] = np.asarray(sim.compute_force(rho_tree)[0])
     if sample_memory:
         result["bytes_in_use_min"] = min(memory_trace)
         result["bytes_in_use_max"] = max(memory_trace)
@@ -229,20 +240,37 @@ def main():
     parser.add_argument("--nz", type=int, default=64)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--wetting-formulation",
+        choices=("improved_virtual_density", "geometric"),
+        default="improved_virtual_density",
+    )
     parser.add_argument("--out", type=str, default="bench_result")
     parser.add_argument("--sample-memory", action="store_true", help="Trace bytes_in_use every step (see run_benchmark)")
+    parser.add_argument("--summary-only", action="store_true", help="Skip full population/force array copies and saves.")
     args = parser.parse_args()
 
-    result = run_benchmark(args.nx, args.ny, args.nz, args.steps, args.seed, sample_memory=args.sample_memory)
-    population, force = result.pop("population"), result.pop("force")
+    result = run_benchmark(
+        args.nx,
+        args.ny,
+        args.nz,
+        args.steps,
+        args.seed,
+        sample_memory=args.sample_memory,
+        wetting_formulation=args.wetting_formulation,
+        save_arrays=not args.summary_only,
+    )
+    population = result.pop("population", None)
+    force = result.pop("force", None)
     trace = result.pop("bytes_in_use_trace", None)
 
     print(json.dumps(result, indent=2))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "summary.json").write_text(json.dumps(result, indent=2))
-    np.save(out_dir / "population.npy", population)
-    np.save(out_dir / "force.npy", force)
+    if population is not None:
+        np.save(out_dir / "population.npy", population)
+        np.save(out_dir / "force.npy", force)
     if trace is not None:
         np.save(out_dir / "bytes_in_use_trace.npy", np.asarray(trace))
     print(f"Saved arrays and summary to {out_dir}/")
