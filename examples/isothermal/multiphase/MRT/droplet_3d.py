@@ -1,16 +1,14 @@
 """
 Single component 3D droplet example where liquid droplet is suspended in its vapor. The density of each region is computed using Maxwell's Construction. The density profile
 is initialized with smooth profile with specified interface width. Boundary conditions are periodic everywhere. Useful for tuning the various coefficients.
-
-The collision matrix is based on:
-1. Coveney, P. V. et al. Multiple–relaxation–time lattice Boltzmann models in three dimensions. Philosophical Transactions of the Royal Society of London.
-Series A: Mathematical, Physical and Engineering Sciences 360, 437–451 (2002).
 """
 
 import os
 import subprocess
+import jax.numpy as jnp
 import numpy as np
 from jax import config
+from jax.tree import map as tree_map
 
 from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.multiphase import MultiphaseMRT
@@ -26,6 +24,55 @@ logger = logging.getLogger(__name__)
 
 
 class Droplet3D(MultiphaseMRT):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        def relaxation_matrix(mass, momentum, shear, plus, minus, third_order, fourth_order):
+            relaxation = np.diag([
+                mass,
+                momentum,
+                momentum,
+                momentum,
+                shear,
+                shear,
+                shear,
+                plus,
+                plus,
+                plus,
+                third_order,
+                third_order,
+                third_order,
+                third_order,
+                third_order,
+                third_order,
+                fourth_order,
+                fourth_order,
+                fourth_order,
+            ])
+            relaxation[7, 8] = minus
+            relaxation[7, 9] = minus
+            relaxation[8, 7] = minus
+            relaxation[8, 9] = minus
+            relaxation[9, 7] = minus
+            relaxation[9, 8] = minus
+            return jnp.array(relaxation, dtype=self.precision_policy.compute_dtype)
+
+        self.S = [relaxation_matrix(s_0, s_1, s_2, s_plus, s_minus, s_3, s_4)]
+        self.collision_matrix = tree_map(lambda M, S, M_inv: jnp.dot(jnp.dot(M, S), M_inv), self.M, self.S, self.M_inv)
+        self.collision_terms = []
+        for collision_matrix in self.collision_matrix:
+            matrix = np.asarray(collision_matrix)
+            columns = []
+            for output_direction in range(self.lattice.q):
+                columns.append(
+                    tuple(
+                        (input_direction, np.float32(matrix[input_direction, output_direction]))
+                        for input_direction in range(self.lattice.q)
+                        if not np.isclose(matrix[input_direction, output_direction], 0.0, atol=1e-7)
+                    )
+                )
+            self.collision_terms.append(tuple(columns))
+
     def initialize_macroscopic_fields(self):
         x = np.linspace(0, self.nx - 1, self.nx, dtype=int)
         y = np.linspace(0, self.ny - 1, self.ny, dtype=int)
@@ -84,40 +131,43 @@ class Droplet3D(MultiphaseMRT):
 
 
 if __name__ == "__main__":
-    s_rho = [0.0]
-    s_e = [1.0]
-    s_eta = [1.0]
-    s_j = [0.0]
-    s_q = [1.0]
-    s_m = [1.0]
-    s_pi = [1.0]
-    s_v = [1.0]
+    s_0 = 0.0  # Conserved density mode
+    s_1 = 0.0  # Conserved momentum modes
+    s_2 = 0.8  # Shear modes; nu = (1 / s_2 - 0.5) / 3
+    s_b = 0.8  # Bulk/diagonal stress modes
+    s_3 = (16 - 8 * s_2) / (8 - s_2)  # Third-order modes
+    s_4 = 1.0  # Fourth-order modes
+    s_plus = (s_b + 2 * s_2) / 3
+    s_minus = (s_b - s_2) / 3
 
     e = LatticeD3Q19().c.T
-    en = np.linalg.norm(e, axis=1)
+    ex = e[:, 0]
+    ey = e[:, 1]
+    ez = e[:, 2]
 
+    # Raw-moment basis used by porous_media_evaporation_3D.py.
     M = np.zeros((19, 19))
-    M[0, :] = en**0
-    M[1, :] = 19 * en**2 - 30
-    M[2, :] = (21 * en**4 - 53 * en**2 + 24) / 2
-    M[3, :] = e[:, 0]
-    M[4, :] = (5 * en**2 - 9) * e[:, 0]
-    M[5, :] = e[:, 1]
-    M[6, :] = (5 * en**2 - 9) * e[:, 1]
-    M[7, :] = e[:, 2]
-    M[8, :] = (5 * en**2 - 9) * e[:, 2]
-    M[9, :] = 3 * e[:, 0] ** 2 - en**2
-    M[10, :] = (3 * en**2 - 5) * (3 * e[:, 0] ** 2 - en**2)
-    M[11, :] = e[:, 1] ** 2 - e[:, 2] ** 2
-    M[12, :] = (3 * en**2 - 5) * (e[:, 1] ** 2 - e[:, 2] ** 2)
-    M[13, :] = e[:, 0] * e[:, 1]
-    M[14, :] = e[:, 1] * e[:, 2]
-    M[15, :] = e[:, 0] * e[:, 2]
-    M[16, :] = (e[:, 1] ** 2 - e[:, 2] ** 2) * e[:, 0]
-    M[17, :] = (e[:, 2] ** 2 - e[:, 0] ** 2) * e[:, 1]
-    M[18, :] = (e[:, 0] ** 2 - e[:, 1] ** 2) * e[:, 2]
+    M[0, :] = ex**0
+    M[1, :] = ex
+    M[2, :] = ey
+    M[3, :] = ez
+    M[4, :] = ex * ey
+    M[5, :] = ex * ez
+    M[6, :] = ey * ez
+    M[7, :] = ex**2
+    M[8, :] = ey**2
+    M[9, :] = ez**2
+    M[10, :] = ex * ey**2
+    M[11, :] = ex * ez**2
+    M[12, :] = ey * ex**2
+    M[13, :] = ez * ex**2
+    M[14, :] = ey * ez**2
+    M[15, :] = ez * ey**2
+    M[16, :] = ex**2 * ey**2
+    M[17, :] = ex**2 * ez**2
+    M[18, :] = ey**2 * ez**2
 
-    r = 30
+    r = 40
     width = 4
     nx = 200
     ny = 200
@@ -144,17 +194,16 @@ if __name__ == "__main__":
         "nz": nz,
         "g_kkprime": -1.0 * np.ones((1, 1)),
         "EOS": eos,
-        "body_force": [0.0, 0.0, 0.0],
-        "k": [0.27],
-        "A": 0.01 * np.ones((1, 1)),
-        "s_rho": s_rho,
-        "s_e": s_e,
-        "s_eta": s_eta,
-        "s_j": s_j,
-        "s_q": s_q,
-        "s_pi": s_pi,
-        "s_m": s_m,
-        "s_v": [1.0],
+        "k": [0.25],
+        "A": np.zeros((1, 1)),
+        "s_rho": [s_0],
+        "s_e": [s_b],
+        "s_eta": [s_b],
+        "s_j": [s_1],
+        "s_q": [s_3],
+        "s_pi": [s_3],
+        "s_m": [s_4],
+        "s_v": [s_2],
         "M": [M],
         "kappa": [0.0],
         "precision": precision,
