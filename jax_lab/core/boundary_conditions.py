@@ -905,23 +905,7 @@ class Regularized(ZouHe):
         The Qi tensor is used in the regularization of the distribution functions. It is defined as Qi = cc - cs^2*I,
         where cc is the tensor of lattice velocities, cs is the speed of sound, and I is the identity tensor.
         """
-        Qi = self.lattice.cc
-        if self.dim == 3:
-            diagonal = (0, 3, 5)
-            offdiagonal = (1, 2, 4)
-        elif self.dim == 2:
-            diagonal = (0, 2)
-            offdiagonal = (1,)
-        else:
-            raise ValueError(f"dim = {self.dim} not supported")
-
-        # Qi = cc - cs^2*I
-        Qi = Qi.at[:, diagonal].set(self.lattice.cc[:, diagonal] - 1.0 / 3.0)
-
-        # multiply off-diagonal elements by 2 because the Q tensor is symmetric
-        Qi = Qi.at[:, offdiagonal].set(self.lattice.cc[:, offdiagonal] * 2.0)
-
-        self.Qi = Qi.T
+        self.Qi = _construct_symmetric_lattice_moment(self.lattice.cc, self.dim)
         return
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -1324,6 +1308,111 @@ WALL_BC_TYPES = (
     (BounceBackHalfway, _halfway_wall_math, False),
     (InterpolatedBounceBackBouzidi, _bouzidi_wall_math, True),
     (InterpolatedBounceBackDifferentiable, _differentiable_wall_math, True),
+)
+
+
+def _construct_symmetric_lattice_moment(cc, dim):
+    """Qi = cc - cs^2*I, with off-diagonal terms doubled because Q is symmetric. Shared by Regularized.__init__
+    (global path) and _regularized_*_math (shard-local path) so both use the exact same constant."""
+    if dim == 3:
+        diagonal, offdiagonal = (0, 3, 5), (1, 2, 4)
+    elif dim == 2:
+        diagonal, offdiagonal = (0, 2), (1,)
+    else:
+        raise ValueError(f"dim = {dim} not supported")
+    Qi = cc.at[:, diagonal].set(cc[:, diagonal] - 1.0 / 3.0)
+    Qi = Qi.at[:, offdiagonal].set(cc[:, offdiagonal] * 2.0)
+    return Qi.T
+
+
+def _zouhe_calculate_vel(fpop, normals, imiddle_mask, iknown_mask, rho):
+    """Velocity from prescribed density (Zou/He BC), for a per-node gathered fpop block."""
+    unormal = -1.0 + 1.0 / rho * (
+        jnp.sum(fpop * imiddle_mask, axis=-1, keepdims=True) + 2.0 * jnp.sum(fpop * iknown_mask, axis=-1, keepdims=True)
+    )
+    return unormal * normals
+
+
+def _zouhe_calculate_rho(fpop, normals, imiddle_mask, iknown_mask, vel):
+    """Density from prescribed velocity (Zou/He BC), for a per-node gathered fpop block."""
+    unormal = jnp.sum(normals * vel, axis=-1, keepdims=True)
+    return (1.0 / (1.0 + unormal)) * (
+        jnp.sum(fpop * imiddle_mask, axis=-1, keepdims=True) + 2.0 * jnp.sum(fpop * iknown_mask, axis=-1, keepdims=True)
+    )
+
+
+def _zouhe_equilibrium(rho, vel, w, c):
+    # Match BoundaryCondition.equilibrium: cast to compute precision (c's dtype) before the formula, since rho/vel
+    # here may still be at fpop's output dtype or the prescribed array's own dtype.
+    rho = rho.astype(c.dtype)
+    vel = vel.astype(c.dtype)
+    cu = 3.0 * jnp.dot(vel, c)
+    usqr = 1.5 * jnp.sum(vel**2, axis=-1, keepdims=True)
+    return rho * w * (1.0 + cu + 0.5 * cu**2 - usqr)
+
+
+def _zouhe_bounceback_nonequilibrium(fpop, feq, imissing, iknown):
+    """Unknown populations via bounce-back of non-equilibrium populations, for a per-node gathered fpop block."""
+    bindex = jnp.arange(fpop.shape[0])[:, None]
+    fknown = fpop[bindex, iknown] + feq[bindex, imissing] - feq[bindex, iknown]
+    return fpop.at[bindex, imissing].set(fknown)
+
+
+def _regularize_fpop(fpop, feq, w, cc, dim):
+    Qi = _construct_symmetric_lattice_moment(cc, dim)
+    f_neq = fpop - feq
+    PiNeq = jnp.dot(f_neq, cc)
+    QiPi1 = jnp.dot(PiNeq, Qi)
+    fpop1 = 9.0 / 2.0 * w[None, :] * QiPi1
+    return feq + fpop1
+
+
+def _zouhe_velocity_math(fpop, prescribed, normals, imiddle_mask, iknown_mask, imissing, iknown, w, c, cc, dim):
+    """ZouHe formula shared by global and shard-local application paths. cc/dim are unused (kept for a uniform
+    signature with the Regularized variants below, see INLET_OUTLET_BC_TYPES)."""
+    del cc, dim
+    vel = prescribed
+    rho = _zouhe_calculate_rho(fpop, normals, imiddle_mask, iknown_mask, vel)
+    feq = _zouhe_equilibrium(rho, vel, w, c)
+    return _zouhe_bounceback_nonequilibrium(fpop, feq, imissing, iknown)
+
+
+def _zouhe_pressure_math(fpop, prescribed, normals, imiddle_mask, iknown_mask, imissing, iknown, w, c, cc, dim):
+    """ZouHe formula shared by global and shard-local application paths. cc/dim are unused (kept for a uniform
+    signature with the Regularized variants below, see INLET_OUTLET_BC_TYPES)."""
+    del cc, dim
+    rho = prescribed
+    vel = _zouhe_calculate_vel(fpop, normals, imiddle_mask, iknown_mask, rho)
+    feq = _zouhe_equilibrium(rho, vel, w, c)
+    return _zouhe_bounceback_nonequilibrium(fpop, feq, imissing, iknown)
+
+
+def _regularized_velocity_math(fpop, prescribed, normals, imiddle_mask, iknown_mask, imissing, iknown, w, c, cc, dim):
+    """Regularized formula shared by global and shard-local application paths."""
+    vel = prescribed
+    rho = _zouhe_calculate_rho(fpop, normals, imiddle_mask, iknown_mask, vel)
+    feq = _zouhe_equilibrium(rho, vel, w, c)
+    fbd = _zouhe_bounceback_nonequilibrium(fpop, feq, imissing, iknown)
+    return _regularize_fpop(fbd, feq, w, cc, dim)
+
+
+def _regularized_pressure_math(fpop, prescribed, normals, imiddle_mask, iknown_mask, imissing, iknown, w, c, cc, dim):
+    """Regularized formula shared by global and shard-local application paths."""
+    rho = prescribed
+    vel = _zouhe_calculate_vel(fpop, normals, imiddle_mask, iknown_mask, rho)
+    feq = _zouhe_equilibrium(rho, vel, w, c)
+    fbd = _zouhe_bounceback_nonequilibrium(fpop, feq, imissing, iknown)
+    return _regularize_fpop(fbd, feq, w, cc, dim)
+
+
+# Concrete type, prescribed-value type ('velocity' or 'pressure'), and shard-local formula. Grouped by (type,
+# ttype) rather than by class alone because ZouHe/Regularized select their formula branch at the instance level
+# (bc.type), not the class level.
+INLET_OUTLET_BC_TYPES = (
+    (ZouHe, "velocity", _zouhe_velocity_math),
+    (ZouHe, "pressure", _zouhe_pressure_math),
+    (Regularized, "velocity", _regularized_velocity_math),
+    (Regularized, "pressure", _regularized_pressure_math),
 )
 
 

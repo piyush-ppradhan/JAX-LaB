@@ -15,7 +15,7 @@ from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
-from .boundary_conditions import WALL_BC_TYPES, BounceBack, BounceBackHalfway
+from .boundary_conditions import INLET_OUTLET_BC_TYPES, WALL_BC_TYPES, BounceBack, BounceBackHalfway, EquilibriumBC, Regularized, ZouHe
 from .precision_policy import PrecisionPolicy
 from .utils import colored, downsample_field
 
@@ -164,6 +164,16 @@ class LBMBase(object):
                 )
             )
             self.local_wall_bc_kernels = self._build_local_wall_kernels(field_spec=P("x", None, None))
+            self.local_inlet_outlet_kernels = self._build_local_inlet_outlet_kernels(field_spec=P("x", None, None))
+            self.local_equilibrium_bc = jit(
+                shard_map(
+                    self.local_equilibrium_bc_m,
+                    mesh=self.mesh,
+                    in_specs=(P("x", None, None), P("x", None, None), P("x", None, None)),
+                    out_specs=P("x", None, None),
+                    check_vma=False,
+                )
+            )
             self.local_solid_pin = jit(
                 shard_map(
                     self.local_solid_pin_m,
@@ -199,6 +209,16 @@ class LBMBase(object):
                 )
             )
             self.local_wall_bc_kernels = self._build_local_wall_kernels(field_spec=P("x", None, None, None))
+            self.local_inlet_outlet_kernels = self._build_local_inlet_outlet_kernels(field_spec=P("x", None, None, None))
+            self.local_equilibrium_bc = jit(
+                shard_map(
+                    self.local_equilibrium_bc_m,
+                    mesh=self.mesh,
+                    in_specs=(P("x", None, None, None), P("x", None, None), P("x", None, None)),
+                    out_specs=P("x", None, None, None),
+                    check_vma=False,
+                )
+            )
             self.local_solid_pin = jit(
                 shard_map(
                     self.local_solid_pin_m,
@@ -221,6 +241,12 @@ class LBMBase(object):
         # Local (per-shard, int32) data for BounceBackHalfway/InterpolatedBounceBack* and the solid-node pin,
         # used by apply_bc's fast wall boundary condition path.
         self.wall_bc_data, self.solid_pin_indices = self._make_local_wall_bc_data()
+        # Local (per-shard, int32) data for ZouHe/Regularized and EquilibriumBC, used by apply_bc's fast
+        # inlet/outlet boundary condition path. These BCs only read/write their own node's populations (no
+        # neighbor access), unlike ExtrapolationOutflow/ConvectiveOutflow which are left on the generic
+        # global-index path.
+        self.inlet_outlet_bc_data = self._make_local_inlet_outlet_data()
+        self.local_equilibrium_bc_indices, self.local_equilibrium_bc_values = self._make_local_equilibrium_bc_data()
         self.force = self.get_force()
 
     @property
@@ -837,6 +863,90 @@ class LBMBase(object):
         fbd = apply_fn(fout_bd, fin_bd, local_imissing[0], local_iknown[0], local_vel[0], local_weights[0], self.lattice.w, c)
         return fout.at[idx].set(fbd, mode="drop")
 
+    def local_inlet_bc_m(
+        self, fout, local_indices, local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed, apply_fn
+    ):
+        """
+        Apply a ZouHe/Regularized inlet-outlet boundary condition (see INLET_OUTLET_BC_TYPES) using local
+        (per-shard, int32) fluid-node indices and aligned auxiliary data, instead of the global index/mask/
+        prescribed arrays baked into every device's compiled program. Unlike wall boundary conditions, these
+        only read/write the node's own post-streaming populations (no fin/streaming-neighbor data), so a single
+        fout argument suffices. Dimension-generic. apply_fn is a static (non-traced) Python callable, bound via
+        functools.partial before this body is wrapped in shard_map (see _build_local_inlet_outlet_kernels).
+
+        Padded index rows point one position outside the local shard, so out-of-shard reads return 0.0
+        (mode="fill") and out-of-shard writes are dropped (mode="drop"); the padded rows of the auxiliary
+        arrays are zero-filled, which is a safe no-op input for that padding.
+
+        Parameters
+        ----------
+        fout (jax.numpy.ndarray): Local shard of the post-streaming distribution functions.
+
+        local_indices (jax.numpy.ndarray): Local shard of padded fluid-node indices, shape (1, n_local, dim).
+
+        local_normals (jax.numpy.ndarray): Local shard of padded boundary normals, shape (1, n_local, dim).
+
+        local_imiddle_mask, local_iknown_mask (jax.numpy.ndarray): Local shard of padded middle/known direction
+            boolean masks, shape (1, n_local, q).
+
+        local_imissing, local_iknown (jax.numpy.ndarray): Local shard of padded missing/known direction
+            indices, shape (1, n_local, q).
+
+        local_prescribed (jax.numpy.ndarray): Local shard of padded prescribed values (velocity or density),
+            shape (1, n_local, dim) or (1, n_local, 1).
+
+        apply_fn (callable): One of _zouhe_velocity_math, _zouhe_pressure_math, _regularized_velocity_math,
+            _regularized_pressure_math.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Local shard of fout with the inlet/outlet boundary condition applied at the fluid
+        nodes.
+        """
+        local_indices = local_indices[0]
+        idx = tuple(local_indices[:, axis] for axis in range(self.dim))
+        fpop = fout.at[idx].get(mode="fill", fill_value=0.0)
+        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
+        cc = jnp.array(self.lattice.cc, dtype=self.precision_policy.compute_dtype)
+        fbd = apply_fn(
+            fpop,
+            local_prescribed[0],
+            local_normals[0],
+            local_imiddle_mask[0],
+            local_iknown_mask[0],
+            local_imissing[0],
+            local_iknown[0],
+            self.lattice.w,
+            c,
+            cc,
+            self.dim,
+        )
+        return fout.at[idx].set(fbd, mode="drop")
+
+    def local_equilibrium_bc_m(self, fout, local_indices, local_out):
+        """
+        Apply EquilibriumBC using local (per-shard, int32) fluid-node indices and the precomputed per-node
+        equilibrium values, instead of the global index list baked into every device's compiled program.
+        EquilibriumBC.apply ignores its fout/fin arguments (it just returns a precomputed constant per node), so
+        this is a pure scatter with no gather needed.
+
+        Parameters
+        ----------
+        fout (jax.numpy.ndarray): Local shard of the post-streaming distribution functions.
+
+        local_indices (jax.numpy.ndarray): Local shard of padded fluid-node indices, shape (1, n_local, dim).
+
+        local_out (jax.numpy.ndarray): Local shard of padded precomputed equilibrium values, shape
+            (1, n_local, q).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Local shard of fout with the equilibrium values set at the fluid nodes.
+        """
+        local_indices = local_indices[0]
+        idx = tuple(local_indices[:, axis] for axis in range(self.dim))
+        return fout.at[idx].set(local_out[0], mode="drop")
+
     def local_solid_pin_m(self, fout, local_indices):
         """
         Pin local (per-shard, int32) solid-node populations to the rest equilibrium after streaming, using local
@@ -885,6 +995,35 @@ class LBMBase(object):
                 )
             )
             for bc_type, apply_fn, _ in WALL_BC_TYPES
+        }
+
+    def _build_local_inlet_outlet_kernels(self, field_spec):
+        """
+        Build one jitted shard_map callable per (concrete type, prescribed-value type) pair in
+        INLET_OUTLET_BC_TYPES, all sharing local_inlet_bc_m's body with their own formula bound via
+        functools.partial (a static Python callable, not a traced argument).
+
+        Parameters
+        ----------
+        field_spec (jax.sharding.PartitionSpec): Sharding of fout, dimension-dependent (2D or 3D).
+
+        Returns
+        -------
+        (dict): Maps each (bc_type, ttype) pair in INLET_OUTLET_BC_TYPES to its jitted shard_map callable.
+        """
+        P = PartitionSpec
+        aux_spec = P("x", None, None)
+        return {
+            (bc_type, ttype): jit(
+                shard_map(
+                    partial(self.local_inlet_bc_m, apply_fn=apply_fn),
+                    mesh=self.mesh,
+                    in_specs=(field_spec, aux_spec, aux_spec, aux_spec, aux_spec, aux_spec, aux_spec, aux_spec),
+                    out_specs=field_spec,
+                    check_vma=False,
+                )
+            )
+            for bc_type, ttype, apply_fn in INLET_OUTLET_BC_TYPES
         }
 
     def _split_local_indices(self, indices, *aux_arrays):
@@ -1082,6 +1221,114 @@ class LBMBase(object):
         solid_pin_indices = self._distribute_local(self._collect_solid_pin_indices(self.BCs), jnp.int32)
         return wall_bc_data, solid_pin_indices
 
+    def _collect_inlet_outlet_bc_data(self, BCs, bc_type, ttype):
+        """
+        Build padded local (per-shard, int32) fluid-node indices and aligned auxiliary data (normals,
+        imiddle_mask, iknown_mask, imissing, iknown, prescribed) for every boundary condition of exactly
+        bc_type with a matching prescribed-value type (bc.type) in BCs.
+
+        Parameters
+        ----------
+        BCs (list): Boundary conditions for one component (or the whole simulation for single-phase).
+
+        bc_type (type): Exact ZouHe/Regularized class to match (matched by (type, ttype) instead of type alone,
+            since the formula branch is selected by the instance's own bc.type, not the class).
+
+        ttype (str): 'velocity' or 'pressure', matched against each candidate boundary condition's bc.type.
+
+        Returns
+        -------
+        (numpy.ndarray or None, tuple): Padded local indices and (imissing, iknown, vel, weights)-shaped
+        (normals, imiddle_mask, iknown_mask, imissing, iknown, prescribed) padded local arrays. All None if BCs
+        has no matching boundary condition.
+        """
+        matches = [bc for bc in BCs if type(bc) is bc_type and bc.type == ttype]
+        if not matches:
+            return None, (None, None, None, None, None, None)
+
+        indices = np.vstack([np.asarray(bc.indices, dtype=np.int32).T for bc in matches])
+        normals = np.vstack([np.asarray(bc.normals) for bc in matches])
+        imiddle_mask = np.vstack([np.asarray(bc.imiddle_mask) for bc in matches])
+        iknown_mask = np.vstack([np.asarray(bc.iknown_mask) for bc in matches])
+        imissing = np.vstack([np.asarray(bc.imissing) for bc in matches])
+        iknown = np.vstack([np.asarray(bc.iknown) for bc in matches])
+        prescribed = np.vstack([np.asarray(bc.prescribed) for bc in matches])
+
+        local_indices, (local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed) = (
+            self._split_local_indices(indices, normals, imiddle_mask, iknown_mask, imissing, iknown, prescribed)
+        )
+        return local_indices, (local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed)
+
+    def _collect_equilibrium_bc_data(self, BCs):
+        """
+        Build padded local (per-shard, int32) fluid-node indices and the aligned precomputed equilibrium values
+        for every EquilibriumBC in BCs.
+
+        Parameters
+        ----------
+        BCs (list): Boundary conditions for one component (or the whole simulation for single-phase).
+
+        Returns
+        -------
+        (numpy.ndarray or None, numpy.ndarray or None): Padded local indices and padded local equilibrium
+        values. Both None if BCs has no EquilibriumBC.
+        """
+        matches = [bc for bc in BCs if type(bc) is EquilibriumBC]
+        if not matches:
+            return None, None
+        indices = np.vstack([np.asarray(bc.indices, dtype=np.int32).T for bc in matches])
+        out = np.vstack([np.asarray(bc.out) for bc in matches])
+        local_indices, (local_out,) = self._split_local_indices(indices, out)
+        return local_indices, local_out
+
+    def _make_local_inlet_outlet_data(self):
+        """
+        Distribute, per (concrete type, prescribed-value type) pair in INLET_OUTLET_BC_TYPES, the padded local
+        fluid-node indices and auxiliary data.
+
+        Returns
+        -------
+        (dict): Maps each (bc_type, ttype) pair in INLET_OUTLET_BC_TYPES to a (local_indices, local_normals,
+        local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed) tuple of
+        distributed arrays (entries None where not applicable).
+
+        Notes
+        -----
+        Overridden by Multiphase to return one such mapping per component.
+        """
+        inlet_outlet_bc_data = {}
+        for bc_type, ttype, _ in INLET_OUTLET_BC_TYPES:
+            local_indices, (local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed) = (
+                self._collect_inlet_outlet_bc_data(self.BCs, bc_type, ttype)
+            )
+            inlet_outlet_bc_data[(bc_type, ttype)] = (
+                self._distribute_local(local_indices, jnp.int32),
+                self._distribute_local(local_normals),
+                self._distribute_local(local_imiddle_mask, jnp.bool_),
+                self._distribute_local(local_iknown_mask, jnp.bool_),
+                self._distribute_local(local_imissing, jnp.uint8),
+                self._distribute_local(local_iknown, jnp.uint8),
+                self._distribute_local(local_prescribed),
+            )
+        return inlet_outlet_bc_data
+
+    def _make_local_equilibrium_bc_data(self):
+        """
+        Distribute the padded local EquilibriumBC indices and precomputed equilibrium values for this
+        simulation's boundary conditions.
+
+        Returns
+        -------
+        (jax.numpy.ndarray or None, jax.numpy.ndarray or None): Distributed local indices and equilibrium
+        values, both sharded along x, or (None, None) if there is no EquilibriumBC.
+
+        Notes
+        -----
+        Overridden by Multiphase to return one such pair per component.
+        """
+        local_indices, local_out = self._collect_equilibrium_bc_data(self.BCs)
+        return self._distribute_local(local_indices, jnp.int32), self._distribute_local(local_out)
+
     @partial(jit, static_argnums=(0, 3), inline=True)
     def equilibrium(self, rho, u, cast_output=True):
         """
@@ -1176,9 +1423,13 @@ class LBMBase(object):
         boundary condition matches the provided implementation step. If it does, it applies the
         boundary condition to the post-streaming distribution functions (fout).
 
-        Full-way BounceBack and every wall boundary condition in WALL_BC_TYPES (BounceBackHalfway,
-        InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable) are handled separately, in batched
-        calls using local (per-shard, int32) indices, instead of the generic per-BC global-index loop.
+        Full-way BounceBack, every wall boundary condition in WALL_BC_TYPES (BounceBackHalfway,
+        InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable), EquilibriumBC, and every inlet/
+        outlet boundary condition in INLET_OUTLET_BC_TYPES (ZouHe, Regularized) are handled separately, in
+        batched calls using local (per-shard, int32) indices, instead of the generic per-BC global-index loop.
+        ExtrapolationOutflow/ConvectiveOutflow/ExtrapolationOutflowMultiphase are not: they read a neighbor node
+        offset from the boundary (not just their own node), which the wall/inlet-outlet local kernels don't
+        support.
 
         Parameters
         ----------
@@ -1195,7 +1446,7 @@ class LBMBase(object):
         (jax.numpy.ndarray): The output distribution functions after applying the boundary conditions.
         """
         for bc in self.BCs:
-            if isinstance(bc, (BounceBack, BounceBackHalfway)):
+            if isinstance(bc, (BounceBack, BounceBackHalfway, EquilibriumBC, ZouHe)):
                 continue
             fout = bc.prepare_populations(fout, fin, implementation_step)
             if bc.implementation_step == implementation_step:
@@ -1214,6 +1465,16 @@ class LBMBase(object):
                 local_indices, local_imissing, local_iknown, local_vel, local_weights = self.wall_bc_data[bc_type]
                 if local_indices is not None:
                     fout = self.local_wall_bc_kernels[bc_type](fout, fin, local_indices, local_imissing, local_iknown, local_vel, local_weights)
+            if self.local_equilibrium_bc_indices is not None:
+                fout = self.local_equilibrium_bc(fout, self.local_equilibrium_bc_indices, self.local_equilibrium_bc_values)
+            for bc_type, ttype, _ in INLET_OUTLET_BC_TYPES:
+                local_indices, local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed = (
+                    self.inlet_outlet_bc_data[(bc_type, ttype)]
+                )
+                if local_indices is not None:
+                    fout = self.local_inlet_outlet_kernels[(bc_type, ttype)](
+                        fout, local_indices, local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed
+                    )
 
         return fout
 

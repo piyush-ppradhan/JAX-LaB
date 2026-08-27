@@ -25,14 +25,17 @@ from .base import LBMBase
 
 # User-defined libraries
 from .boundary_conditions import (
+    INLET_OUTLET_BC_TYPES,
     NEQ_BC_TYPES,
     WALL_BC_TYPES,
     BounceBack,
     BounceBackHalfway,
     BounceBackMoving,
+    EquilibriumBC,
     ExactNonEquilibriumExtrapolation,
     InterpolatedBounceBackBouzidi,
     InterpolatedBounceBackDifferentiable,
+    ZouHe,
     _neq_extrapolation_math,
 )
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
@@ -1396,6 +1399,54 @@ class Multiphase(LBMBase):
             solid_pin_indices_by_component.append(self._distribute_local(self._collect_solid_pin_indices(BCs), jnp.int32))
         return wall_bc_data_by_component, solid_pin_indices_by_component
 
+    def _make_local_inlet_outlet_data(self):
+        """
+        Distribute, per component and per (concrete type, prescribed-value type) pair in INLET_OUTLET_BC_TYPES,
+        the padded local fluid-node indices and auxiliary data (self.BCs is a list of per-component boundary
+        condition lists for Multiphase, unlike the flat list in LBMBase).
+
+        Returns
+        -------
+        (list): One inlet_outlet_bc_data dict per component, see LBMBase._make_local_inlet_outlet_data.
+        """
+        inlet_outlet_bc_data_by_component = []
+        for BCs in self.BCs:
+            inlet_outlet_bc_data = {}
+            for bc_type, ttype, _ in INLET_OUTLET_BC_TYPES:
+                local_indices, (local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed) = (
+                    self._collect_inlet_outlet_bc_data(BCs, bc_type, ttype)
+                )
+                inlet_outlet_bc_data[(bc_type, ttype)] = (
+                    self._distribute_local(local_indices, jnp.int32),
+                    self._distribute_local(local_normals),
+                    self._distribute_local(local_imiddle_mask, jnp.bool_),
+                    self._distribute_local(local_iknown_mask, jnp.bool_),
+                    self._distribute_local(local_imissing, jnp.uint8),
+                    self._distribute_local(local_iknown, jnp.uint8),
+                    self._distribute_local(local_prescribed),
+                )
+            inlet_outlet_bc_data_by_component.append(inlet_outlet_bc_data)
+        return inlet_outlet_bc_data_by_component
+
+    def _make_local_equilibrium_bc_data(self):
+        """
+        Distribute, per component, the padded local EquilibriumBC indices and precomputed equilibrium values
+        (self.BCs is a list of per-component boundary condition lists for Multiphase, unlike the flat list in
+        LBMBase).
+
+        Returns
+        -------
+        (list, list): One distributed local index array and one distributed equilibrium-value array (or None)
+        per component, see LBMBase._make_local_equilibrium_bc_data.
+        """
+        indices_by_component = []
+        out_by_component = []
+        for BCs in self.BCs:
+            local_indices, local_out = self._collect_equilibrium_bc_data(BCs)
+            indices_by_component.append(self._distribute_local(local_indices, jnp.int32))
+            out_by_component.append(self._distribute_local(local_out))
+        return indices_by_component, out_by_component
+
     def local_neq_bc_m(
         self,
         fout,
@@ -2336,8 +2387,9 @@ class Multiphase(LBMBase):
         """
         This function extends apply_bc to pytrees.
 
-        Full-way BounceBack and every wall boundary condition in WALL_BC_TYPES (BounceBackHalfway,
-        InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable) are handled separately per
+        Full-way BounceBack, every wall boundary condition in WALL_BC_TYPES (BounceBackHalfway,
+        InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable), EquilibriumBC, and every inlet/
+        outlet boundary condition in INLET_OUTLET_BC_TYPES (ZouHe, Regularized) are handled separately per
         component, in batched calls using local (per-shard, int32) indices, instead of the generic per-BC
         global-index loop.
 
@@ -2358,7 +2410,7 @@ class Multiphase(LBMBase):
         """
 
         def _apply_bc_(fin, fout, bc):
-            if isinstance(bc, (BounceBack, BounceBackHalfway)):
+            if isinstance(bc, (BounceBack, BounceBackHalfway, EquilibriumBC, ZouHe)):
                 return fout
             fout = bc.prepare_populations(fout, fin, implementation_step)
             if bc.implementation_step == implementation_step:
@@ -2401,13 +2453,32 @@ class Multiphase(LBMBase):
 
         if implementation_step == "PostStreaming":
             new_fout_tree = []
-            for fout, fin, wall_bc_data, solid_pin_indices in zip(fout_tree, fin_tree, self.wall_bc_data, self.solid_pin_indices, strict=True):
+            for fout, fin, wall_bc_data, solid_pin_indices, inlet_outlet_bc_data, equilibrium_bc_indices, equilibrium_bc_values in zip(
+                fout_tree,
+                fin_tree,
+                self.wall_bc_data,
+                self.solid_pin_indices,
+                self.inlet_outlet_bc_data,
+                self.local_equilibrium_bc_indices,
+                self.local_equilibrium_bc_values,
+                strict=True,
+            ):
                 if solid_pin_indices is not None:
                     fout = self.local_solid_pin(fout, solid_pin_indices)
                 for bc_type, _, _ in WALL_BC_TYPES:
                     local_indices, local_imissing, local_iknown, local_vel, local_weights = wall_bc_data[bc_type]
                     if local_indices is not None:
                         fout = self.local_wall_bc_kernels[bc_type](fout, fin, local_indices, local_imissing, local_iknown, local_vel, local_weights)
+                if equilibrium_bc_indices is not None:
+                    fout = self.local_equilibrium_bc(fout, equilibrium_bc_indices, equilibrium_bc_values)
+                for bc_type, ttype, _ in INLET_OUTLET_BC_TYPES:
+                    local_indices, local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed = (
+                        inlet_outlet_bc_data[(bc_type, ttype)]
+                    )
+                    if local_indices is not None:
+                        fout = self.local_inlet_outlet_kernels[(bc_type, ttype)](
+                            fout, local_indices, local_normals, local_imiddle_mask, local_iknown_mask, local_imissing, local_iknown, local_prescribed
+                        )
                 new_fout_tree.append(fout)
             fout_tree = new_fout_tree
 
