@@ -109,7 +109,7 @@ def _run_with_checkpoint_restart(solver_class, parameters):
 
 @pytest.mark.parametrize("precision, tolerance", SINGLE_PHASE_PRECISION_CASES)
 def test_single_phase_bgk_checkpoint_restart(tmp_path, precision, tolerance):
-    """Cover checkpoint restart and each supported storage/compute dtype."""
+    """Verify restart equivalence for representative precision policies."""
     parameters = _solver_parameters(LatticeD2Q9, (8, 7, 0), precision, tmp_path / "single", checkpoint_rate=10)
     restarted_output = _run_with_checkpoint_restart(SinusoidalBGK, parameters)
 
@@ -126,7 +126,7 @@ def test_single_phase_bgk_checkpoint_restart(tmp_path, precision, tolerance):
 
 
 def test_multiphase_bgk_checkpoint_restart(tmp_path):
-    """Cover a different dimension and multiphase pytree structure."""
+    """Verify restart equivalence for a 3D multiphase pytree."""
     parameters = _solver_parameters(
         LatticeD3Q19,
         (6, 5, 4),

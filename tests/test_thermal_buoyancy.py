@@ -1,10 +1,4 @@
-"""Verify Thermal's buoyancy monkeypatch (apply_force_thermal) is applied correctly regardless of whether
-fluid_solver is population-space (BGKSim) or moment-space (MRTSim). Thermal.__init__ installs
-apply_force_thermal as fluid_solver.apply_force whenever apply_buoyancy=True, but MRTSim.collision calls
-apply_force with its moments (m, meq), not populations - apply_force_thermal must transform the buoyancy
-delta_feq into moment space with fluid_solver.M in that case, or it silently adds a population-space value to
-a moment-space array.
-"""
+"""Verify thermal buoyancy forcing in population- and moment-space solvers."""
 
 import jax
 

@@ -29,7 +29,6 @@ PRECISION_CASES = (
 
 @pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
 def test_lattice_structure(lattice_class, dimensions, cardinality):
-    """Verify lattice shapes, directions, index groups, and stored moments."""
     lattice = lattice_class()
     directions = np.asarray(lattice.c).T
 
@@ -64,7 +63,6 @@ def test_lattice_structure(lattice_class, dimensions, cardinality):
 
 @pytest.mark.parametrize("lattice_class, dimensions, cardinality", LATTICE_CASES)
 def test_lattice_weights_and_isotropy(lattice_class, dimensions, cardinality):
-    """Verify each lattice's normalized weights and isotropy in high precision."""
     lattice = lattice_class(precision="f64/f64")
     directions = np.asarray(lattice.c, dtype=np.float64)
     weights = np.asarray(lattice.w, dtype=np.float64)
@@ -77,7 +75,6 @@ def test_lattice_weights_and_isotropy(lattice_class, dimensions, cardinality):
 
 @pytest.mark.parametrize("precision, expected_dtype, tolerance", PRECISION_CASES)
 def test_lattice_precision_policy(precision, expected_dtype, tolerance):
-    """Verify shared precision handling once, independent of lattice definition."""
     lattice = LatticeD2Q9(precision=precision)
 
     assert lattice.w.dtype == expected_dtype
@@ -86,12 +83,10 @@ def test_lattice_precision_policy(precision, expected_dtype, tolerance):
 
 
 def test_unsupported_lattice_name_raises_value_error():
-    """Verify that an unknown lattice definition is rejected."""
     with pytest.raises(ValueError, match="Supported Lattice types"):
         Lattice("D2Q7")
 
 
 def test_unsupported_precision_raises_value_error():
-    """Verify that an unknown precision policy is rejected."""
     with pytest.raises(ValueError, match="precision not supported"):
         LatticeD2Q9(precision="f16/f32")

@@ -1,7 +1,4 @@
-"""Verify Multiphase.compute_fluid_fluid_force (scalar force stencil) against an independent reference computed
-with plain (periodic) numpy rolls, reproducing the original jnp.dot(G_ff * streamed_field, c) formula directly.
-Uses two components with off-diagonal g_kkprime/A entries, to exercise the cross-component interaction terms.
-"""
+"""Verify multiphase force stencils against periodic NumPy references."""
 
 import numpy as np
 
@@ -16,9 +13,7 @@ SEED = 0
 
 
 def _reference_force_stencil(field, weights, dim):
-    """Independent G_ff*c weighted directional neighbor sum, via plain periodic numpy rolls (matches
-    _neighbor_stencil_m exactly when n_devices == 1, since the x-halo exchange degenerates to a periodic
-    self-roll)."""
+    """Compute the weighted directional neighbor sum with periodic rolls."""
     total = np.zeros((*field.shape[:-1], dim))
     for direction, w in zip(*weights):
         if np.all(w == 0.0):

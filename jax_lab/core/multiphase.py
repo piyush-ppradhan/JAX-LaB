@@ -2821,6 +2821,13 @@ class MultiphaseBGK(Multiphase):
 
 
 class MultiphaseMRT(Multiphase):
+    """Multiphase MRT solver with fused sparse collision kernels.
+
+    The optimized kernel is used for the default equilibrium and force model when
+    ``kappa`` is zero and wetting is absent or uses improved virtual density.
+    Other configurations use the general fused MRT kernel.
+    """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._uses_default_mrt_equilibrium = type(self).equilibrium is Multiphase.equilibrium
@@ -3025,53 +3032,48 @@ class MultiphaseMRT(Multiphase):
     @partial(jit, static_argnums=(0,), inline=True)
     def _compute_force_delta_feq(self, rho_tree, u_tree, T=None):
         """
-        Real-space compact EDM difference delta_feq = feq(rho, u + F/rho) - feq(rho, u), computed directly from
-        cu, dcu and delta_usqr instead of building a full feq_force array via equilibrium(). Shared by
-        apply_force (which transforms it into moment space for the unfused, moment-space collision path some
-        callers may still use) and collision (which adds it directly in real space, needing no M transform at
-        all - see collision()'s Notes).
+        Compute the real-space EDM difference for all components.
 
         Parameters
         ----------
-        rho_tree (pytree of jax.numpy.ndarray): Density field for all components.
-
-        u_tree (pytree of jax.numpy.ndarray): Velocity field for all components.
-
-        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+        rho_tree : pytree of jax.Array
+            Component density fields.
+        u_tree : pytree of jax.Array
+            Component velocity fields.
+        T : jax.Array or None, optional
+            Temperature field required by a thermal EOS.
 
         Returns
         -------
-        (pytree of jax.numpy.ndarray): Real-space delta_feq for all components.
+        pytree of jax.Array
+            Population-space ``feq(rho, u + F / rho) - feq(rho, u)``.
         """
         return self._force_delta_feq(rho_tree, u_tree, self.compute_force(rho_tree, T=T))
 
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, m_tree, meq_tree, rho_tree, u_tree, T=None):
         """
-        Modified version of the apply_force defined in LBMBase to account for modified force.
+        Apply the exact-difference force in moment space.
 
-        Adds the force contribution using the exact-difference method (Kupershtokh): the compact real-space
-        delta_feq (see _compute_force_delta_feq) transformed into moment space with M. Since M is linear,
-        dot(delta_feq, M) == dot(feq_force, M) - dot(feq(rho, u), M), so this is an exact substitute for
-        separately building feq_force and meq_force. Provided for callers using the unfused, moment-space
-        collision path; collision() itself adds delta_feq directly in real space instead.
+        meq_tree is retained for compatibility with the base collision interface.
 
         Parameters
         ----------
-        m_tree (pytree of jax.numpy.ndarray): Post-collision distribution function.
-
-        meq_tree (pytree of jax.numpy.ndarray): Equilibrium distribution function. Unused - kept for interface
-            compatibility with existing callers, since the compact difference formula only needs rho, u and F.
-
-        rho_tree (pytree of jax.numpy.ndarray): Density field for all components.
-
-        u_tree (pytree of jax.numpy.ndarray): Velocity field for all components.
-
-        T (jax.numpy.ndarray, optional): Temperature field, required when the EOS is thermal.
+        m_tree : pytree of jax.Array
+            Post-collision moments for each component.
+        meq_tree : pytree of jax.Array
+            Equilibrium moments; unused but required by the collision interface.
+        rho_tree : pytree of jax.Array
+            Component density fields.
+        u_tree : pytree of jax.Array
+            Component velocity fields.
+        T : jax.Array or None, optional
+            Temperature field required by a thermal EOS.
 
         Returns
         -------
-        f_postcollision_tree (pytree of jax.numpy.ndarray): Post-collision distribution functions with the force applied.
+        pytree of jax.Array
+            Post-collision moments with the force contribution applied.
         """
         delta_feq_tree = self._compute_force_delta_feq(rho_tree, u_tree, T=T)
         delta_meq_tree = tree_map(lambda delta_feq, M: jnp.dot(delta_feq, M), delta_feq_tree, self.M)
@@ -3079,7 +3081,7 @@ class MultiphaseMRT(Multiphase):
 
     @partial(jit, static_argnums=(0,))
     def _collision_fast(self, fin_tree, T=None):
-        """Fused default-force MRT kernel for configurations without surface-tension adjustment."""
+        """Run the zero-kappa default MRT kernel, with optional virtual-density wetting."""
         fin_tree = tree_map(self.precision_policy.cast_to_compute, fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
 
@@ -3128,31 +3130,24 @@ class MultiphaseMRT(Multiphase):
         return tree_map(self.precision_policy.cast_to_output, fout_tree)
 
     def collision(self, fin_tree, T=None):
-        """Dispatch to the specialized fused kernel when the configured model supports it."""
+        """Apply the MRT collision and exact-difference force.
+
+        Uses the optimized kernel for the default equilibrium and force model with
+        zero ``kappa`` and either no wetting or improved virtual-density wetting;
+        otherwise uses the general kernel. Both fuse relaxation as
+        ``f - (f - feq) @ (M @ S @ M_inv) + delta_feq``.
+        """
         if self._uses_fast_mrt_collision:
             return self._collision_fast(fin_tree, T=T)
         return self._collision_general(fin_tree, T=T)
 
     @partial(jit, static_argnums=(0,))
     def _collision_general(self, fin_tree, T=None):
-        """
-        MRT collision step for lattice, using a symbolic (sparse-coefficient) fused collision matrix instead of
-        three separate moment-space matrix multiplies. The optional temperature field T is forwarded to the
-        pressure and force computations for thermal EOS.
+        """Run fused MRT collision with custom-model and surface-tension support.
 
-        Notes
-        -----
-        The unfused collision is m = f @ M; mout = m - (m - meq) @ S + delta_meq + C; fout = mout @ M_inv, with
-        delta_meq = dot(delta_feq, M) (see apply_force) and C the surface-tension adjustment (see
-        adjust_surface_tension). Substituting and using M @ M_inv = I:
-
-            fout = f - (f - feq) @ (M @ S @ M_inv) + delta_feq + C @ M_inv
-
-        collision_matrix = M @ S @ M_inv is built once in __init__; collision_terms holds its nonzero entries as
-        static Python tuples per output direction, so the (f - feq) @ collision_matrix contraction is unrolled
-        into an explicit sum over only the nonzero terms while tracing, instead of a dense matrix multiply.
-        C @ M_inv is skipped entirely when every component's kappa is zero (see __init__), since C is then
-        identically zero.
+        The sparse coefficients represent ``M @ S @ M_inv``. Force is added in
+        population space, while a nonzero surface correction is transformed by
+        ``M_inv``.
         """
         fin_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), fin_tree)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)

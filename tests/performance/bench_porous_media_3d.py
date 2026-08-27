@@ -1,8 +1,7 @@
-"""A/B performance benchmark for the optimizations in performance_optimization.md.
+"""Benchmark single-component MRT flow through a reproducible porous medium.
 
-Reproduces the physics setup of porous_media_evaporation_3D_mrt_low_memory.py (single-component MultiphaseMRT,
-same collision matrix, EOS, relaxation values and wetting parameters) on a smaller, reproducible 64^3 randomly
-generated porous medium, so the same script can be re-run before/after each optimization lands and compared.
+The setup uses the porous-media collision matrix, EOS, relaxation values, and
+wetting parameters on a configurable synthetic geometry.
 
 Run directly for A/B numbers (requires a GPU):
     python tests/performance/bench_porous_media_3d.py [--nx 64] [--steps 200]
@@ -70,8 +69,7 @@ def _mrt_matrix_d3q19():
 
 
 def _random_porous_mask(nx, ny, nz, seed, solid_fraction=0.35):
-    """Reproducible random porous medium: independent per-voxel noise, blurred and thresholded so solid
-    forms connected blobs rather than isolated single voxels."""
+    """Generate a reproducible porous mask with connected solid regions."""
     rng = np.random.default_rng(seed)
     noise = rng.random((nx, ny, nz))
     # Cheap separable box blur (3 passes) instead of a scipy dependency, to correlate neighboring voxels.
@@ -173,12 +171,10 @@ def run_benchmark(
     wetting_formulation="improved_virtual_density",
     save_arrays=True,
 ):
-    """
-    sample_memory (bool): When True, block and read device.memory_stats()['bytes_in_use'] after every step
-    instead of only before/after the loop, to see the live allocator footprint fluctuate step to step (the
-    cudamallocasync pool grows/shrinks as per-step temporaries are allocated and freed). This forces a device
-    sync every step, so elapsed/MLUPS from a sample_memory=True run is conservative relative to a normal run -
-    it is a memory-fluctuation diagnostic, not the throughput number.
+    """Measure throughput and optionally sample live device memory each step.
+
+    Per-step memory sampling synchronizes the device, so that run's MLUPS is not
+    representative of normal throughput.
     """
     require_gpu()
     sim = build_simulation(nx, ny, nz, seed, wetting_formulation)

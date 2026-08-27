@@ -1,6 +1,4 @@
-"""Verify Multiphase.compute_average_density (scalar mask + cached denominator) against an independent
-G_ff-weighted neighbor-average reference computed with plain (periodic) numpy rolls.
-"""
+"""Verify wetting-density averaging against a periodic NumPy reference."""
 
 import jax
 import jax.numpy as jnp
@@ -26,8 +24,7 @@ def _random_solid_mask(domain, fraction=0.08, seed=SEED):
 
 
 def _reference_average_density(rho, mask, lattice):
-    """Independent G_ff-weighted neighbor average, using plain periodic numpy rolls (matches scalar_neighbor_sum_m
-    exactly when n_devices == 1, since the x-halo ppermute exchange degenerates to a periodic self-roll)."""
+    """Compute the weighted fluid-neighbor average with periodic rolls."""
     c = np.asarray(lattice.c).T
     weights = np.zeros(c.shape[0])
     norms = np.linalg.norm(c, axis=1)
