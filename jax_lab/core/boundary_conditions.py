@@ -832,7 +832,10 @@ class ZouHe(BoundaryCondition):
         bindex = np.arange(nbd)[:, None]
         fbd = fpop[self.indices]
         fknown = fpop[self.indices][bindex, self.iknown] + feq[bindex, self.imissing] - feq[bindex, self.iknown]
-        fbd = fbd.at[bindex, self.imissing].set(fknown)
+        # feq may be at compute precision while fbd (from fpop, i.e. fout) is at output precision (e.g. "f32/f16"):
+        # cast explicitly instead of relying on an implicit narrowing cast in .set(), which JAX warns will become
+        # an error in a future release.
+        fbd = fbd.at[bindex, self.imissing].set(fknown.astype(fbd.dtype))
         return fbd
 
     @partial(jit, static_argnums=(0,))
@@ -940,7 +943,10 @@ class Regularized(ZouHe):
         fpop1 = 9.0 / 2.0 * self.lattice.w[None, :] * QiPi1
         fpop_regularized = feq + fpop1
 
-        return fpop_regularized
+        # feq/fpop1 are at compute precision while fpop (from bounceback_nonequilibrium, i.e. fout) is at output
+        # precision (e.g. "f32/f16"): cast explicitly instead of relying on an implicit narrowing cast in the
+        # caller's .set(), which JAX warns will become an error in a future release.
+        return fpop_regularized.astype(fpop.dtype)
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, _):
@@ -1355,7 +1361,9 @@ def _zouhe_bounceback_nonequilibrium(fpop, feq, imissing, iknown):
     """Unknown populations via bounce-back of non-equilibrium populations, for a per-node gathered fpop block."""
     bindex = jnp.arange(fpop.shape[0])[:, None]
     fknown = fpop[bindex, iknown] + feq[bindex, imissing] - feq[bindex, iknown]
-    return fpop.at[bindex, imissing].set(fknown)
+    # feq may be at compute precision while fpop is at output precision (e.g. "f32/f16"): cast explicitly instead
+    # of relying on an implicit narrowing cast in .set(), which JAX warns will become an error in a future release.
+    return fpop.at[bindex, imissing].set(fknown.astype(fpop.dtype))
 
 
 def _regularize_fpop(fpop, feq, w, cc, dim):
@@ -1364,7 +1372,10 @@ def _regularize_fpop(fpop, feq, w, cc, dim):
     PiNeq = jnp.dot(f_neq, cc)
     QiPi1 = jnp.dot(PiNeq, Qi)
     fpop1 = 9.0 / 2.0 * w[None, :] * QiPi1
-    return feq + fpop1
+    # feq/fpop1 are at compute precision while fpop (from _zouhe_bounceback_nonequilibrium, i.e. fout) is at
+    # output precision (e.g. "f32/f16"): cast explicitly instead of relying on an implicit narrowing cast in the
+    # caller's .set(), which JAX warns will become an error in a future release.
+    return (feq + fpop1).astype(fpop.dtype)
 
 
 def _zouhe_velocity_math(fpop, prescribed, normals, imiddle_mask, iknown_mask, imissing, iknown, w, c, cc, dim):
