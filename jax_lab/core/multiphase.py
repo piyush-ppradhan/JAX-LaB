@@ -2823,6 +2823,7 @@ class MultiphaseBGK(Multiphase):
 class MultiphaseMRT(Multiphase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._uses_default_mrt_equilibrium = type(self).equilibrium is Multiphase.equilibrium
         self.kappa = kwargs.get("kappa")
         self.s_rho = kwargs.get("s_rho")
         self.s_e = kwargs.get("s_e")
@@ -2897,13 +2898,14 @@ class MultiphaseMRT(Multiphase):
         # nonzero entries - see collision() and its module-level References for the fusion identity.
         self.collision_matrix = tree_map(lambda M, S, M_inv: jnp.dot(jnp.dot(M, S), M_inv), self.M, self.S, self.M_inv)
         self.collision_terms = []
+        coefficient_dtype = np.float64 if self.precision_policy.compute_dtype == jnp.float64 else np.float32
         for collision_matrix in self.collision_matrix:
             matrix = np.asarray(collision_matrix)
             columns = []
             for output_direction in range(self.lattice.q):
                 columns.append(
                     tuple(
-                        (input_direction, np.float32(matrix[input_direction, output_direction]))
+                        (input_direction, coefficient_dtype(matrix[input_direction, output_direction]))
                         for input_direction in range(self.lattice.q)
                         if not np.isclose(matrix[input_direction, output_direction], 0.0, atol=1e-7)
                     )
@@ -2914,6 +2916,12 @@ class MultiphaseMRT(Multiphase):
         # it entirely in that case, rather than multiplying by a provably-zero array every timestep.
         self._surface_tension_components = tuple(float(kappa) != 0.0 for kappa in self.kappa)
         self._has_surface_tension = any(self._surface_tension_components)
+        self._uses_fast_mrt_collision = (
+            self._uses_default_mrt_equilibrium
+            and self._uses_default_compute_force
+            and not self._has_surface_tension
+            and self.wetting_formulation in (None, "improved_virtual_density")
+        )
         self.scalar_surface_stencil = None
         self.surface_moment_center = None
         if self._has_surface_tension and isinstance(self.lattice, (LatticeD2Q9, LatticeD3Q19)):
@@ -3070,7 +3078,63 @@ class MultiphaseMRT(Multiphase):
         return tree_map(lambda m, delta_meq: m + delta_meq, m_tree, delta_meq_tree)
 
     @partial(jit, static_argnums=(0,))
+    def _collision_fast(self, fin_tree, T=None):
+        """Fused default-force MRT kernel for configurations without surface-tension adjustment."""
+        fin_tree = tree_map(self.precision_policy.cast_to_compute, fin_tree)
+        rho_tree, u_tree = self.update_macroscopic(fin_tree)
+
+        force_rho_tree = self.apply_contact_angle(rho_tree)
+        psi_tree, U_tree = self.compute_potential(force_rho_tree, T=T)
+        F_tree = self.compute_fluid_fluid_force(psi_tree, U_tree)
+        if self.body_force is not None:
+            F_tree = tree_map(lambda force, rho: force + self.body_force * rho, F_tree, force_rho_tree)
+
+        c = jnp.asarray(self.c, dtype=self.precision_policy.compute_dtype)
+        cu_tree = tree_map(lambda u: 3.0 * jnp.dot(u, c), u_tree)
+        usqr_tree = tree_map(lambda u: 1.5 * jnp.sum(jnp.square(u), axis=-1, keepdims=True), u_tree)
+        feq_tree = tree_map(
+            lambda rho, cu, usqr: rho * self.w * (1.0 + cu * (1.0 + 0.5 * cu) - usqr),
+            rho_tree,
+            cu_tree,
+            usqr_tree,
+        )
+
+        du_tree = tree_map(lambda force, rho: force / rho, F_tree, rho_tree)
+        dcu_tree = tree_map(lambda du: 3.0 * jnp.dot(du, c), du_tree)
+        delta_usqr_tree = tree_map(
+            lambda u, du: 1.5 * (2.0 * jnp.sum(u * du, axis=-1, keepdims=True) + jnp.sum(jnp.square(du), axis=-1, keepdims=True)),
+            u_tree,
+            du_tree,
+        )
+        delta_feq_tree = tree_map(
+            lambda rho, cu, dcu, delta_usqr: rho * self.w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr),
+            rho_tree,
+            cu_tree,
+            dcu_tree,
+            delta_usqr_tree,
+        )
+
+        fout_tree = []
+        for f, feq, delta_feq, columns in zip(fin_tree, feq_tree, delta_feq_tree, self.collision_terms, strict=True):
+            difference = f - feq
+            outputs = []
+            for output_direction, terms in enumerate(columns):
+                relaxed = sum(difference[..., input_direction] * coefficient for input_direction, coefficient in terms)
+                outputs.append(f[..., output_direction] - relaxed + delta_feq[..., output_direction])
+            fout_tree.append(jnp.stack(outputs, axis=-1))
+
+        rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
+        fout_tree = tree_map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
+        return tree_map(self.precision_policy.cast_to_output, fout_tree)
+
     def collision(self, fin_tree, T=None):
+        """Dispatch to the specialized fused kernel when the configured model supports it."""
+        if self._uses_fast_mrt_collision:
+            return self._collision_fast(fin_tree, T=T)
+        return self._collision_general(fin_tree, T=T)
+
+    @partial(jit, static_argnums=(0,))
+    def _collision_general(self, fin_tree, T=None):
         """
         MRT collision step for lattice, using a symbolic (sparse-coefficient) fused collision matrix instead of
         three separate moment-space matrix multiplies. The optional temperature field T is forwarded to the
@@ -3126,8 +3190,8 @@ class MultiphaseMRT(Multiphase):
                 )
             ]
 
-        if self.wetting_formulation == "geometric" and self.dim == 3:
-            # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
+        if self.wetting_formulation == "geometric":
+            # Preserve the density moment after the geometric wetting update by applying any roundoff-level mismatch to the rest population.
             rho_out_tree = tree_map(lambda fout: jnp.sum(fout, axis=-1, keepdims=True), fout_tree)
             fout_tree = tree_map(lambda fout, rho, rho_out: fout.at[..., 0].add((rho - rho_out)[..., 0]), fout_tree, rho_tree, rho_out_tree)
         return tree_map(lambda fout: self.precision_policy.cast_to_output(fout), fout_tree)

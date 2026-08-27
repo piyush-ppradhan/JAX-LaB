@@ -5,9 +5,9 @@ is initialized with smooth profile with specified interface width. Boundary cond
 
 import os
 import subprocess
+
 import jax.numpy as jnp
 import numpy as np
-from jax import config
 from jax.tree import map as tree_map
 
 from jax_lab.core.lattice import LatticeD3Q19
