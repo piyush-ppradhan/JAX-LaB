@@ -60,13 +60,13 @@ class Multiphase(LBMBase):
 
     A (numpy.ndarray): Weighting factor for combining the Shan-Chen and Zhang-Chen forces.
 
-    g_kkprime (numpy.ndarray): Symmetric component-interaction matrix with shape ``(n_components, n_components)``.
+    g_kkprime (numpy.ndarray): Symmetric component-interaction matrix with shape (n_components, n_components).
 
-    wetting_formulation (str or None, optional): Contact-angle scheme. Select ``"geometric"`` or
-    ``"improved_virtual_density"`` when a boundary condition defines ``theta``. Defaults to ``None``.
+    wetting_formulation (str or None, optional): Contact-angle scheme. Select "geometric" or
+    "improved_virtual_density" when a boundary condition defines theta. Defaults to None.
 
-    geometric_preprocessing_backend (str, optional): ``"auto"`` uses GPU preprocessing when available, ``"gpu"``
-        requires it, and ``"cpu"`` keeps the NumPy implementation. Used only by geometric wetting. Defaults to ``"auto"``.
+    geometric_preprocessing_backend (str, optional): "auto" uses GPU preprocessing when available, "gpu"
+        requires it, and "cpu" keeps the NumPy implementation. Used only by geometric wetting. Defaults to "auto".
 
     geometric_preprocessing_batch_size (int, optional): Rays processed per GPU at once. Used only by geometric
         wetting. Defaults to 65536.

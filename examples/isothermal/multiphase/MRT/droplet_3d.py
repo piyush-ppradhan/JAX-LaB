@@ -185,7 +185,7 @@ if __name__ == "__main__":
     kwargs = {"a": a, "b": b, "R": R, "T": T}
     eos = VanderWaals(**kwargs)
 
-    precision = "f32/f32"
+    precision = "f32/f16"
     kwargs = {
         "n_components": 1,
         "lattice": LatticeD3Q19(precision),
