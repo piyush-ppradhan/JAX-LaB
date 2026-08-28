@@ -2110,6 +2110,7 @@ class Multiphase(LBMBase):
         rho_tree (pytree of jax.numpy.ndarray): Density field.
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
         """
+        f_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), f_tree)
         rho_tree = tree_map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
         c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
         u_tree = tree_map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)  # Component velocity

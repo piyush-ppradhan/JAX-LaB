@@ -1408,6 +1408,7 @@ class LBMBase(object):
 
         u (jax.numpy.ndarray): Computed velocity.
         """
+        f = self.precision_policy.cast_to_compute(f)
         rho = jnp.sum(f, axis=-1, keepdims=True)
         c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
         u = jnp.dot(f, c) / rho
