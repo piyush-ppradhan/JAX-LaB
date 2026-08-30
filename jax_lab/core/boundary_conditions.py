@@ -1009,18 +1009,20 @@ class ExtrapolationOutflow(BoundaryCondition):
 
     def configure(self, boundary_mask):
         """
-        Configure the boundary condition by finding neighbouring voxel indices.
+        Configure one inward fluid neighbour for every boundary node.
 
         Parameters
         ----------
         boundary_mask (np.ndarray): The grid mask for the boundary voxels.
         """
-        hasFluidNeighbour = ~boundary_mask[:, self.lattice.opp_indices]
         idx = np.array(self.indices).T
-        idx_trg = []
-        for i in range(self.lattice.q):
-            idx_trg.append(idx[hasFluidNeighbour[:, i], :] + self.lattice.c[:, i])
-        indices_nbr = np.unique(np.vstack(idx_trg), axis=0)
+        has_fluid_neighbour = ~boundary_mask[:, self.lattice.opp_indices]
+        if not np.all(np.any(has_fluid_neighbour, axis=1)):
+            raise ValueError("ExtrapolationOutflow requires at least one fluid neighbour per boundary node.")
+
+        # Preserve one-to-one correspondence between boundary and neighbour nodes.
+        direction = np.argmax(has_fluid_neighbour, axis=1)
+        indices_nbr = idx + self.lattice.c[:, direction].T
         self.indices_nbr = tuple(indices_nbr.T)
 
         return

@@ -179,6 +179,15 @@ class VanderWaals(EOS):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+    @partial(jit, static_argnums=(0, 2), inline=True)
+    def pressure_component(self, rho, component_index):
+        """Evaluate one component's isothermal pressure."""
+        a = float(self.a[component_index])
+        b = float(self.b[component_index])
+        R = float(self.R[component_index])
+        T = float(self.T)
+        return (rho * R * T) / (1.0 - b * rho) - a * rho**2
+
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS(self, rho_tree):
         eos = lambda a, b, R, rho: (rho * R * self.T) / (1.0 - b * rho) - a * rho**2
@@ -218,6 +227,15 @@ class RedlichKwong(EOS):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    @partial(jit, static_argnums=(0, 2), inline=True)
+    def pressure_component(self, rho, component_index):
+        """Evaluate one component's isothermal pressure."""
+        a = float(self.a[component_index])
+        b = float(self.b[component_index])
+        R = float(self.R[component_index])
+        T = float(self.T)
+        return (rho * R * T) / (1.0 - b * rho) - (a * rho**2) / (jnp.sqrt(T) * (1.0 + b * rho))
 
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS(self, rho_tree):
@@ -263,6 +281,16 @@ class RedlichKwongSoave(EOS):
         self.rks_omega = kwargs.get("RKS_omega")
         self.Tc_tree = tree_map(lambda a, b, R: (a / b) * (0.08664 / 0.42784) / R, self.a, self.b, self.R)
         self.set_alpha()
+
+    @partial(jit, static_argnums=(0, 2), inline=True)
+    def pressure_component(self, rho, component_index):
+        """Evaluate one component's isothermal pressure."""
+        a = float(self.a[component_index])
+        b = float(self.b[component_index])
+        R = float(self.R[component_index])
+        T = float(self.T)
+        alpha = float(self.alpha[component_index])
+        return (rho * R * T) / (1.0 - b * rho) - (a * alpha * rho**2) / (1.0 + b * rho)
 
     @property
     def rks_omega(self):
@@ -338,6 +366,16 @@ class PengRobinson(EOS):
         self.pr_omega = kwargs.get("pr_omega")
         self.Tc_tree = tree_map(lambda a, b, R: (a / b) * (0.0778 / 0.45724) / R, self.a, self.b, self.R)
         self.set_alpha()
+
+    @partial(jit, static_argnums=(0, 2), inline=True)
+    def pressure_component(self, rho, component_index):
+        """Evaluate one component's isothermal pressure."""
+        a = float(self.a[component_index])
+        b = float(self.b[component_index])
+        R = float(self.R[component_index])
+        T = float(self.T)
+        alpha = float(self.alpha[component_index])
+        return (rho * R * T) / (1.0 - b * rho) - (a * alpha * rho**2) / (1.0 + 2.0 * b * rho - b**2 * rho**2)
 
     @property
     def pr_omega(self):
@@ -415,6 +453,16 @@ class CarnahanStarling(EOS):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    @partial(jit, static_argnums=(0, 2), inline=True)
+    def pressure_component(self, rho, component_index):
+        """Evaluate one component's isothermal pressure."""
+        a = float(self.a[component_index])
+        b = float(self.b[component_index])
+        R = float(self.R[component_index])
+        T = float(self.T)
+        x = 0.25 * b * rho
+        return rho * R * T * (1.0 + x + x**2 - x**3) / ((1.0 - x) ** 3) - a * rho**2
 
     @partial(jit, static_argnums=(0,), inline=True)
     def EOS(self, rho_tree):

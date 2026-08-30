@@ -130,6 +130,12 @@ Computations use *pytrees* to **model any number of components**, each with its 
 - **Dirichlet:** Prescribes temperature at the boundary.
 - **Neumann:** Prescribes the normal temperature gradient.
 
+### Experimental Pallas backend
+- `jax_lab.experimental` provides GPU-optimized, structure-of-arrays (SoA) Pallas kernels for single- and multiphase LBM. 
+- It supports multiple lattices, precision policies, boundary conditions, and multi-GPU execution. 
+- The API is experimental and requires SoA-compatible boundary conditions.
+- ~3x performance of base implementation, ~0.5x memory footprint.
+
 ## Accompanying Paper
 
 The accompanying paper, published in Journal of Advances in Modeling Earth Systems (JAMES), is available [here](https://doi.org/10.1029/2025MS005313).
