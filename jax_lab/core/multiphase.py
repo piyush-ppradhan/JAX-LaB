@@ -2580,8 +2580,6 @@ class Multiphase(LBMBase):
             #     # macroscopic_velocity -> compute_force -> apply_contact_angle scatters into rho at its own dtype
             #     # using values derived from G_ff (permanently fixed at compute precision), so under mixed
             #     # precision (storage narrower than compute) that scatter's source and target dtypes mismatch.
-            #     # Cast to compute precision first, matching the convention collision() already uses.
-            #     rho_prev_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_prev_tree)
             #     u_prev_tree = self.macroscopic_velocity(f_tree, rho_prev_tree)
             #     rho_prev_tree = tree_map(
             #         lambda rho_prev: downsample_field(rho_prev, self.downsampling_factor),
@@ -2619,8 +2617,6 @@ class Multiphase(LBMBase):
                 # Save the simulation data
                 logger.info(f"Saving data at timestep {timestep}/{t_max}")
                 rho_tree, _ = self.update_macroscopic(f_tree)
-                # # See the cast_to_compute comment on rho_prev_tree above: same fix, same reason.
-                rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
                 u_tree = self.macroscopic_velocity(f_tree, rho_tree)
                 psi_tree, _ = self.compute_potential(rho_tree)
                 p_tree = self.compute_pressure(rho_tree, psi_tree)
@@ -2971,6 +2967,20 @@ class MultiphaseMRT(Multiphase):
 
     @partial(jit, static_argnums=(0,))
     def adjust_surface_tension(self, psi_tree):
+        """
+        Adjust surface tension in multiphase MRT model. It does not effect the coexistence densities. Assumes orthogonal collision
+        matrix (see the pool boiling 3D example) instead of raw-moments (see the droplet 3D example).
+
+        Parameters
+        ----------
+        psi_tree: pytree of jax.numpy.ndarray
+            Square-root form pseudopotential field.
+
+        Returns
+        -------
+        pytree of jax.numpy.ndarray
+            Surface tension adjustment field.
+        """
         if not isinstance(self.lattice, (LatticeD2Q9, LatticeD3Q19)):
             raise NotImplementedError("MRT model with D3Q27 model has not been implemented")
 

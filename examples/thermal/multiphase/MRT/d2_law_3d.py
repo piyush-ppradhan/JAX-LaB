@@ -6,7 +6,7 @@ a radius-25 droplet at 0.86 Tc evaporates in a 100^3 domain whose far-field temp
 Peng-Robinson EOS, while temperature is advanced by the hybrid finite-difference RK4 solver.
 
 The vapor density is adjusted across the initial thermal interface to keep the Peng-Robinson pressure equal to the saturation pressure. This avoids a non-physical
-pressure impulse when temperature coupling is enabled. Full double precision is required to conserve mass at this density ratio. The default conductivity is increased
+pressure impulse when temperature coupling is enabled. The default conductivity is increased
 to K = 2 with automatic RK substepping so the benchmark completes faster than the published K = 1/3 reference case.
 """
 
