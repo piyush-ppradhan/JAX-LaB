@@ -22,7 +22,7 @@ from jax.sharding import NamedSharding, PartitionSpec
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from ..base import LBMBase
+from ..base import Components, LBMBase, _lattice_dot, _lattice_sum, component_mode, matvec_components, stack_components
 
 # User-defined libraries
 from ..boundary_conditions import (
@@ -46,29 +46,6 @@ logger = logging.getLogger(__name__)
 
 # This significantly reduces the performance. Use if necessary
 # jax.config.update("jax_debug_nans", True)
-
-
-def _lattice_dot(direction, vector):
-    """c_i . v for an integer lattice direction and per-axis fields, as additions only (0.0 for the rest direction)."""
-    total = None
-    for component, value in zip(direction, vector, strict=True):
-        if component == 0:
-            continue
-        term = value * float(component) if abs(component) != 1 else (value if component > 0 else -value)
-        total = term if total is None else total + term
-    return 0.0 if total is None else total
-
-
-def _lattice_sum(directions, channels, axis):
-    """sum_i c_i[axis] f_i over per-direction fields."""
-    total = None
-    for direction, value in zip(directions, channels, strict=True):
-        component = direction[axis]
-        if component == 0:
-            continue
-        term = value * float(component) if abs(component) != 1 else (value if component > 0 else -value)
-        total = term if total is None else total + term
-    return total
 
 
 class Multiphase(LBMBase):
@@ -184,6 +161,10 @@ class Multiphase(LBMBase):
                     check_vma=False,
                 )
             )
+        # Global (min, max) of a density field with one cross-device reduction instead of two (see _global_min_max_m)
+        self.global_min_max = None
+        if uses_improved_wetting and self.n_devices > 1:
+            self.global_min_max = jit(shard_map(self._global_min_max_m, mesh=self.mesh, in_specs=scalar_spec, out_specs=P(), check_vma=False))
         self.local_geometric_wetting = None
         self._uses_local_neq_bc = self.n_devices > 1 and any(type(bc) in NEQ_BC_TYPES for component_bcs in self.BCs for bc in component_bcs)
         if self._uses_local_neq_bc:
@@ -810,10 +791,23 @@ class Multiphase(LBMBase):
         )
 
     def _build_geometric_gpu_ray_kernel(self, ray_count):
-        """Build a Pallas kernel that traces one independent geometric ray per GPU program."""
-        from jax.experimental import pallas as pl
-        from jax.experimental.pallas import triton as pltriton
+        """
+        Build the device ray tracer for geometric-wetting preprocessing: for each ray (a wall node and a direction), march
+        through the lattice-plane crossings and return the first crossing point whose interpolation stencil touches only
+        fluid nodes, and whether one was found.
 
+        Plain JAX: one ray is a lax.while_loop, vectorized over the rays with vmap (all rays advance together until the last
+        one finishes). The arithmetic is the same float64 sequence as the CPU path (_first_fluid_mesh_intersection).
+
+        Parameters
+        ----------
+        ray_count (int): Number of rays per call (the batch size); the returned function expects inputs of this length.
+
+        Returns
+        -------
+        (callable): fn(indices (ray_count, 3) int32, directions (ray_count, 3) float64, solid (nx, ny, nz) bool) ->
+            (points (ray_count, 3) float64, valid (ray_count,) bool).
+        """
         nx, ny, nz = self.nx, self.ny, self.nz
         max_steps = nx + ny + nz
         candidate_slots = self.dim * max_steps
@@ -827,10 +821,9 @@ class Multiphase(LBMBase):
             tie = jnp.where(even_lower, lower, upper)
             return jnp.where(fraction < 0.5, lower, jnp.where(fraction > 0.5, upper, tie)) / scale
 
-        def ray_kernel(indices_ref, directions_ref, solid_ref, points_ref, valid_ref):
-            ray = pl.program_id(0)
-            index = tuple(indices_ref[ray, axis] for axis in range(3))
-            direction = tuple(directions_ref[ray, axis] for axis in range(3))
+        def trace(index, direction, solid):
+            index = tuple(index[axis] for axis in range(3))
+            direction = tuple(direction[axis] for axis in range(3))
             absolute = tuple(jnp.abs(value) for value in direction)
             active = tuple(value > 1e-12 for value in absolute)
             first_t = jnp.minimum(
@@ -896,7 +889,7 @@ class Multiphase(LBMBase):
                         jnp.clip(coordinates[1], 0, ny - 1),
                         jnp.clip(coordinates[2], 0, nz - 1),
                     )
-                    fluid &= (weight <= 1e-12) | (in_bounds & ~solid_ref[safe])
+                    fluid &= (weight <= 1e-12) | (in_bounds & ~solid[safe])
                 return (
                     iteration + 1,
                     k0 + (t0 == value),
@@ -910,21 +903,9 @@ class Multiphase(LBMBase):
                 )
 
             result = jax.lax.while_loop(condition, body, (0, 1, 1, 1, *initial_point, False, False))
-            points_ref[ray, 0] = result[4]
-            points_ref[ray, 1] = result[5]
-            points_ref[ray, 2] = result[6]
-            valid_ref[ray] = result[7]
+            return jnp.stack(result[4:7]), result[7]
 
-        return pl.pallas_call(
-            ray_kernel,
-            out_shape=(
-                jax.ShapeDtypeStruct((ray_count, 3), jnp.float64),
-                jax.ShapeDtypeStruct((ray_count,), jnp.bool_),
-            ),
-            grid=(ray_count,),
-            compiler_params=pltriton.CompilerParams(num_warps=1),
-            name="geometric_fluid_intersections",
-        )
+        return jax.jit(jax.vmap(trace, in_axes=(0, 0, None)))
 
     def _first_fluid_mesh_intersection_gpu(self, indices, directions, solid_mask):
         """Trace 3D characteristic rays on every local GPU with bounded temporary device memory."""
@@ -1668,6 +1649,15 @@ class Multiphase(LBMBase):
         else:
             return feq_tree
 
+    def _global_min_max_m(self, rho):
+        """
+        Minimum and maximum of a sharded density field: the shard-local (-min, max) pair is combined across devices with a
+        single pmax, so the global min/max needs one collective instead of the two that jnp.min and jnp.max compile to.
+        Negation is exact, so the values equal jnp.min(rho) and jnp.max(rho).
+        """
+        extremes = jax.lax.pmax(jnp.stack([-jnp.min(rho), jnp.max(rho)]), "x")
+        return -extremes[0], extremes[1]
+
     def local_improved_wetting_m(self, rho, rho_ave, local_indices, local_theta, local_phi, local_delta_rho):
         """Apply improved-virtual-density wetting using local solid-node indices on each x shard."""
         indices = local_indices[0]
@@ -1955,8 +1945,11 @@ class Multiphase(LBMBase):
             rho_ave_tree = self.compute_average_density(rho_tree)
 
             def set_contact_angle(rho, rho_ave, BC, local_component_data):
-                rho_min = jnp.min(rho)
-                rho_max = jnp.max(rho)
+                if self.global_min_max is not None:
+                    rho_min, rho_max = self.global_min_max(rho)
+                else:
+                    rho_min = jnp.min(rho)
+                    rho_max = jnp.max(rho)
                 for bc_index, bc in enumerate(BC):
                     if isinstance(
                         bc, (BounceBackHalfway, BounceBack, BounceBackMoving, InterpolatedBounceBackBouzidi, InterpolatedBounceBackDifferentiable)
@@ -2568,9 +2561,9 @@ class Multiphase(LBMBase):
 
         f_collision_tree (pytree of jax.numpy.ndarray {Optional}): Post-collision distribution function.
         """
-        f_postcollision_tree = self.collision(f_poststreaming_tree, T=T)
+        f_postcollision_tree = self._direction_major_hint(self.collision(f_poststreaming_tree, T=T))
         f_postcollision_tree = self.apply_bc(f_postcollision_tree, f_poststreaming_tree, timestep, "PostCollision")
-        f_poststreaming_tree = tree_map(lambda f_postcollision: self.streaming(f_postcollision), f_postcollision_tree)
+        f_poststreaming_tree = self._direction_major_hint(tree_map(lambda f_postcollision: self.streaming(f_postcollision), f_postcollision_tree))
         f_poststreaming_tree = self.apply_bc(f_poststreaming_tree, f_postcollision_tree, timestep, "PostStreaming")
 
         if return_fpost:
@@ -2617,6 +2610,10 @@ class Multiphase(LBMBase):
                 if not (t_max > start_step):
                     raise ValueError(f"Simulation already exceeded maximum allowable steps (t_max  = {t_max}). Consider increasing t_max.")
 
+        # Inside the time loop the populations are held direction-major in device memory (see
+        # LBMBase._direction_major_step); they are moved back to the default layout wherever they leave the loop.
+        f_tree = self._to_direction_major(f_tree)
+        step = self._direction_major_step(f_tree, False)
         if self.compute_MLUPS:
             start = time.time()
 
@@ -2654,7 +2651,7 @@ class Multiphase(LBMBase):
             #     u_total_prev = process_allgather(u_total_prev)
 
             # Perform one time-step (collision, streaming, and boundary conditions)
-            f_tree, fstar_tree = self.step(f_tree, timestep)
+            f_tree, fstar_tree = step(f_tree, timestep)
 
             # Print the progress of the simulation
             if print_iter_flag:
@@ -2694,8 +2691,8 @@ class Multiphase(LBMBase):
                 # Save the data
                 self.handle_io_timestep(
                     timestep,
-                    f_tree,
-                    fstar_tree,
+                    self._to_default_layout(f_tree),
+                    self._to_default_layout(fstar_tree),
                     p_tree,
                     p_total,
                     u_tree,
@@ -2715,8 +2712,9 @@ class Multiphase(LBMBase):
                 logger.info(f"Saving checkpoint at timestep {timestep}/{t_max}")
                 state = {}
                 c_name = lambda i: f"component_{i}"
+                f_saved = self._to_default_layout(f_tree)
                 for i in range(self.n_components):
-                    state[c_name(i)] = f_tree[i]
+                    state[c_name(i)] = f_saved[i]
 
                 self.mngr.save(timestep, args=orb.args.StandardSave(state))
 
@@ -2761,7 +2759,7 @@ class Multiphase(LBMBase):
         self._output_writer.finish()
         if self.mngr is not None:
             self.mngr.wait_until_finished()
-        return f_tree
+        return self._to_default_layout(f_tree)
 
     def handle_io_timestep(
         self,
@@ -2848,6 +2846,54 @@ class MultiphaseBGK(Multiphase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+    # Direction-major populations in run() by default (with the per-direction collision: +68% in 3D, +4% in 2D;
+    # see LBMBase._direction_major_step)
+    _direction_major_dims = (2, 3)
+
+    def _uses_default_bgk_methods(self):
+        """Whether the macroscopic fields, equilibrium and forcing are the defaults (then the per-direction collision applies)."""
+        cls = type(self)
+        return cls.update_macroscopic is Multiphase.update_macroscopic and cls.equilibrium is Multiphase.equilibrium and cls.apply_force is Multiphase.apply_force
+
+    def _collision_components(self, fin_tree, T=None):
+        """
+        The BGK collision with exact-difference forcing evaluated per lattice direction, for the default macroscopic fields,
+        equilibrium and forcing (as in MultiphaseMRT.collision): fout_i = f_i + omega (feq_i - f_i) + delta_feq_i.
+
+        Every term is computed per direction with the lattice velocities as compile-time constants, so XLA fuses the moments,
+        equilibrium, forcing and relaxation into one kernel with one thread per node. The interaction force is computed in its
+        own kernel first (see MultiphaseMRT.collision). Same formulas as the array path; results can differ at roundoff level
+        (summation order of the moments).
+        """
+        c_host = np.asarray(self.lattice.c)
+        directions = tuple(tuple(int(v) for v in c_host[:, i]) for i in range(self.q))
+        weights = tuple(float(v) for v in np.asarray(self.lattice.w))
+        channels_tree = [[f[..., i] for i in range(self.q)] for f in fin_tree]
+        rho_scalar_tree = [sum(channels) for channels in channels_tree]
+        velocity_tree = [
+            [_lattice_sum(directions, channels, axis) / rho for axis in range(self.dim)]
+            for channels, rho in zip(channels_tree, rho_scalar_tree, strict=True)
+        ]
+        rho_tree = [rho[..., None] for rho in rho_scalar_tree]
+        F_tree = list(jax.lax.optimization_barrier(tuple(self.compute_force(rho_tree, T=T))))
+        fout_tree = []
+        for channels, rho, velocity, force, omega in zip(channels_tree, rho_scalar_tree, velocity_tree, F_tree, self.omega, strict=True):
+            du = [force[..., axis] / rho for axis in range(self.dim)]
+            usqr = 1.5 * sum(v * v for v in velocity)
+            delta_usqr = 1.5 * sum(2.0 * v * d + d * d for v, d in zip(velocity, du, strict=True))
+            outputs = []
+            for direction, w, f in zip(directions, weights, channels, strict=True):
+                cu = 3.0 * _lattice_dot(direction, velocity)
+                dcu = 3.0 * _lattice_dot(direction, du)
+                rho_w = rho * w
+                feq = rho_w * (1.0 + cu * (1.0 + 0.5 * cu) - usqr)
+                outputs.append(f + omega * (feq - f) + rho_w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr))
+            if self.wetting_formulation == "geometric" and self.dim == 3:
+                # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
+                outputs[0] = outputs[0] + (rho - sum(outputs))
+            fout_tree.append(self.stack_populations([self.precision_policy.cast_to_output(output) for output in outputs]))
+        return fout_tree
+
     @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
@@ -2858,6 +2904,8 @@ class MultiphaseBGK(Multiphase):
         The optional temperature field T is forwarded to the force computation for thermal EOS.
         """
         fin_tree = tree_map(lambda fin: self.precision_policy.cast_to_compute(fin), fin_tree)
+        if self._uses_default_bgk_methods():
+            return self._collision_components(fin_tree, T=T)
         rho_tree, u_tree = self.update_macroscopic(fin_tree)
         feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
         fneq_tree = tree_map(lambda feq, fin: feq - fin, feq_tree, fin_tree)
@@ -2878,6 +2926,9 @@ class MultiphaseMRT(Multiphase):
     equilibrium, compute_force or adjust_surface_tension methods, wetting schemes and the
     kappa surface-tension term are handled inside it (see collision()).
     """
+
+    # Direction-major populations in run() by default (2.2-4.4x faster in 3D, 4-9% in 2D; see LBMBase._direction_major_step)
+    _direction_major_dims = (2, 3)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -2957,20 +3008,8 @@ class MultiphaseMRT(Multiphase):
         self.collision_matrix = tree_map(lambda M, S, M_inv: jnp.dot(jnp.dot(M, S), M_inv), self.M, self.S, self.M_inv)
         self._lattice_directions = tuple(tuple(int(v) for v in np.asarray(self.lattice.c)[:, i]) for i in range(self.lattice.q))
         self._lattice_weights = tuple(float(v) for v in np.asarray(self.lattice.w))
-        self.collision_terms = []
-        coefficient_dtype = np.float64 if self.precision_policy.compute_dtype == jnp.float64 else np.float32
-        for collision_matrix in self.collision_matrix:
-            matrix = np.asarray(collision_matrix)
-            columns = []
-            for output_direction in range(self.lattice.q):
-                columns.append(
-                    tuple(
-                        (input_direction, coefficient_dtype(matrix[input_direction, output_direction]))
-                        for input_direction in range(self.lattice.q)
-                        if not np.isclose(matrix[input_direction, output_direction], 0.0, atol=1e-7)
-                    )
-                )
-            self.collision_terms.append(tuple(columns))
+        # Coefficients in the compute precision (see LBMBase.sparse_collision_terms)
+        self.collision_terms = [self.sparse_collision_terms(collision_matrix) for collision_matrix in self.collision_matrix]
         # Surface tension adjustment (adjust_surface_tension) is identically zero whenever every component's
         # kappa is zero - a static (non-traced) fact known here, so collision() can skip computing and adding
         # it entirely in that case, rather than multiplying by a provably-zero array every timestep.
@@ -3016,6 +3055,7 @@ class MultiphaseMRT(Multiphase):
         # C can populate, so the fast collision adds it per direction without a dense q x q product.
         surface_moments = (1, 2, 7, 8) if self.dim == 2 else (1, 9, 11, 13, 14, 15)
         self._surface_population_terms = []
+        coefficient_dtype = np.float64 if self.precision_policy.compute_dtype == jnp.float64 else np.float32
         for M_inv, has_surface_tension in zip(self.M_inv, self._surface_tension_components, strict=True):
             if not has_surface_tension:
                 self._surface_population_terms.append(None)
@@ -3279,6 +3319,10 @@ class MultiphaseMRT(Multiphase):
                 surface_psi_tree = psi_tree
         else:
             F_tree = self.compute_force(rho_tree, T=T)
+        # Compute the interaction force (the psi-gradient stencil) in its own kernel. Fused into the collision it pushes
+        # the kernel to the 255-register limit (spilling) on some shard shapes; split, the values are identical and
+        # e.g. 2-GPU droplet runs are 10-37% faster.
+        F_tree = list(jax.lax.optimization_barrier(tuple(F_tree)))
 
         # Surface-tension source in population space, per component: list of q fields, or None
         surface_tree = [None] * self.n_components
@@ -3333,8 +3377,8 @@ class MultiphaseMRT(Multiphase):
             if restore_mass:
                 # Restore the density lost to roundoff on the rest population, from the per-direction values (no re-read).
                 outputs[0] = outputs[0] + (rho - sum(outputs))
-            fout_tree.append(jnp.stack(outputs, axis=-1))
-        return tree_map(self.precision_policy.cast_to_output, fout_tree)
+            fout_tree.append(self.stack_populations([self.precision_policy.cast_to_output(output) for output in outputs]))
+        return fout_tree
 
 
 class MultiphaseCascade(Multiphase):
@@ -3500,14 +3544,14 @@ class MultiphaseCascade(Multiphase):
                 uy = u[..., 1]
                 usq = ux**2 + uy**2
                 udiff = ux**2 - uy**2
-                T = jnp.zeros_like(m)
-                T = T.at[..., 0].set(m[..., 0])
-                T = T.at[..., 1].set(-ux * m[..., 0] + m[..., 1])
-                T = T.at[..., 2].set(-uy * m[..., 0] + m[..., 2])
-                T = T.at[..., 3].set(usq * m[..., 0] - 2 * ux * m[..., 1] - 2 * uy * m[..., 2] + m[..., 3])
-                T = T.at[..., 4].set(udiff * m[..., 0] - 2 * ux * m[..., 1] + 2 * uy * m[..., 2] + m[..., 4])
-                T = T.at[..., 5].set(ux * uy * m[..., 0] - uy * m[..., 1] - ux * m[..., 2] + m[..., 5])
-                T = T.at[..., 6].set(
+                T = {}
+                T[0] = m[..., 0]
+                T[1] = -ux * m[..., 0] + m[..., 1]
+                T[2] = -uy * m[..., 0] + m[..., 2]
+                T[3] = usq * m[..., 0] - 2 * ux * m[..., 1] - 2 * uy * m[..., 2] + m[..., 3]
+                T[4] = udiff * m[..., 0] - 2 * ux * m[..., 1] + 2 * uy * m[..., 2] + m[..., 4]
+                T[5] = ux * uy * m[..., 0] - uy * m[..., 1] - ux * m[..., 2] + m[..., 5]
+                T[6] = (
                     -(ux**2) * uy * m[..., 0]
                     + 2 * ux * uy * m[..., 1]
                     + ux**2 * m[..., 2]
@@ -3516,7 +3560,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * ux * m[..., 5]
                     + m[..., 6]
                 )
-                T = T.at[..., 7].set(
+                T[7] = (
                     -(uy**2) * ux * m[..., 0]
                     + uy**2 * m[..., 1]
                     + 2 * ux * uy * m[..., 2]
@@ -3525,7 +3569,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * uy * m[..., 5]
                     + m[..., 7]
                 )
-                T = T.at[..., 8].set(
+                T[8] = (
                     (uy**2 * ux**2) * m[..., 0]
                     - 2 * ux * uy**2 * m[..., 1]
                     - 2 * uy * ux**2 * m[..., 2]
@@ -3536,6 +3580,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * ux * m[..., 7]
                     + m[..., 8]
                 )
+                T = stack_components(T, m)
                 return T
 
             return tree_map(lambda m, u: shift(m, u), m_tree, u_tree)
@@ -3546,36 +3591,24 @@ class MultiphaseCascade(Multiphase):
                 ux = u[..., 0]
                 uy = u[..., 1]
                 uz = u[..., 2]
-                T = jnp.zeros_like(m)
-                T = T.at[..., 0].set(m[..., 0])
-                T = T.at[..., 1].set(-ux * m[..., 0] + m[..., 1])
-                T = T.at[..., 2].set(-uy * m[..., 0] + m[..., 2])
-                T = T.at[..., 3].set(-uz * m[..., 0] + m[..., 3])
-                T = T.at[..., 4].set(ux * uy * m[..., 0] - uy * m[..., 1] - ux * m[..., 2] + m[..., 4])
-                T = T.at[..., 5].set(ux * uz * m[..., 0] - uz * m[..., 1] - ux * m[..., 3] + m[..., 5])
-                T = T.at[..., 6].set(uy * uz * m[..., 0] - uz * m[..., 2] - uy * m[..., 3] + m[..., 6])
-                T = T.at[..., 7].set((ux**2) * m[..., 0] - 2 * ux * m[..., 1] + m[..., 7])
-                T = T.at[..., 8].set((uy**2) * m[..., 0] - 2 * uy * m[..., 2] + m[..., 8])
-                T = T.at[..., 9].set((uz**2) * m[..., 0] - 2 * uz * m[..., 3] + m[..., 9])
-                T = T.at[..., 10].set(
-                    -ux * (uy**2) * m[..., 0] + (uy**2) * m[..., 1] + 2 * ux * uy * m[..., 2] - 2 * uy * m[..., 4] - ux * m[..., 8] + m[..., 10]
-                )
-                T = T.at[..., 11].set(
-                    -ux * (uz**2) * m[..., 0] + (uz**2) * m[..., 1] + 2 * ux * uz * m[..., 3] - 2 * uz * m[..., 5] - ux * m[..., 9] + m[..., 11]
-                )
-                T = T.at[..., 12].set(
-                    -(ux**2) * uy * m[..., 0] + 2 * ux * uy * m[..., 1] + (ux**2) * m[..., 2] - 2 * ux * m[..., 4] - uy * m[..., 7] + m[..., 12]
-                )
-                T = T.at[..., 13].set(
-                    -(ux**2) * uz * m[..., 0] + 2 * ux * uz * m[..., 1] + (ux**2) * m[..., 3] - 2 * ux * m[..., 5] - uz * m[..., 7] + m[..., 13]
-                )
-                T = T.at[..., 14].set(
-                    -uy * (uz**2) * m[..., 0] + (uz**2) * m[..., 2] + 2 * uy * uz * m[..., 3] - 2 * uz * m[..., 6] - uy * m[..., 9] + m[..., 14]
-                )
-                T = T.at[..., 15].set(
-                    -(uy**2) * uz * m[..., 0] + 2 * uy * uz * m[..., 2] + (uy**2) * m[..., 3] - 2 * uy * m[..., 6] - uz * m[..., 8] + m[..., 15]
-                )
-                T = T.at[..., 16].set(
+                T = {}
+                T[0] = m[..., 0]
+                T[1] = -ux * m[..., 0] + m[..., 1]
+                T[2] = -uy * m[..., 0] + m[..., 2]
+                T[3] = -uz * m[..., 0] + m[..., 3]
+                T[4] = ux * uy * m[..., 0] - uy * m[..., 1] - ux * m[..., 2] + m[..., 4]
+                T[5] = ux * uz * m[..., 0] - uz * m[..., 1] - ux * m[..., 3] + m[..., 5]
+                T[6] = uy * uz * m[..., 0] - uz * m[..., 2] - uy * m[..., 3] + m[..., 6]
+                T[7] = (ux**2) * m[..., 0] - 2 * ux * m[..., 1] + m[..., 7]
+                T[8] = (uy**2) * m[..., 0] - 2 * uy * m[..., 2] + m[..., 8]
+                T[9] = (uz**2) * m[..., 0] - 2 * uz * m[..., 3] + m[..., 9]
+                T[10] = -ux * (uy**2) * m[..., 0] + (uy**2) * m[..., 1] + 2 * ux * uy * m[..., 2] - 2 * uy * m[..., 4] - ux * m[..., 8] + m[..., 10]
+                T[11] = -ux * (uz**2) * m[..., 0] + (uz**2) * m[..., 1] + 2 * ux * uz * m[..., 3] - 2 * uz * m[..., 5] - ux * m[..., 9] + m[..., 11]
+                T[12] = -(ux**2) * uy * m[..., 0] + 2 * ux * uy * m[..., 1] + (ux**2) * m[..., 2] - 2 * ux * m[..., 4] - uy * m[..., 7] + m[..., 12]
+                T[13] = -(ux**2) * uz * m[..., 0] + 2 * ux * uz * m[..., 1] + (ux**2) * m[..., 3] - 2 * ux * m[..., 5] - uz * m[..., 7] + m[..., 13]
+                T[14] = -uy * (uz**2) * m[..., 0] + (uz**2) * m[..., 2] + 2 * uy * uz * m[..., 3] - 2 * uz * m[..., 6] - uy * m[..., 9] + m[..., 14]
+                T[15] = -(uy**2) * uz * m[..., 0] + 2 * uy * uz * m[..., 2] + (uy**2) * m[..., 3] - 2 * uy * m[..., 6] - uz * m[..., 8] + m[..., 15]
+                T[16] = (
                     (ux**2) * (uy**2) * m[..., 0]
                     - 2 * ux * (uy**2) * m[..., 1]
                     - 2 * uy * (ux**2) * m[..., 2]
@@ -3586,7 +3619,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * uy * m[..., 12]
                     + m[..., 16]
                 )
-                T = T.at[..., 17].set(
+                T[17] = (
                     (ux**2) * (uz**2) * m[..., 0]
                     - 2 * ux * (uz**2) * m[..., 1]
                     - 2 * uz * (ux**2) * m[..., 3]
@@ -3597,7 +3630,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * uz * m[..., 13]
                     + m[..., 17]
                 )
-                T = T.at[..., 18].set(
+                T[18] = (
                     (uy**2) * (uz**2) * m[..., 0]
                     - 2 * uy * (uz**2) * m[..., 2]
                     - 2 * uz * (uy**2) * m[..., 3]
@@ -3608,6 +3641,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * uz * m[..., 15]
                     + m[..., 18]
                 )
+                T = stack_components(T, m)
                 return T
 
             return tree_map(lambda m, u: shift(m, u), m_tree, u_tree)
@@ -3618,36 +3652,24 @@ class MultiphaseCascade(Multiphase):
                 ux = u[..., 0]
                 uy = u[..., 1]
                 uz = u[..., 2]
-                T = jnp.zeros_like(m)
-                T = T.at[..., 0].set(m[..., 0])
-                T = T.at[..., 1].set(m[..., 1] - m[..., 0] * ux)
-                T = T.at[..., 2].set(m[..., 2] - m[..., 0] * uy)
-                T = T.at[..., 3].set(m[..., 3] - m[..., 0] * uz)
-                T = T.at[..., 4].set(m[..., 4] - m[..., 2] * ux - m[..., 1] * uy + m[..., 0] * ux * uy)
-                T = T.at[..., 5].set(m[..., 5] - m[..., 3] * ux - m[..., 1] * uz + m[..., 0] * ux * uz)
-                T = T.at[..., 6].set(m[..., 6] - m[..., 3] * uy - m[..., 2] * uz + m[..., 0] * uy * uz)
-                T = T.at[..., 7].set(m[..., 0] * ux**2 - 2 * m[..., 1] * ux + m[..., 7])
-                T = T.at[..., 8].set(m[..., 0] * uy**2 - 2 * m[..., 2] * uy + m[..., 8])
-                T = T.at[..., 9].set(m[..., 0] * uz**2 - 2 * m[..., 3] * uz + m[..., 9])
-                T = T.at[..., 10].set(
-                    m[..., 10] - m[..., 8] * ux - 2 * m[..., 4] * uy + m[..., 1] * uy**2 - m[..., 0] * ux * uy**2 + 2 * m[..., 2] * ux * uy
-                )
-                T = T.at[..., 11].set(
-                    m[..., 11] - m[..., 9] * ux - 2 * m[..., 5] * uz + m[..., 1] * uz**2 - m[..., 0] * ux * uz**2 + 2 * m[..., 3] * ux * uz
-                )
-                T = T.at[..., 12].set(
-                    m[..., 12] - 2 * m[..., 4] * ux - m[..., 7] * uy + m[..., 2] * ux**2 - m[..., 0] * ux**2 * uy + 2 * m[..., 1] * ux * uy
-                )
-                T = T.at[..., 13].set(
-                    m[..., 13] - 2 * m[..., 5] * ux - m[..., 7] * uz + m[..., 3] * ux**2 - m[..., 0] * ux**2 * uz + 2 * m[..., 1] * ux * uz
-                )
-                T = T.at[..., 14].set(
-                    m[..., 14] - m[..., 9] * uy - 2 * m[..., 6] * uz + m[..., 2] * uz**2 - m[..., 0] * uy * uz**2 + 2 * m[..., 3] * uy * uz
-                )
-                T = T.at[..., 15].set(
-                    m[..., 15] - 2 * m[..., 6] * uy - m[..., 8] * uz + m[..., 3] * uy**2 - m[..., 0] * uy**2 * uz + 2 * m[..., 2] * uy * uz
-                )
-                T = T.at[..., 16].set(
+                T = {}
+                T[0] = m[..., 0]
+                T[1] = m[..., 1] - m[..., 0] * ux
+                T[2] = m[..., 2] - m[..., 0] * uy
+                T[3] = m[..., 3] - m[..., 0] * uz
+                T[4] = m[..., 4] - m[..., 2] * ux - m[..., 1] * uy + m[..., 0] * ux * uy
+                T[5] = m[..., 5] - m[..., 3] * ux - m[..., 1] * uz + m[..., 0] * ux * uz
+                T[6] = m[..., 6] - m[..., 3] * uy - m[..., 2] * uz + m[..., 0] * uy * uz
+                T[7] = m[..., 0] * ux**2 - 2 * m[..., 1] * ux + m[..., 7]
+                T[8] = m[..., 0] * uy**2 - 2 * m[..., 2] * uy + m[..., 8]
+                T[9] = m[..., 0] * uz**2 - 2 * m[..., 3] * uz + m[..., 9]
+                T[10] = m[..., 10] - m[..., 8] * ux - 2 * m[..., 4] * uy + m[..., 1] * uy**2 - m[..., 0] * ux * uy**2 + 2 * m[..., 2] * ux * uy
+                T[11] = m[..., 11] - m[..., 9] * ux - 2 * m[..., 5] * uz + m[..., 1] * uz**2 - m[..., 0] * ux * uz**2 + 2 * m[..., 3] * ux * uz
+                T[12] = m[..., 12] - 2 * m[..., 4] * ux - m[..., 7] * uy + m[..., 2] * ux**2 - m[..., 0] * ux**2 * uy + 2 * m[..., 1] * ux * uy
+                T[13] = m[..., 13] - 2 * m[..., 5] * ux - m[..., 7] * uz + m[..., 3] * ux**2 - m[..., 0] * ux**2 * uz + 2 * m[..., 1] * ux * uz
+                T[14] = m[..., 14] - m[..., 9] * uy - 2 * m[..., 6] * uz + m[..., 2] * uz**2 - m[..., 0] * uy * uz**2 + 2 * m[..., 3] * uy * uz
+                T[15] = m[..., 15] - 2 * m[..., 6] * uy - m[..., 8] * uz + m[..., 3] * uy**2 - m[..., 0] * uy**2 * uz + 2 * m[..., 2] * uy * uz
+                T[16] = (
                     m[..., 16]
                     - m[..., 6] * ux
                     - m[..., 5] * uy
@@ -3657,7 +3679,7 @@ class MultiphaseCascade(Multiphase):
                     + m[..., 1] * uy * uz
                     - m[..., 0] * ux * uy * uz
                 )
-                T = T.at[..., 17].set(
+                T[17] = (
                     m[..., 0] * ux**2 * uy**2
                     - 2 * m[..., 2] * ux**2 * uy
                     + m[..., 8] * ux**2
@@ -3668,7 +3690,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 12] * uy
                     + m[..., 17]
                 )
-                T = T.at[..., 18].set(
+                T[18] = (
                     m[..., 0] * ux**2 * uz**2
                     - 2 * m[..., 3] * ux**2 * uz
                     + m[..., 9] * ux**2
@@ -3679,7 +3701,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 13] * uz
                     + m[..., 18]
                 )
-                T = T.at[..., 19].set(
+                T[19] = (
                     m[..., 0] * uy**2 * uz**2
                     - 2 * m[..., 3] * uy**2 * uz
                     + m[..., 9] * uy**2
@@ -3690,7 +3712,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 15] * uz
                     + m[..., 19]
                 )
-                T = T.at[..., 20].set(
+                T[20] = (
                     m[..., 20]
                     - 2 * m[..., 16] * ux
                     - m[..., 13] * uy
@@ -3704,7 +3726,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 1] * ux * uy * uz
                     + m[..., 0] * ux**2 * uy * uz
                 )
-                T = T.at[..., 21].set(
+                T[21] = (
                     m[..., 21]
                     - m[..., 15] * ux
                     - 2 * m[..., 16] * uy
@@ -3718,7 +3740,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 2] * ux * uy * uz
                     + m[..., 0] * ux * uy**2 * uz
                 )
-                T = T.at[..., 22].set(
+                T[22] = (
                     m[..., 22]
                     - m[..., 14] * ux
                     - m[..., 11] * uy
@@ -3732,7 +3754,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 3] * ux * uy * uz
                     + m[..., 0] * ux * uy * uz**2
                 )
-                T = T.at[..., 23].set(
+                T[23] = (
                     m[..., 23]
                     - m[..., 19] * ux
                     - 2 * m[..., 22] * uy
@@ -3752,7 +3774,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * m[..., 3] * ux * uy**2 * uz
                     - m[..., 0] * ux * uy**2 * uz**2
                 )
-                T = T.at[..., 24].set(
+                T[24] = (
                     m[..., 24]
                     - 2 * m[..., 22] * ux
                     - m[..., 18] * uy
@@ -3772,7 +3794,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * m[..., 3] * ux**2 * uy * uz
                     - m[..., 0] * ux**2 * uy * uz**2
                 )
-                T = T.at[..., 25].set(
+                T[25] = (
                     m[..., 25]
                     - 2 * m[..., 21] * ux
                     - 2 * m[..., 20] * uy
@@ -3792,7 +3814,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * m[..., 2] * ux**2 * uy * uz
                     - m[..., 0] * ux**2 * uy**2 * uz
                 )
-                T = T.at[..., 26].set(
+                T[26] = (
                     m[..., 0] * ux**2 * uy**2 * uz**2
                     - 2 * m[..., 3] * ux**2 * uy**2 * uz
                     + m[..., 9] * ux**2 * uy**2
@@ -3821,6 +3843,7 @@ class MultiphaseCascade(Multiphase):
                     - 2 * m[..., 25] * uz
                     + m[..., 26]
                 )
+                T = stack_components(T, m)
 
                 return T
 
@@ -3835,14 +3858,14 @@ class MultiphaseCascade(Multiphase):
                 uy = u[..., 1]
                 usq = ux**2 + uy**2
                 udiff = ux**2 - uy**2
-                m = jnp.zeros_like(T)
-                m = m.at[..., 0].set(T[..., 0])
-                m = m.at[..., 1].set(ux * T[..., 0] + T[..., 1])
-                m = m.at[..., 2].set(uy * T[..., 0] + T[..., 2])
-                m = m.at[..., 3].set(usq * T[..., 0] + 2 * ux * T[..., 1] + 2 * uy * T[..., 2] + T[..., 3])
-                m = m.at[..., 4].set(udiff * T[..., 0] + 2 * ux * T[..., 1] - 2 * uy * T[..., 2] + T[..., 4])
-                m = m.at[..., 5].set(ux * uy * T[..., 0] + uy * T[..., 1] + ux * T[..., 2] + T[..., 5])
-                m = m.at[..., 6].set(
+                m = {}
+                m[0] = T[..., 0]
+                m[1] = ux * T[..., 0] + T[..., 1]
+                m[2] = uy * T[..., 0] + T[..., 2]
+                m[3] = usq * T[..., 0] + 2 * ux * T[..., 1] + 2 * uy * T[..., 2] + T[..., 3]
+                m[4] = udiff * T[..., 0] + 2 * ux * T[..., 1] - 2 * uy * T[..., 2] + T[..., 4]
+                m[5] = ux * uy * T[..., 0] + uy * T[..., 1] + ux * T[..., 2] + T[..., 5]
+                m[6] = (
                     (ux**2) * uy * T[..., 0]
                     + 2 * ux * uy * T[..., 1]
                     + ux**2 * T[..., 2]
@@ -3851,7 +3874,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * ux * T[..., 5]
                     + T[..., 6]
                 )
-                m = m.at[..., 7].set(
+                m[7] = (
                     (uy**2) * ux * T[..., 0]
                     + uy**2 * T[..., 1]
                     + 2 * ux * uy * T[..., 2]
@@ -3860,7 +3883,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * uy * T[..., 5]
                     + T[..., 7]
                 )
-                m = m.at[..., 8].set(
+                m[8] = (
                     (uy**2 * ux**2) * T[..., 0]
                     + 2 * ux * uy**2 * T[..., 1]
                     + 2 * uy * ux**2 * T[..., 2]
@@ -3871,6 +3894,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * ux * T[..., 7]
                     + T[..., 8]
                 )
+                m = stack_components(m, T)
                 return m
 
             return tree_map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
@@ -3881,36 +3905,24 @@ class MultiphaseCascade(Multiphase):
                 ux = u[..., 0]
                 uy = u[..., 1]
                 uz = u[..., 2]
-                m = jnp.zeros_like(T)
-                m = m.at[..., 0].set(T[..., 0])
-                m = m.at[..., 1].set(ux * T[..., 0] + T[..., 1])
-                m = m.at[..., 2].set(uy * T[..., 0] + T[..., 2])
-                m = m.at[..., 3].set(uz * T[..., 0] + T[..., 3])
-                m = m.at[..., 4].set(ux * uy * T[..., 0] + uy * T[..., 1] + ux * T[..., 2] + T[..., 4])
-                m = m.at[..., 5].set(ux * uz * T[..., 0] + uz * T[..., 1] + ux * T[..., 3] + T[..., 5])
-                m = m.at[..., 6].set(uy * uz * T[..., 0] + uz * T[..., 2] + uy * T[..., 3] + T[..., 6])
-                m = m.at[..., 7].set((ux**2) * T[..., 0] + 2 * ux * T[..., 1] + T[..., 7])
-                m = m.at[..., 8].set((uy**2) * T[..., 0] + 2 * uy * T[..., 2] + T[..., 8])
-                m = m.at[..., 9].set((uz**2) * T[..., 0] + 2 * uz * T[..., 3] + T[..., 9])
-                m = m.at[..., 10].set(
-                    ux * (uy**2) * T[..., 0] + (uy**2) * T[..., 1] + 2 * ux * uy * T[..., 2] + 2 * uy * T[..., 4] + ux * T[..., 8] + T[..., 10]
-                )
-                m = m.at[..., 11].set(
-                    ux * (uz**2) * T[..., 0] + (uz**2) * T[..., 1] + 2 * ux * uz * T[..., 3] + 2 * uz * T[..., 5] + ux * T[..., 9] + T[..., 11]
-                )
-                m = m.at[..., 12].set(
-                    (ux**2) * uy * T[..., 0] + 2 * ux * uy * T[..., 1] + (ux**2) * T[..., 2] + 2 * ux * T[..., 4] + uy * T[..., 7] + T[..., 12]
-                )
-                m = m.at[..., 13].set(
-                    (ux**2) * uz * T[..., 0] + 2 * ux * uz * T[..., 1] + (ux**2) * T[..., 3] + 2 * ux * T[..., 5] + uz * T[..., 7] + T[..., 13]
-                )
-                m = m.at[..., 14].set(
-                    uy * (uz**2) * T[..., 0] + (uz**2) * T[..., 2] + 2 * uy * uz * T[..., 3] + 2 * uz * T[..., 6] + uy * T[..., 9] + T[..., 14]
-                )
-                m = m.at[..., 15].set(
-                    (uy**2) * uz * T[..., 0] + 2 * uy * uz * T[..., 2] + (uy**2) * T[..., 3] + 2 * uy * T[..., 6] + uz * T[..., 8] + T[..., 15]
-                )
-                m = m.at[..., 16].set(
+                m = {}
+                m[0] = T[..., 0]
+                m[1] = ux * T[..., 0] + T[..., 1]
+                m[2] = uy * T[..., 0] + T[..., 2]
+                m[3] = uz * T[..., 0] + T[..., 3]
+                m[4] = ux * uy * T[..., 0] + uy * T[..., 1] + ux * T[..., 2] + T[..., 4]
+                m[5] = ux * uz * T[..., 0] + uz * T[..., 1] + ux * T[..., 3] + T[..., 5]
+                m[6] = uy * uz * T[..., 0] + uz * T[..., 2] + uy * T[..., 3] + T[..., 6]
+                m[7] = (ux**2) * T[..., 0] + 2 * ux * T[..., 1] + T[..., 7]
+                m[8] = (uy**2) * T[..., 0] + 2 * uy * T[..., 2] + T[..., 8]
+                m[9] = (uz**2) * T[..., 0] + 2 * uz * T[..., 3] + T[..., 9]
+                m[10] = ux * (uy**2) * T[..., 0] + (uy**2) * T[..., 1] + 2 * ux * uy * T[..., 2] + 2 * uy * T[..., 4] + ux * T[..., 8] + T[..., 10]
+                m[11] = ux * (uz**2) * T[..., 0] + (uz**2) * T[..., 1] + 2 * ux * uz * T[..., 3] + 2 * uz * T[..., 5] + ux * T[..., 9] + T[..., 11]
+                m[12] = (ux**2) * uy * T[..., 0] + 2 * ux * uy * T[..., 1] + (ux**2) * T[..., 2] + 2 * ux * T[..., 4] + uy * T[..., 7] + T[..., 12]
+                m[13] = (ux**2) * uz * T[..., 0] + 2 * ux * uz * T[..., 1] + (ux**2) * T[..., 3] + 2 * ux * T[..., 5] + uz * T[..., 7] + T[..., 13]
+                m[14] = uy * (uz**2) * T[..., 0] + (uz**2) * T[..., 2] + 2 * uy * uz * T[..., 3] + 2 * uz * T[..., 6] + uy * T[..., 9] + T[..., 14]
+                m[15] = (uy**2) * uz * T[..., 0] + 2 * uy * uz * T[..., 2] + (uy**2) * T[..., 3] + 2 * uy * T[..., 6] + uz * T[..., 8] + T[..., 15]
+                m[16] = (
                     (ux**2) * (uy**2) * T[..., 0]
                     + 2 * ux * (uy**2) * T[..., 1]
                     + 2 * uy * (ux**2) * T[..., 2]
@@ -3921,7 +3933,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * uy * T[..., 12]
                     + T[..., 16]
                 )
-                m = m.at[..., 17].set(
+                m[17] = (
                     (ux**2) * (uz**2) * T[..., 0]
                     + 2 * ux * (uz**2) * T[..., 1]
                     + 2 * uz * (ux**2) * T[..., 3]
@@ -3932,7 +3944,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * uz * T[..., 13]
                     + T[..., 17]
                 )
-                m = m.at[..., 18].set(
+                m[18] = (
                     (uy**2) * (uz**2) * T[..., 0]
                     + 2 * uy * (uz**2) * T[..., 2]
                     + 2 * uz * (uy**2) * T[..., 3]
@@ -3943,6 +3955,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * uz * T[..., 15]
                     + T[..., 18]
                 )
+                m = stack_components(m, T)
                 return m
 
             return tree_map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
@@ -3953,36 +3966,24 @@ class MultiphaseCascade(Multiphase):
                 ux = u[..., 0]
                 uy = u[..., 1]
                 uz = u[..., 2]
-                m = jnp.zeros_like(T)
-                m = m.at[..., 0].set(T[..., 0])
-                m = m.at[..., 1].set(T[..., 1] + T[..., 0] * ux)
-                m = m.at[..., 2].set(T[..., 2] + T[..., 0] * uy)
-                m = m.at[..., 3].set(T[..., 3] + T[..., 0] * uz)
-                m = m.at[..., 4].set(T[..., 4] + T[..., 2] * ux + T[..., 1] * uy + T[..., 0] * ux * uy)
-                m = m.at[..., 5].set(T[..., 5] + T[..., 3] * ux + T[..., 1] * uz + T[..., 0] * ux * uz)
-                m = m.at[..., 6].set(T[..., 6] + T[..., 3] * uy + T[..., 2] * uz + T[..., 0] * uy * uz)
-                m = m.at[..., 7].set(T[..., 0] * ux**2 + 2 * T[..., 1] * ux + T[..., 7])
-                m = m.at[..., 8].set(T[..., 0] * uy**2 + 2 * T[..., 2] * uy + T[..., 8])
-                m = m.at[..., 9].set(T[..., 0] * uz**2 + 2 * T[..., 3] * uz + T[..., 9])
-                m = m.at[..., 10].set(
-                    T[..., 10] + T[..., 8] * ux + 2 * T[..., 4] * uy + T[..., 1] * uy**2 + T[..., 0] * ux * uy**2 + 2 * T[..., 2] * ux * uy
-                )
-                m = m.at[..., 11].set(
-                    T[..., 11] + T[..., 9] * ux + 2 * T[..., 5] * uz + T[..., 1] * uz**2 + T[..., 0] * ux * uz**2 + 2 * T[..., 3] * ux * uz
-                )
-                m = m.at[..., 12].set(
-                    T[..., 12] + 2 * T[..., 4] * ux + T[..., 7] * uy + T[..., 2] * ux**2 + T[..., 0] * ux**2 * uy + 2 * T[..., 1] * ux * uy
-                )
-                m = m.at[..., 13].set(
-                    T[..., 13] + 2 * T[..., 5] * ux + T[..., 7] * uz + T[..., 3] * ux**2 + T[..., 0] * ux**2 * uz + 2 * T[..., 1] * ux * uz
-                )
-                m = m.at[..., 14].set(
-                    T[..., 14] + T[..., 9] * uy + 2 * T[..., 6] * uz + T[..., 2] * uz**2 + T[..., 0] * uy * uz**2 + 2 * T[..., 3] * uy * uz
-                )
-                m = m.at[..., 15].set(
-                    T[..., 15] + 2 * T[..., 6] * uy + T[..., 8] * uz + T[..., 3] * uy**2 + T[..., 0] * uy**2 * uz + 2 * T[..., 2] * uy * uz
-                )
-                m = m.at[..., 16].set(
+                m = {}
+                m[0] = T[..., 0]
+                m[1] = T[..., 1] + T[..., 0] * ux
+                m[2] = T[..., 2] + T[..., 0] * uy
+                m[3] = T[..., 3] + T[..., 0] * uz
+                m[4] = T[..., 4] + T[..., 2] * ux + T[..., 1] * uy + T[..., 0] * ux * uy
+                m[5] = T[..., 5] + T[..., 3] * ux + T[..., 1] * uz + T[..., 0] * ux * uz
+                m[6] = T[..., 6] + T[..., 3] * uy + T[..., 2] * uz + T[..., 0] * uy * uz
+                m[7] = T[..., 0] * ux**2 + 2 * T[..., 1] * ux + T[..., 7]
+                m[8] = T[..., 0] * uy**2 + 2 * T[..., 2] * uy + T[..., 8]
+                m[9] = T[..., 0] * uz**2 + 2 * T[..., 3] * uz + T[..., 9]
+                m[10] = T[..., 10] + T[..., 8] * ux + 2 * T[..., 4] * uy + T[..., 1] * uy**2 + T[..., 0] * ux * uy**2 + 2 * T[..., 2] * ux * uy
+                m[11] = T[..., 11] + T[..., 9] * ux + 2 * T[..., 5] * uz + T[..., 1] * uz**2 + T[..., 0] * ux * uz**2 + 2 * T[..., 3] * ux * uz
+                m[12] = T[..., 12] + 2 * T[..., 4] * ux + T[..., 7] * uy + T[..., 2] * ux**2 + T[..., 0] * ux**2 * uy + 2 * T[..., 1] * ux * uy
+                m[13] = T[..., 13] + 2 * T[..., 5] * ux + T[..., 7] * uz + T[..., 3] * ux**2 + T[..., 0] * ux**2 * uz + 2 * T[..., 1] * ux * uz
+                m[14] = T[..., 14] + T[..., 9] * uy + 2 * T[..., 6] * uz + T[..., 2] * uz**2 + T[..., 0] * uy * uz**2 + 2 * T[..., 3] * uy * uz
+                m[15] = T[..., 15] + 2 * T[..., 6] * uy + T[..., 8] * uz + T[..., 3] * uy**2 + T[..., 0] * uy**2 * uz + 2 * T[..., 2] * uy * uz
+                m[16] = (
                     T[..., 16]
                     + T[..., 6] * ux
                     + T[..., 5] * uy
@@ -3992,7 +3993,7 @@ class MultiphaseCascade(Multiphase):
                     + T[..., 1] * uy * uz
                     + T[..., 0] * ux * uy * uz
                 )
-                m = m.at[..., 17].set(
+                m[17] = (
                     T[..., 0] * ux**2 * uy**2
                     + 2 * T[..., 2] * ux**2 * uy
                     + T[..., 8] * ux**2
@@ -4003,7 +4004,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 12] * uy
                     + T[..., 17]
                 )
-                m = m.at[..., 18].set(
+                m[18] = (
                     T[..., 0] * ux**2 * uz**2
                     + 2 * T[..., 3] * ux**2 * uz
                     + T[..., 9] * ux**2
@@ -4014,7 +4015,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 13] * uz
                     + T[..., 18]
                 )
-                m = m.at[..., 19].set(
+                m[19] = (
                     T[..., 0] * uy**2 * uz**2
                     + 2 * T[..., 3] * uy**2 * uz
                     + T[..., 9] * uy**2
@@ -4025,7 +4026,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 15] * uz
                     + T[..., 19]
                 )
-                m = m.at[..., 20].set(
+                m[20] = (
                     T[..., 20]
                     + 2 * T[..., 16] * ux
                     + T[..., 13] * uy
@@ -4039,7 +4040,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 1] * ux * uy * uz
                     + T[..., 0] * ux**2 * uy * uz
                 )
-                m = m.at[..., 21].set(
+                m[21] = (
                     T[..., 21]
                     + T[..., 15] * ux
                     + 2 * T[..., 16] * uy
@@ -4053,7 +4054,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 2] * ux * uy * uz
                     + T[..., 0] * ux * uy**2 * uz
                 )
-                m = m.at[..., 22].set(
+                m[22] = (
                     T[..., 22]
                     + T[..., 14] * ux
                     + T[..., 11] * uy
@@ -4067,7 +4068,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 3] * ux * uy * uz
                     + T[..., 0] * ux * uy * uz**2
                 )
-                m = m.at[..., 23].set(
+                m[23] = (
                     T[..., 23]
                     + T[..., 19] * ux
                     + 2 * T[..., 22] * uy
@@ -4087,7 +4088,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 3] * ux * uy**2 * uz
                     + T[..., 0] * ux * uy**2 * uz**2
                 )
-                m = m.at[..., 24].set(
+                m[24] = (
                     T[..., 24]
                     + 2 * T[..., 22] * ux
                     + T[..., 18] * uy
@@ -4107,7 +4108,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 3] * ux**2 * uy * uz
                     + T[..., 0] * ux**2 * uy * uz**2
                 )
-                m = m.at[..., 25].set(
+                m[25] = (
                     T[..., 25]
                     + 2 * T[..., 21] * ux
                     + 2 * T[..., 20] * uy
@@ -4127,7 +4128,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 2] * ux**2 * uy * uz
                     + T[..., 0] * ux**2 * uy**2 * uz
                 )
-                m = m.at[..., 26].set(
+                m[26] = (
                     T[..., 0] * ux**2 * uy**2 * uz**2
                     + 2 * T[..., 3] * ux**2 * uy**2 * uz
                     + T[..., 9] * ux**2 * uy**2
@@ -4156,6 +4157,7 @@ class MultiphaseCascade(Multiphase):
                     + 2 * T[..., 25] * uz
                     + T[..., 26]
                 )
+                m = stack_components(m, T)
                 return m
 
             return tree_map(lambda T, u: shift_inverse(T, u), T_tree, u_tree)
@@ -4176,35 +4178,38 @@ class MultiphaseCascade(Multiphase):
 
         def f(rho):
             if isinstance(self.lattice, LatticeD2Q9):
-                T_eq = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype)
-                T_eq = T_eq.at[..., 0].set(rho[..., 0])
-                T_eq = T_eq.at[..., 3].set(2 * rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 8].set(rho[..., 0] * self.lattice.cs**4)
+                T_eq = {}
+                T_eq[0] = rho[..., 0]
+                T_eq[3] = 2 * rho[..., 0] * self.lattice.cs2
+                T_eq[8] = rho[..., 0] * self.lattice.cs**4
+                T_eq = stack_components(T_eq, jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype))
 
                 return T_eq
 
             elif isinstance(self.lattice, LatticeD3Q19):
-                T_eq = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
-                T_eq = T_eq.at[..., 0].set(rho[..., 0])
-                T_eq = T_eq.at[..., 7].set(rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 8].set(rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 9].set(rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 16].set(rho[..., 0] * self.lattice.cs**4)
-                T_eq = T_eq.at[..., 17].set(rho[..., 0] * self.lattice.cs**4)
-                T_eq = T_eq.at[..., 18].set(rho[..., 0] * self.lattice.cs**4)
+                T_eq = {}
+                T_eq[0] = rho[..., 0]
+                T_eq[7] = rho[..., 0] * self.lattice.cs2
+                T_eq[8] = rho[..., 0] * self.lattice.cs2
+                T_eq[9] = rho[..., 0] * self.lattice.cs2
+                T_eq[16] = rho[..., 0] * self.lattice.cs**4
+                T_eq[17] = rho[..., 0] * self.lattice.cs**4
+                T_eq[18] = rho[..., 0] * self.lattice.cs**4
+                T_eq = stack_components(T_eq, jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype))
 
                 return T_eq
 
             elif isinstance(self.lattice, LatticeD3Q27):
-                T_eq = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
-                T_eq = T_eq.at[..., 0].set(rho[..., 0])
-                T_eq = T_eq.at[..., 7].set(rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 8].set(rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 9].set(rho[..., 0] * self.lattice.cs2)
-                T_eq = T_eq.at[..., 17].set(rho[..., 0] * self.lattice.cs**4)
-                T_eq = T_eq.at[..., 18].set(rho[..., 0] * self.lattice.cs**4)
-                T_eq = T_eq.at[..., 19].set(rho[..., 0] * self.lattice.cs**4)
-                T_eq = T_eq.at[..., 26].set(rho[..., 0] * self.lattice.cs**6)
+                T_eq = {}
+                T_eq[0] = rho[..., 0]
+                T_eq[7] = rho[..., 0] * self.lattice.cs2
+                T_eq[8] = rho[..., 0] * self.lattice.cs2
+                T_eq[9] = rho[..., 0] * self.lattice.cs2
+                T_eq[17] = rho[..., 0] * self.lattice.cs**4
+                T_eq[18] = rho[..., 0] * self.lattice.cs**4
+                T_eq[19] = rho[..., 0] * self.lattice.cs**4
+                T_eq[26] = rho[..., 0] * self.lattice.cs**6
+                T_eq = stack_components(T_eq, jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype))
 
                 return T_eq
 
@@ -4228,59 +4233,62 @@ class MultiphaseCascade(Multiphase):
 
         def f(F, sigma, psi, s_b):
             if isinstance(self.lattice, LatticeD2Q9):
-                C = jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype)
+                C = {}
                 Fx = F[..., 0]
                 Fy = F[..., 1]
                 eta = 4 * sigma * (Fx**2 + Fy**2) / ((psi[..., 0] ** 2) * (1 / s_b - 0.5))  # For mechanical stability
-                C = C.at[..., 1].set(Fx)
-                C = C.at[..., 2].set(Fy)
-                C = C.at[..., 3].set(eta)
-                C = C.at[..., 6].set(Fy * self.lattice.cs2)
-                C = C.at[..., 7].set(Fx * self.lattice.cs2)
-                C = C.at[..., 8].set(eta * self.lattice.cs2)
+                C[1] = Fx
+                C[2] = Fy
+                C[3] = eta
+                C[6] = Fy * self.lattice.cs2
+                C[7] = Fx * self.lattice.cs2
+                C[8] = eta * self.lattice.cs2
+                C = stack_components(C, jnp.zeros((self.nx, self.ny, self.lattice.q), dtype=self.precision_policy.compute_dtype))
 
                 return C
             elif isinstance(self.lattice, LatticeD3Q19):
-                C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
+                C = {}
                 Fx = F[..., 0]
                 Fy = F[..., 1]
                 Fz = F[..., 2]
                 eta = 4 * sigma * (Fx**2 + Fy**2 + Fz**2) / ((psi[..., 0] ** 2) * (1 / s_b - 0.5))
-                C = C.at[..., 1].set(Fx)
-                C = C.at[..., 2].set(Fy)
-                C = C.at[..., 3].set(Fz)
-                C = C.at[..., 7].set(eta)
-                C = C.at[..., 8].set(eta)
-                C = C.at[..., 9].set(eta)
-                C = C.at[..., 10].set(Fx * self.lattice.cs2)
-                C = C.at[..., 11].set(Fx * self.lattice.cs2)
-                C = C.at[..., 12].set(Fy * self.lattice.cs2)
-                C = C.at[..., 13].set(Fz * self.lattice.cs2)
-                C = C.at[..., 14].set(Fy * self.lattice.cs2)
-                C = C.at[..., 15].set(Fz * self.lattice.cs2)
+                C[1] = Fx
+                C[2] = Fy
+                C[3] = Fz
+                C[7] = eta
+                C[8] = eta
+                C[9] = eta
+                C[10] = Fx * self.lattice.cs2
+                C[11] = Fx * self.lattice.cs2
+                C[12] = Fy * self.lattice.cs2
+                C[13] = Fz * self.lattice.cs2
+                C[14] = Fy * self.lattice.cs2
+                C[15] = Fz * self.lattice.cs2
+                C = stack_components(C, jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype))
 
                 return C
             elif isinstance(self.lattice, LatticeD3Q27):
-                C = jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype)
+                C = {}
                 Fx = F[..., 0]
                 Fy = F[..., 1]
                 Fz = F[..., 2]
-                C = C.at[..., 1].set(Fx)
-                C = C.at[..., 2].set(Fy)
-                C = C.at[..., 3].set(Fz)
+                C[1] = Fx
+                C[2] = Fy
+                C[3] = Fz
                 eta = 4 * sigma * (Fx**2 + Fy**2 + Fz**2) / ((psi[..., 0] ** 2) * (1 / s_b - 0.5))
-                C = C.at[..., 7].set(eta)
-                C = C.at[..., 8].set(eta)
-                C = C.at[..., 9].set(eta)
-                C = C.at[..., 10].set(Fx * self.lattice.cs2)
-                C = C.at[..., 11].set(Fx * self.lattice.cs2)
-                C = C.at[..., 12].set(Fy * self.lattice.cs2)
-                C = C.at[..., 13].set(Fz * self.lattice.cs2)
-                C = C.at[..., 14].set(Fy * self.lattice.cs2)
-                C = C.at[..., 15].set(Fz * self.lattice.cs2)
-                C = C.at[..., 23].set(Fx * self.lattice.cs**4)
-                C = C.at[..., 24].set(Fy * self.lattice.cs**4)
-                C = C.at[..., 25].set(Fz * self.lattice.cs**4)
+                C[7] = eta
+                C[8] = eta
+                C[9] = eta
+                C[10] = Fx * self.lattice.cs2
+                C[11] = Fx * self.lattice.cs2
+                C[12] = Fy * self.lattice.cs2
+                C[13] = Fz * self.lattice.cs2
+                C[14] = Fy * self.lattice.cs2
+                C[15] = Fz * self.lattice.cs2
+                C[23] = Fx * self.lattice.cs**4
+                C[24] = Fy * self.lattice.cs**4
+                C[25] = Fz * self.lattice.cs**4
+                C = stack_components(C, jnp.zeros((self.nx, self.ny, self.nz, self.lattice.q), dtype=self.precision_policy.compute_dtype))
 
                 return C
 
@@ -4316,6 +4324,63 @@ class MultiphaseCascade(Multiphase):
         psi_tree = self.compute_potential(rho_tree, T=T)
         return self._apply_force_fields(Tdash_tree, F_tree, psi_tree)
 
+    # Direction-major populations in run() by default (with the component-mode collision: +46% in 3D, +6% in 2D;
+    # see LBMBase._direction_major_step)
+    _direction_major_dims = (2, 3)
+
+    _CASCADE_TRANSFORMS = (
+        "compute_central_moment",
+        "compute_central_moment_inverse",
+        "compute_eq_central_moments",
+        "compute_force_central_moments",
+        "_apply_force_fields",
+    )
+
+    def _uses_default_cascade_transforms(self):
+        """Whether all moment transforms used by the collision are this class's own (then the component-mode collision applies)."""
+        return all(getattr(type(self), name) is getattr(MultiphaseCascade, name) for name in self._CASCADE_TRANSFORMS)
+
+    def _collision_components(self, fin_tree, rho_tree, u_tree, F_tree, psi_tree):
+        """
+        The cascaded collision evaluated per lattice direction (component mode), for the default moment transforms.
+
+        Same algorithm as the array path of collision(): raw moments f @ M, shift to central moments, relaxation
+        Tdash @ (I - S) + Tdash_eq @ S, forcing C @ (I - S / 2), shift back, populations @ M_inv. Here the (..., q) intermediates
+        are kept as q separate arrays (Components), the transforms are the same methods traced in component mode, and the matrix
+        products are sparse sums with constant coefficients (as in MultiphaseMRT). XLA then compiles the whole collision into one
+        kernel with one thread per node, instead of materializing every intermediate through separate kernels and GEMMs. The
+        products are exact float32/float64 sums, so results can differ from the GEMM path at roundoff (or TF32) level.
+        """
+        dtype = self.precision_policy.compute_dtype
+        q = self.lattice.q
+        eye = np.eye(q)
+        transform = lambda name: getattr(MultiphaseCascade, name).__wrapped__
+        with component_mode():
+            m_tree = [
+                matvec_components(Components([f[..., i] for i in range(q)], dtype), self.sparse_collision_terms(np.asarray(M)), dtype)
+                for f, M in zip(fin_tree, self.M, strict=True)
+            ]
+            Tdash_tree = transform("compute_central_moment")(self, m_tree, u_tree)
+            Tdash_eq_tree = transform("compute_eq_central_moments")(self, rho_tree)
+            C_tree = transform("compute_force_central_moments")(self, F_tree, psi_tree)
+            Tout_tree = []
+            for Tdash, Tdash_eq, C, S in zip(Tdash_tree, Tdash_eq_tree, C_tree, self.S, strict=True):
+                S = np.asarray(S)
+                relaxed = matvec_components(Tdash, self.sparse_collision_terms(eye - S), dtype)
+                equilibrium = matvec_components(Tdash_eq, self.sparse_collision_terms(S), dtype)
+                forcing = matvec_components(C, self.sparse_collision_terms(eye - 0.5 * S), dtype)
+                Tout_tree.append(Components([a + b + c for a, b, c in zip(relaxed, equilibrium, forcing, strict=True)], dtype))
+            m_out_tree = transform("compute_central_moment_inverse")(self, Tout_tree, u_tree)
+            fout_tree = [matvec_components(m, self.sparse_collision_terms(np.asarray(M_inv)), dtype) for m, M_inv in zip(m_out_tree, self.M_inv, strict=True)]
+        populations_tree = []
+        for fin, rho, fout in zip(fin_tree, rho_tree, fout_tree, strict=True):
+            fout = [jnp.broadcast_to(x, fin.shape[:-1]) for x in fout]
+            if self.wetting_formulation == "geometric" and self.dim == 3:
+                # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
+                fout[0] = fout[0] + (rho[..., 0] - sum(fout))
+            populations_tree.append(self.stack_populations([self.precision_policy.cast_to_output(x) for x in fout]))
+        return populations_tree
+
     @partial(jit, static_argnums=(0,))
     def collision(self, fin_tree, T=None):
         """
@@ -4337,6 +4402,12 @@ class MultiphaseCascade(Multiphase):
         else:
             u_tree = self.macroscopic_velocity(fin_tree, rho_tree, T=T)
             F_tree = self.compute_force(rho_tree, T=T)
+        if self._uses_default_cascade_apply_force and self._uses_default_cascade_transforms():
+            if force_psi_tree is None or (self.wetting_formulation is not None and any(self._has_wetting_bc)):
+                psi_tree = self.compute_potential(rho_tree, T=T)
+            else:
+                psi_tree = force_psi_tree
+            return self._collision_components(fin_tree, rho_tree, u_tree, F_tree, psi_tree)
         T_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, self.M)
         Tdash_tree = self.compute_central_moment(T_tree, u_tree)
         Tdash_eq_tree = self.compute_eq_central_moments(rho_tree)

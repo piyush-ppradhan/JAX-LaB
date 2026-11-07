@@ -1,5 +1,6 @@
 """Regression coverage for the fused force/potential evaluation in MultiphaseCascade.collision."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.tree import map as tree_map
@@ -72,6 +73,9 @@ def test_cascade_collision_matches_previous_force_dataflow():
     sim = _build_sim()
     rng = np.random.default_rng(0)
     fin_tree = [sim.assign_fields_sharded()[0] + jnp.asarray(rng.uniform(-1e-3, 1e-3, size=(*DOMAIN, sim.q)), dtype=jnp.float32)]
-    actual = sim.collision(fin_tree)
-    expected = _reference_collision(sim, fin_tree)
+    # Both at full float32 matrix-product precision: at the default precision GPUs may evaluate jnp.dot in TF32 (~1e-3
+    # relative), which is coarser than this tolerance (the collision's moment sums are exact, but update_macroscopic uses dot).
+    with jax.default_matmul_precision("float32"):
+        actual = sim.collision(fin_tree)
+        expected = _reference_collision(sim, fin_tree)
     assert np.max(np.abs(np.asarray(actual[0]) - np.asarray(expected[0]))) < 2e-6

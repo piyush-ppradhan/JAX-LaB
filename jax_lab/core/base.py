@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import warnings
+from contextlib import contextmanager
 from functools import partial
 
 import jax
@@ -20,6 +21,107 @@ from .precision_policy import PrecisionPolicy
 from .utils import AsyncOutputWriter, colored, downsample_field
 
 logger = logging.getLogger(__name__)
+
+
+class Components(tuple):
+    """
+    The components of a (..., n) field held as n separate arrays, indexable like the stacked array: c[..., k] is the k-th
+    component. Used by the per-direction (component-mode) collisions to run the transforms written against (..., n) arrays
+    without materializing any (..., n) intermediate.
+    """
+
+    def __new__(cls, values, dtype=None):
+        obj = super().__new__(cls, values)
+        obj.dtype = dtype
+        return obj
+
+    def __getitem__(self, index):
+        if isinstance(index, tuple) and len(index) == 2 and index[0] is Ellipsis:
+            return tuple.__getitem__(self, index[1])
+        return tuple.__getitem__(self, index)
+
+
+_component_mode = [False]
+
+
+@contextmanager
+def component_mode():
+    """While active (during the tracing of a component-mode collision), stack_components returns Components."""
+    previous = _component_mode[0]
+    _component_mode[0] = True
+    try:
+        yield
+    finally:
+        _component_mode[0] = previous
+
+
+def matvec_components(components, terms, dtype):
+    """
+    Components of x @ A for x given as components, with A given by its sparse columns (LBMBase.sparse_collision_terms):
+    out_j = sum_i x_i A[i, j] over the nonzero A[i, j]. Replaces a (cells x n) @ (n x n) matrix product.
+    """
+    out = []
+    for column in terms:
+        total = None
+        for i, coefficient in column:
+            term = components[..., i] * coefficient
+            total = term if total is None else total + term
+        out.append(jnp.zeros((), dtype=dtype) if total is None else total)
+    return Components(out, dtype)
+
+
+def _lattice_dot(direction, vector):
+    """c_i . v for an integer lattice direction and per-axis fields, as additions only (0.0 for the rest direction)."""
+    total = None
+    for component, value in zip(direction, vector, strict=True):
+        if component == 0:
+            continue
+        term = value * float(component) if abs(component) != 1 else (value if component > 0 else -value)
+        total = term if total is None else total + term
+    return 0.0 if total is None else total
+
+
+def _lattice_sum(directions, channels, axis):
+    """sum_i c_i[axis] f_i over per-direction fields."""
+    total = None
+    for direction, value in zip(directions, channels, strict=True):
+        component = direction[axis]
+        if component == 0:
+            continue
+        term = value * float(component) if abs(component) != 1 else (value if component > 0 else -value)
+        total = term if total is None else total + term
+    return total
+
+
+def stack_components(components, like):
+    """
+    Assemble a (..., n) array from per-component expressions in one jnp.stack, with the semantics of filling
+    jnp.zeros_like(like) component by component via .at[..., k].set(value): each value is cast to like.dtype and
+    broadcast to like.shape[:-1], and components that are not given are zero.
+
+    Building such arrays with a chain of .at[..., k].set() updates makes XLA emit one full-array pass (a dynamic-update-slice
+    kernel) per component; computing the components first and stacking them once lets the whole transform fuse into the
+    surrounding kernel.
+
+    Parameters
+    ----------
+    components (dict): Component index -> value (array or scalar).
+
+    like (jax.numpy.ndarray): Array whose shape and dtype the result takes.
+
+    Returns
+    -------
+    (jax.numpy.ndarray): The assembled array, shape and dtype of like.
+    """
+    if _component_mode[0]:
+        n = len(like) if isinstance(like, Components) else like.shape[-1]
+        return Components([jnp.asarray(components.get(k, 0.0), dtype=like.dtype) for k in range(n)], like.dtype)
+    shape = like.shape[:-1]
+    zero = jnp.zeros(shape, dtype=like.dtype)
+    return jnp.stack(
+        [jnp.broadcast_to(jnp.asarray(components[k], dtype=like.dtype), shape) if k in components else zero for k in range(like.shape[-1])],
+        axis=-1,
+    )
 
 
 class LBMBase(object):
@@ -62,7 +164,15 @@ class LBMBase(object):
 
     io_populations (bool, optional): With async_io, also copy the population arrays passed to output_data to the host.
         Defaults to False, since they are q times larger than a scalar field.
+
+    direction_major_layout (bool, optional): Keep the populations direction-major in device memory (lattice direction
+        outermost) inside run(). Results and the (..., q) array interface are unchanged; only memory access patterns differ.
+        Defaults to the model's measured setting: on for MRT, KBC and the Shan-Chen MRT, BGK and cascaded models (2D and 3D)
+        and for single-phase BGK and cascaded (CLBMSim) in 3D.
     """
+
+    # Dimensions in which run() keeps the populations direction-major in device memory by default; see _direction_major_step
+    _direction_major_dims = ()
 
     def __init__(self, **kwargs):
         self.omega = kwargs.get("omega")
@@ -81,6 +191,10 @@ class LBMBase(object):
         self.io_rate = kwargs.get("io_rate", 0)
         self.return_fpost = kwargs.get("return_fpost", False)
         self.compute_MLUPS = kwargs.get("compute_MLUPS", False)
+        # Keep the populations direction-major in device memory during run() (see _direction_major_step). None selects the
+        # model's default (resolved below, once the dimension is known); True/False force it on/off.
+        self.direction_major_layout = kwargs.get("direction_major_layout")
+        self._direction_major_steps = {}
         self.restore_checkpoint = kwargs.get("restore_checkpoint", False)
         self._output_writer = AsyncOutputWriter(kwargs.get("async_io", True), kwargs.get("io_queue_size", 2), kwargs.get("io_populations", False))
         self.n_devices = jax.device_count()
@@ -104,6 +218,9 @@ class LBMBase(object):
         self.q = self.lattice.q
         self.w = self.lattice.w
         self.dim = self.lattice.d
+        if self.direction_major_layout is None:
+            # Measured per model and dimension (see _direction_major_dims of each model): on where it was faster, off where slower
+            self.direction_major_layout = self.dim in self._direction_major_dims
 
         # Set the checkpoint manager
         if self.checkpoint_rate > 0:
@@ -1517,15 +1634,113 @@ class LBMBase(object):
         f_postcollision (jax.numpy.ndarray or None): Post-collision distribution functions after the simulation step, or None if
         return_fpost is False.
         """
-        f_postcollision = self.collision(f_poststreaming)
+        f_postcollision = self._direction_major_hint(self.collision(f_poststreaming))
         f_postcollision = self.apply_bc(f_postcollision, f_poststreaming, timestep, "PostCollision")
-        f_poststreaming = self.streaming(f_postcollision)
+        f_poststreaming = self._direction_major_hint(self.streaming(f_postcollision))
         f_poststreaming = self.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
 
         if return_fpost:
             return f_poststreaming, f_postcollision
         else:
             return f_poststreaming, None
+
+    def _population_format(self, x, direction_major):
+        """
+        Device format (sharding + memory layout) for a population array of logical shape (..., q).
+
+        Parameters
+        ----------
+        x (jax.Array): Population array.
+
+        direction_major (bool): True for the direction-major layout (the q axis outermost in memory, i.e. one contiguous
+            field per lattice direction), False for the default row-major layout (q innermost).
+
+        Returns
+        -------
+        (jax.experimental.layout.Format): The format.
+        """
+        from jax.experimental.layout import Format, Layout
+
+        order = (x.ndim - 1, *range(x.ndim - 1)) if direction_major else tuple(range(x.ndim))
+        # The simulation's population sharding (not x's own), so populations created elsewhere, e.g. on a single device,
+        # are resharded here, as step() would otherwise do implicitly
+        sharding = self.sharding if x.ndim == self.dim + 1 else x.sharding
+        return Format(Layout(major_to_minor=order), sharding)
+
+    def _to_direction_major(self, f):
+        """
+        Move the populations (array or pytree of arrays) to the direction-major memory layout used inside run().
+        Returns f unchanged when direction_major_layout is False.
+        """
+        if not self.direction_major_layout:
+            return f
+        return jax.tree.map(lambda x: jax.device_put(x, self._population_format(x, True)), f)
+
+    def _to_default_layout(self, f):
+        """
+        Move populations back to the default memory layout. Used wherever populations leave the run() time loop (output,
+        checkpoints, the returned value), so user code and host transfers never see the direction-major layout. None
+        (e.g. fstar when return_fpost is False) passes through.
+        """
+        if not self.direction_major_layout or f is None:
+            return f
+        return jax.tree.map(lambda x: jax.device_put(x, self._population_format(x, False)), f)
+
+    def _direction_major_hint(self, f):
+        """
+        Inside the direction-major step of run() (see _direction_major_step), constrain the intermediate populations to the
+        direction-major layout; otherwise return f unchanged. Without it, XLA can give the post-collision and post-streaming
+        arrays the default (q innermost) layout when boundary-condition scatters consume them, which turns streaming into a
+        strided transposing pass (e.g. 4x slower steps with walls).
+        """
+        if not getattr(self, "_tracing_direction_major", False):
+            return f
+        from jax.experimental.layout import Layout, with_layout_constraint
+
+        return jax.tree.map(lambda x: with_layout_constraint(x, Layout(major_to_minor=(x.ndim - 1, *range(x.ndim - 1)))), f)
+
+    def _direction_major_step(self, f, return_fpost):
+        """
+        The step function used by run(): step() compiled with the populations held direction-major in device memory.
+
+        The logical array, step() itself and all its parts (collision, streaming, boundary conditions, user overrides) are
+        unchanged; only the physical storage order differs. With the lattice direction outermost, streaming shifts whole
+        contiguous fields and the collision reads one contiguous field per direction, instead of strided accesses into the
+        interleaved (..., q) layout (e.g. 1.5-1.8x faster MRT droplet steps on GPUs, with bit-identical results).
+
+        Parameters
+        ----------
+        f (jax.Array or pytree): Populations, already in the direction-major layout (see _to_direction_major).
+
+        return_fpost (bool): Whether the step also returns the post-collision populations.
+
+        Returns
+        -------
+        (callable): step(f, timestep) -> (f, fstar), like self.step.
+        """
+        if not self.direction_major_layout:
+            return lambda f, timestep: self.step(f, timestep, return_fpost=return_fpost)
+        key = (return_fpost, jax.tree.structure(f))
+        if key not in self._direction_major_steps:
+            formats = jax.tree.map(lambda x: self._population_format(x, True), f)
+            # step() is traced here from its undecorated function (not its own jit cache), with _direction_major_hint active,
+            # so the intermediate populations get the direction-major layout constraint too
+            step_function = type(self).step.__wrapped__
+
+            def direction_major_step(f, timestep):
+                self._tracing_direction_major = True
+                try:
+                    return step_function(self, f, timestep, return_fpost)
+                finally:
+                    self._tracing_direction_major = False
+
+            self._direction_major_steps[key] = jax.jit(
+                direction_major_step,
+                in_shardings=(formats, None),
+                out_shardings=(formats, formats if return_fpost else None),
+                donate_argnums=0,
+            )
+        return self._direction_major_steps[key]
 
     def run(self, t_max):
         """
@@ -1563,6 +1778,10 @@ class LBMBase(object):
                 start_step = latest_step + 1
                 if not (t_max > start_step):
                     raise ValueError(f"Simulation already exceeded maximum allowable steps (t_max = {t_max}). Consider increasing t_max.")
+        # Inside the time loop the populations are held direction-major in device memory (see _direction_major_step);
+        # they are moved back to the default layout wherever they leave the loop.
+        f = self._to_direction_major(f)
+        step = self._direction_major_step(f, self.return_fpost)
         if self.compute_MLUPS:
             start = time.time()
         # Loop over all time steps
@@ -1581,7 +1800,7 @@ class LBMBase(object):
                 u_prev = process_allgather(u_prev)
 
             # Perform one time-step (collision, streaming, and boundary conditions)
-            f, fstar = self.step(f, timestep, return_fpost=self.return_fpost)
+            f, fstar = step(f, timestep)
             # Print the progress of the simulation
             if print_iter_flag:
                 logger.info(
@@ -1604,12 +1823,12 @@ class LBMBase(object):
                 u = process_allgather(u)
 
                 # Save the data
-                self.handle_io_timestep(timestep, f, fstar, rho, u, rho_prev, u_prev)
+                self.handle_io_timestep(timestep, self._to_default_layout(f), self._to_default_layout(fstar), rho, u, rho_prev, u_prev)
 
             if checkpoint_flag:
                 # Save the checkpoint
                 logger.info(f"Saving checkpoint at timestep {timestep}/{t_max}")
-                state = {"f": f}
+                state = {"f": self._to_default_layout(f)}
                 # self.mngr.save(timestep, state)
                 self.mngr.save(timestep, args=orb.args.StandardSave(state))
 
@@ -1648,7 +1867,7 @@ class LBMBase(object):
         self._output_writer.finish()
         if self.mngr is not None:
             self.mngr.wait_until_finished()
-        return f
+        return self._to_default_layout(f)
 
     def handle_io_timestep(self, timestep, f, fstar, rho, u, rho_prev, u_prev):
         """
@@ -1731,6 +1950,71 @@ class LBMBase(object):
         fin (jax.numpy.ndarray): Post-collision distribution functions.
         """
         pass
+
+    @staticmethod
+    def stack_populations(populations):
+        """
+        Stack post-collision populations into a single (..., q) array, with all q populations of a node computed together.
+
+        Without the barrier, XLA fuses the whole collision into this stack (and into the streaming roll that consumes it) and
+        emits one GPU thread per (node, direction) element, so every thread recomputes the node's macroscopic fields,
+        equilibrium, forcing and relaxation for the single population it writes - q times the necessary arithmetic. The
+        optimization barrier ends that fusion at the q populations, which XLA then computes as one multi-output fusion with
+        one thread per node. The values are unchanged (same operations, same precision); only the kernel boundary moves.
+
+        Parameters
+        ----------
+        populations (jax.numpy.ndarray or sequence of jax.numpy.ndarray): Either a (..., q) array or a sequence of q arrays
+            of shape (...), already cast to the output precision.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): The populations stacked along the last axis.
+        """
+        if not isinstance(populations, (list, tuple)):
+            populations = [populations[..., i] for i in range(populations.shape[-1])]
+        return jnp.stack(lax.optimization_barrier(tuple(populations)), axis=-1)
+
+    def sparse_collision_terms(self, collision_matrix):
+        """
+        Sparse per-direction columns of a fused MRT collision matrix K = M @ S @ M_inv, used by the symbolic MRT collisions.
+
+        Column j lists the (input direction i, coefficient K[i, j]) pairs with a nonzero coefficient. Coefficients are kept in
+        the compute precision (float64 for f64 policies, float32 otherwise). Entries that agree up to roundoff (relative
+        1e-12, the noise left by the numerical inverse of M) are first set to one common value: K has only a handful of
+        distinct values, and identical coefficients let XLA share the products difference_i * K[i, j] across output
+        directions, which roundoff-distinct float64 coefficients would prevent.
+
+        Parameters
+        ----------
+        collision_matrix (array-like): The (q, q) fused collision matrix (or any (n_in, n_out) matrix applied as x @ A).
+
+        Returns
+        -------
+        (tuple): n_out tuples of (input_direction, coefficient) pairs, one per output column.
+        """
+        coefficient_dtype = np.float64 if self.precision_policy.compute_dtype == jnp.float64 else np.float32
+        matrix = np.asarray(collision_matrix)
+        flat = matrix.ravel().astype(np.float64)
+        order = np.argsort(flat, kind="stable")
+        snapped = flat.copy()
+        start = 0
+        for k in range(1, flat.size + 1):
+            if k == flat.size or not np.isclose(flat[order[k]], flat[order[start]], rtol=1e-12, atol=0.0):
+                group = order[start:k]
+                if group.size > 1:
+                    snapped[group] = flat[group].mean()
+                start = k
+        matrix = snapped.reshape(matrix.shape)
+        n_in, n_out = matrix.shape
+        return tuple(
+            tuple(
+                (input_direction, coefficient_dtype(matrix[input_direction, output_direction]))
+                for input_direction in range(n_in)
+                if not np.isclose(matrix[input_direction, output_direction], 0.0, atol=1e-7)
+            )
+            for output_direction in range(n_out)
+        )
 
     def get_force(self):
         """
