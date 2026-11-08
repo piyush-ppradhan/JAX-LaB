@@ -32,15 +32,21 @@ logger = logging.getLogger(__name__)
 class PoreDoublet(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
         rho_tree = []
+        # The inlet and outlet impose the invading fluid (EquilibriumBC); start with a thin band of it next to both, joined
+        # to the displaced fluid by a tanh profile, instead of a one-cell jump against the boundary nodes, which the
+        # fourth-order pseudopotential gradient turns into a divergence within the first steps
+        xc = np.arange(self.nx)[:, None, None] + np.zeros((1, self.ny, 1))
+        transition_width, band = 2.0, 4
+        invading_share = 0.5 * (1.0 - np.tanh((xc - band) / transition_width)) + 0.5 * (1.0 + np.tanh((xc - (self.nx - 1 - band)) / transition_width))
 
         # Invading fluid
-        rho = (1 - fraction) * rho_t * np.ones((self.nx, self.ny, 1))
+        rho = ((1 - fraction) + (2 * fraction - 1) * invading_share) * rho_t
         rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
         rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # Displaced fluid
-        rho = fraction * rho_t * np.ones((self.nx, self.ny, 1))
+        rho = (fraction - (2 * fraction - 1) * invading_share) * rho_t
         rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
         rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)

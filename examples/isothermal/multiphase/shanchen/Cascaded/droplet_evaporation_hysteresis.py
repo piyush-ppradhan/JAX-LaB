@@ -261,6 +261,9 @@ if __name__ == "__main__":
         "ny": ny,
         "nz": nz,
         "g_kkprime": g_kkprime,
+        # Scale factor of the pseudopotential (psi = sqrt(2 (lambda_^2 p - cs2 rho) / g)); 1.0 matches this example's
+        # compute_potential, which applies no pressure scaling
+        "lambda_": [1.0],
         "EOS": eos,
         "M": [M],
         "s_0": s_0,

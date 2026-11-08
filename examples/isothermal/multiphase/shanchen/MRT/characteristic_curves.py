@@ -7,7 +7,7 @@ The spherepack geometry used here is taken from Digital Rocks Portal and has por
 """
 
 from jax_lab.core.lattice import LatticeD3Q19
-from jax_lab.core.shanchen.multiphase import MultiphaseBGK
+from jax_lab.core.shanchen.multiphase import MultiphaseMRT
 from jax_lab.core.boundary_conditions import BounceBack, EquilibriumBC
 from jax_lab.core.utils import save_fields_vtk
 from jax_lab.render import Light, Scene, SurfaceRendering
@@ -16,6 +16,8 @@ import h5py
 
 from functools import partial
 import os
+import shutil
+import urllib.request
 import subprocess
 import numpy as np
 import jax.numpy as jnp
@@ -31,10 +33,12 @@ logger = logging.getLogger(__name__)
 
 
 # Multi-component droplet simulation to tune fluid-fluid interaction parameters and surface tension
-class Droplet3D(MultiphaseBGK):
+class Droplet3D(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
         rho_tree = []
-        dist = (x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2 - r**2
+        # Distance from the droplet center (the tanh profile needs a distance, not a squared distance minus r**2, which
+        # collapses the interface to a fraction of a cell and makes the run diverge)
+        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2)
 
         # Water
         rho_inside = rho_w_l
@@ -125,10 +129,12 @@ class Droplet3D(MultiphaseBGK):
 
 
 # Multi-component droplet on wall example to tune contact angle
-class DropletOnWall3D(MultiphaseBGK):
+class DropletOnWall3D(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
         rho_tree = []
-        dist = (x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2 - r**2
+        # Distance from the droplet center (the tanh profile needs a distance, not a squared distance minus r**2, which
+        # collapses the interface to a fraction of a cell and makes the run diverge)
+        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2)
 
         rho_inside = rho_w_l
         rho_outside = rho_w_g
@@ -211,7 +217,7 @@ class DropletOnWall3DGeometric(DropletOnWall3D):
         self.BCs[1].append(BounceBack(tuple(ind.T), self.grid_info, self.precision_policy, theta_a[tuple(ind.T)]))
 
 
-class PorousMedia(MultiphaseBGK):
+class PorousMedia(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
         rho_tree = []
         if simulation == "imbibition":
@@ -508,6 +514,28 @@ class PorousMediaGeometric(PorousMedia):
             self.BCs[1].append(BounceBack(wall, self.grid_info, self.precision_policy, theta_a[wall]))
 
 
+def download_geometry(url, path):
+    """
+    Download the geometry file at url to path (creating its folder), unless path already exists. The file is written to a
+    temporary name and renamed when complete, so an interrupted download never leaves a partial file behind, and an HTML
+    response (an error page served instead of the data file) is rejected.
+    """
+    if os.path.exists(path):
+        return path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    temporary_path = path + ".part"
+    try:
+        with urllib.request.urlopen(url) as response, open(temporary_path, "wb") as out:
+            if "text/html" in response.headers.get("Content-Type", ""):
+                raise RuntimeError(f"Expected a data file from {url}, got an HTML page")
+            shutil.copyfileobj(response, out)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+    return path
+
+
 if __name__ == "__main__":
     nx = 256
     ny = 256
@@ -518,6 +546,31 @@ if __name__ == "__main__":
     z = np.arange(nz, dtype=np.float32)[None, None, :]
 
     precision = "f32/f32"
+
+    # D3Q19 orthogonal moment basis (same as the other 3D MRT multiphase examples). MRT, with separate relaxation of the
+    # energy, flux and ghost moments, keeps the droplet-on-sphere stage stable where BGK (omega = 1) diverges next to the solid
+    e = LatticeD3Q19().c.T
+    en = np.linalg.norm(e, axis=1)
+    M = np.zeros((19, 19))
+    M[0, :] = en**0
+    M[1, :] = 19 * en**2 - 30
+    M[2, :] = (21 * en**4 - 53 * en**2 + 24) / 2
+    M[3, :] = e[:, 0]
+    M[4, :] = (5 * en**2 - 9) * e[:, 0]
+    M[5, :] = e[:, 1]
+    M[6, :] = (5 * en**2 - 9) * e[:, 1]
+    M[7, :] = e[:, 2]
+    M[8, :] = (5 * en**2 - 9) * e[:, 2]
+    M[9, :] = 3 * e[:, 0] ** 2 - en**2
+    M[10, :] = (3 * en**2 - 5) * (3 * e[:, 0] ** 2 - en**2)
+    M[11, :] = e[:, 1] ** 2 - e[:, 2] ** 2
+    M[12, :] = (3 * en**2 - 5) * (e[:, 1] ** 2 - e[:, 2] ** 2)
+    M[13, :] = e[:, 0] * e[:, 1]
+    M[14, :] = e[:, 1] * e[:, 2]
+    M[15, :] = e[:, 0] * e[:, 2]
+    M[16, :] = (e[:, 1] ** 2 - e[:, 2] ** 2) * e[:, 0]
+    M[17, :] = (e[:, 2] ** 2 - e[:, 0] ** 2) * e[:, 1]
+    M[18, :] = (e[:, 0] ** 2 - e[:, 1] ** 2) * e[:, 2]
     g_kkprime = -0.06 * np.ones((2, 2))
     g_kkprime[0, 1] = 0.54
     g_kkprime[1, 0] = 0.54
@@ -547,7 +600,16 @@ if __name__ == "__main__":
             "nz": nz,
             "body_force": [0.0, 0.0, 0.0],
             "g_kkprime": g_kkprime,
-            "omega": [tau_w, tau_a],
+            "M": [M, M],
+            "s_rho": [0.0, 0.0],
+            "s_e": [0.8, 0.8],
+            "s_eta": [0.8, 0.8],
+            "s_j": [0.0, 0.0],
+            "s_q": [1.1, 1.1],
+            "s_pi": [1.0, 1.0],
+            "s_m": [1.0, 1.0],
+            "s_v": [1 / tau_w, 1 / tau_a],
+            "kappa": [0.0, 0.0],
             "precision": precision,
             "lambda_": [1.0, 1.0],
             "io_rate": 20000,
@@ -586,7 +648,16 @@ if __name__ == "__main__":
         "nz": nz,
         "body_force": [0.0, 0.0, 0.0],
         "g_kkprime": g_kkprime,
-        "omega": [1 / tau_w, 1 / tau_a],
+        "M": [M, M],
+        "s_rho": [0.0, 0.0],
+        "s_e": [0.8, 0.8],
+        "s_eta": [0.8, 0.8],
+        "s_j": [0.0, 0.0],
+        "s_q": [1.1, 1.1],
+        "s_pi": [1.0, 1.0],
+        "s_m": [1.0, 1.0],
+        "s_v": [1 / tau_w, 1 / tau_a],
+        "kappa": [0.0, 0.0],
         "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "lambda_": [1.0, 1.0],
@@ -602,7 +673,9 @@ if __name__ == "__main__":
 
     # Saturation curves
     buffer = 8
-    geometry = h5py.File("assets/374_05_03_256.mat", "r")
+    # Propped fracture embedded in a Finney pack (Digital Porous Media portal, DRP-374), downloaded on first use into ./assets
+    geometry_url = "https://web.corral.tacc.utexas.edu/digitalporousmedia/DRP-374/5.%20Fractures%20with%20Permeable%20Walls/3.%20Propped%20Fracture%20Embedded%20in%20a%20FinneyPack/374_05_03_256.mat"
+    geometry = h5py.File(download_geometry(geometry_url, "./assets/374_05_03_256.mat"), "r")
     _bin = np.array(geometry["bin"], dtype=int)
     # _bin = _bin[0:nx, 0:ny, 0:nz]
     nx = nx + 2 * buffer
@@ -641,7 +714,16 @@ if __name__ == "__main__":
         "nz": nz,
         "g_kkprime": g_kkprime,
         "body_force": [0.0, 0.0, 0.0],
-        "omega": [1.0, 1.0],
+        "M": [M, M],
+        "s_rho": [0.0, 0.0],
+        "s_e": [0.8, 0.8],
+        "s_eta": [0.8, 0.8],
+        "s_j": [0.0, 0.0],
+        "s_q": [1.1, 1.1],
+        "s_pi": [1.0, 1.0],
+        "s_m": [1.0, 1.0],
+        "s_v": [1.0, 1.0],
+        "kappa": [0.0, 0.0],
         "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "lambda_": [1.0, 1.0],

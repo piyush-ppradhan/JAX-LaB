@@ -34,7 +34,9 @@ class Droplet2D(MultiphaseMRT):
         x, y = np.meshgrid(x, y)
 
         rho_tree = []
-        dist = (x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 - r**2
+        # Distance from the droplet center (the tanh profile needs a distance, not a squared distance minus r**2, which
+        # collapses the interface to a fraction of a cell and makes the run diverge)
+        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2)
 
         # Injected fluid
         rho_inside = (1 - fraction) * rho_t

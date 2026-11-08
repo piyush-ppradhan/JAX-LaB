@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 # disable JIt compilation
 
-jax.config.update("jax_array", True)
 
 # config.update("jax_default_matmul_precision", "float32")
 
@@ -56,8 +55,8 @@ class Car(KBCSim):
         time_start = time()
         stl_filename = "stl-files/DrivAer-Notchback.stl"
         car_length_lbm_unit = self.nx / 4
-        car_voxelized, pitch = self.voxelize_stl(stl_filename, car_length_lbm_unit)
-        car_matrix = car_voxelized.matrix
+        # voxelize_stl already returns the boolean voxel matrix
+        car_matrix, pitch = self.voxelize_stl(stl_filename, car_length_lbm_unit)
         logger.info("Voxelization time for pitch={}: {} seconds".format(pitch, time() - time_start))
         logger.info(f"Car matrix shape: {car_matrix.shape}")
 

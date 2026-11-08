@@ -1,4 +1,6 @@
 import os
+import shutil
+import urllib.request
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["JAX_ENABLE_X64"] = "1"
@@ -106,12 +108,36 @@ class PorousMedia(MultiphaseBGK):
         return tree_map(lambda rho, psi, nt: rho / 3 + 1.5 * psi * nt, rho_tree, psi_tree, list(vmap(f, in_axes=(0,))(self.g_kkprime)))
 
 
+def download_geometry(url, path):
+    """
+    Download the geometry file at url to path (creating its folder), unless path already exists. The file is written to a
+    temporary name and renamed when complete, so an interrupted download never leaves a partial file behind, and an HTML
+    response (an error page served instead of the data file) is rejected.
+    """
+    if os.path.exists(path):
+        return path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    temporary_path = path + ".part"
+    try:
+        with urllib.request.urlopen(url) as response, open(temporary_path, "wb") as out:
+            if "text/html" in response.headers.get("Content-Type", ""):
+                raise RuntimeError(f"Expected a data file from {url}, got an HTML page")
+            shutil.copyfileobj(response, out)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+    return path
+
+
 if __name__ == "__main__":
     g_kkprime = 0 * np.ones((1, 1))
     nx = 480
     ny = 300
     nz = 300
-    geometry = h5py.File("./assets/574_05_480.mat", "r")
+    # Digital Porous Media portal (DRP-372, sample 57_05), downloaded on first use into ./assets
+    geometry_url = "https://web.corral.tacc.utexas.edu/digitalporousmedia/DRP-372/57_05/57_05_480/57_05_480.mat"
+    geometry = h5py.File(download_geometry(geometry_url, "./assets/57_05_480.mat"), "r")
     binary = np.array(geometry["bin"], dtype=int)
 
     # Obtained from https://github.com/cageo/Krzikalla-2012/

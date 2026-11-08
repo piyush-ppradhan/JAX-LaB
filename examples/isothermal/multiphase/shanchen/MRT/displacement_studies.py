@@ -12,6 +12,8 @@ London. Series A: Mathematical, Physical and Engineering Sciences 360, 437–451
 """
 
 import os
+import shutil
+import urllib.request
 import subprocess
 import numpy as np
 
@@ -392,6 +394,28 @@ class PorousMediaGeometric(PorousMedia):
         self.BCs[1].append(BounceBack(wall, self.grid_info, self.precision_policy, theta_c[wall]))
 
 
+def download_geometry(url, path):
+    """
+    Download the geometry file at url to path (creating its folder), unless path already exists. The file is written to a
+    temporary name and renamed when complete, so an interrupted download never leaves a partial file behind, and an HTML
+    response (an error page served instead of the data file) is rejected.
+    """
+    if os.path.exists(path):
+        return path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    temporary_path = path + ".part"
+    try:
+        with urllib.request.urlopen(url) as response, open(temporary_path, "wb") as out:
+            if "text/html" in response.headers.get("Content-Type", ""):
+                raise RuntimeError(f"Expected a data file from {url}, got an HTML page")
+            shutil.copyfileobj(response, out)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+    return path
+
+
 if __name__ == "__main__":
     nx = 150
     ny = 150
@@ -565,7 +589,10 @@ if __name__ == "__main__":
     ny = 256
     nz = 256
 
-    geometry = h5py.File("./assets/374_09_03_256.mat", "r")
+    # Fractured packing of randomly placed overlapping spheres, 19% porosity (Digital Porous Media portal, DRP-374), downloaded on
+    # first use into ./assets
+    geometry_url = "https://web.corral.tacc.utexas.edu/digitalporousmedia/DRP-374/9.%20Fractured%20Packing%20of%20Randomly%20Placed%20Overlapping%20Spheres/3.%20Sample%20with%2019%25%20Porosity/374_09_03_256.mat"
+    geometry = h5py.File(download_geometry(geometry_url, "./assets/374_09_03_256.mat"), "r")
     _bin = np.array(geometry["bin"], dtype=int)
     ind = np.where(_bin == 1.0)
     idx = np.zeros((len(ind[0]), 3), dtype=int)

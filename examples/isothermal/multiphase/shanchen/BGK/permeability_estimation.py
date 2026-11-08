@@ -5,6 +5,8 @@ check in the output_data function, similar to how pressure difference and error 
 """
 
 import os
+import shutil
+import urllib.request
 import subprocess
 import operator
 import numpy as np
@@ -20,22 +22,11 @@ from jax.tree import reduce
 from jax.tree import map as tree_map
 import jax.numpy as jnp
 import h5py
-from urllib.request import urlretrieve
 
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 logger = logging.getLogger(__name__)
-
-
-# Geometry downloaded from Digital Rocks Portal
-# https://www.digitalrocksportal.org/projects/372
-
-urlretrieve(
-    "https://www.digitalrocksportal.org/projects/372/origin_data/2165/",
-    "374_03_09_256.mat",
-)
-subprocess.run(["mv", "374_03_09_256.mat", "./assets"], check=True)
 
 
 # config.update("jax_default_matmul_precision", "float32")
@@ -139,13 +130,38 @@ class PorousMediaGeometric(PorousMedia):
         self.BCs[0].append(BounceBack(wall, self.grid_info, self.precision_policy, theta[wall]))
 
 
+def download_geometry(url, path):
+    """
+    Download the geometry file at url to path (creating its folder), unless path already exists. The file is written to a
+    temporary name and renamed when complete, so an interrupted download never leaves a partial file behind, and an HTML
+    response (an error page served instead of the data file) is rejected.
+    """
+    if os.path.exists(path):
+        return path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    temporary_path = path + ".part"
+    try:
+        with urllib.request.urlopen(url) as response, open(temporary_path, "wb") as out:
+            if "text/html" in response.headers.get("Content-Type", ""):
+                raise RuntimeError(f"Expected a data file from {url}, got an HTML page")
+            shutil.copyfileobj(response, out)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+    return path
+
+
 if __name__ == "__main__":
     precision = "f32/f32"
     g_kkprime = 0 * np.ones((1, 1))
     nx = 256
     ny = 256
     nz = 256
-    geometry = h5py.File("./assets/374_09_03_256.mat", "r")
+    # Fractured packing of randomly placed overlapping spheres, 19% porosity (Digital Porous Media portal, DRP-374), downloaded on
+    # first use into ./assets
+    geometry_url = "https://web.corral.tacc.utexas.edu/digitalporousmedia/DRP-374/9.%20Fractured%20Packing%20of%20Randomly%20Placed%20Overlapping%20Spheres/3.%20Sample%20with%2019%25%20Porosity/374_09_03_256.mat"
+    geometry = h5py.File(download_geometry(geometry_url, "./assets/374_09_03_256.mat"), "r")
     binary = np.array(geometry["bin"], dtype=int)
 
     theta = (np.pi / 2) * np.ones((nx, ny, nz, 1))
