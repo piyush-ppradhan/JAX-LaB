@@ -11,7 +11,6 @@ from jax import jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from ..base import lattice_density_momentum
 from ..thermal import Thermal
 from .multiphase import Multiphase, MultiphaseBGK, MultiphaseMRT
 
@@ -176,21 +175,24 @@ class MultiphaseThermal(Thermal):
             # The interaction force is computed once and shared with the collision of this step (same populations and
             # temperature, so identical values), instead of once for the velocity here and again in the collision
             force_tree = fluid.compute_force(rho_tree, T=T)
-            # Multiphase.macroscopic_velocity with that force
-            u_tree = [
-                lattice_density_momentum(fluid.lattice.c, f)[1] / rho + 0.5 * force / rho
-                for f, rho, force in zip(f_compute_tree, rho_tree, force_tree, strict=True)
-            ]
-            # The fluid step and its collision are traced inline, so the shared force belongs to this trace
+            # The fluid step and its collision are traced inline, so the shared force belongs to this trace. The collision
+            # also hands back the density and force-corrected velocity it computes (Multiphase.macroscopic_velocity with that
+            # force, same operations), so the populations are not read again here for the temperature equation
             fluid_step = type(fluid).step.__wrapped__
             collision = type(fluid).collision.__wrapped__
+            exported = []
             fluid._shared_force = force_tree
+            fluid._export_macroscopic = exported
             fluid.collision = lambda fin_tree, T=None: collision(fluid, fin_tree, T=T)
             try:
                 f_poststreaming_tree, f_postcollision_tree = fluid_step(fluid, f_poststreaming_tree, timestep, return_fpost, T)
             finally:
                 fluid._shared_force = None
+                fluid._export_macroscopic = None
                 del fluid.collision
+            if len(exported) != 1:
+                raise RuntimeError("Expected the fused collision to export its macroscopic fields exactly once per step.")
+            _, u_tree = exported[0]
         else:
             u_tree = fluid.macroscopic_velocity(f_compute_tree, rho_tree, T=T)
             f_poststreaming_tree, f_postcollision_tree = fluid.step(f_poststreaming_tree, timestep, return_fpost, T)

@@ -102,6 +102,9 @@ class Multiphase(LBMBase):
     # same populations and temperature; the fused collisions use it instead of computing it again. Only set while that
     # solver traces the fluid step inline (see MultiphaseThermal._shares_fluid_force); None otherwise.
     _shared_force = None
+    # List a coupled solver (MultiphaseThermal.step) sets while tracing the fluid step inline: the fused collisions append the
+    # density and force-corrected velocity they compute anyway, so the coupled solver does not read the populations again
+    _export_macroscopic = None
 
     def __init__(self, **kwargs):
         self.n_components = kwargs.get("n_components")
@@ -1259,6 +1262,9 @@ class Multiphase(LBMBase):
         right = self.send_left(field[:halo], "x")
         padded = jnp.concatenate((left, field, right), axis=0)
         padded = jnp.pad(padded, ((0, 0),) + ((halo, halo),) * (self.dim - 1) + ((0, 0),), mode="wrap")
+        # Materialize the padded field once: the gradient is fused into its consumer (the collision), and without the barrier
+        # XLA would recompute the field (psi, from the density, from the populations) once per stencil neighbor
+        padded = jax.lax.optimization_barrier(padded)
         spatial = field.shape[:-1]
 
         gradient = [None] * self.dim
@@ -1310,6 +1316,20 @@ class Multiphase(LBMBase):
                 assert bc.implementation_step in ["PostStreaming", "PostCollision"]
                 bc.create_local_mask_and_normal_arrays(grid_mask)
             logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
+
+    def _export_force_corrected_fields(self, rho_scalar_tree, velocity_tree, force_tree):
+        """
+        Hand the collision's density and force-corrected velocity to a coupled solver (see _export_macroscopic):
+        u = sum_i c_i f_i / rho + F / (2 rho), with the same operations as Multiphase.macroscopic_velocity.
+        """
+        if self._export_macroscopic is None:
+            return
+        rho_tree = [rho[..., None] for rho in rho_scalar_tree]
+        u_tree = [jnp.stack(velocity, axis=-1) + 0.5 * force / rho for velocity, force, rho in zip(velocity_tree, force_tree, rho_tree, strict=True)]
+        # Materialize the velocity once: otherwise XLA fuses this cheap expression of the populations into each of its consumers
+        # (the temperature Runge-Kutta stages), reading the populations again in every one
+        u_tree = list(jax.lax.optimization_barrier(tuple(u_tree)))
+        self._export_macroscopic.append((rho_tree, u_tree))
 
     def _make_bounceback_mask(self):
         """One full-way BounceBack mask (or None) per component (see LBMBase._bounceback_mask_for)."""
@@ -2826,7 +2846,10 @@ class MultiphaseBGK(Multiphase):
         ]
         rho_tree = [rho[..., None] for rho in rho_scalar_tree]
         F_tree = self._shared_force if self._shared_force is not None else self.compute_force(rho_tree, T=T)
-        F_tree = list(jax.lax.optimization_barrier(tuple(F_tree)))
+        # No barrier on the force: XLA fuses the psi-gradient stencil into the collision, which then reads the (materialized,
+        # padded) psi instead of a stored 3-component force (see _gradient_stencil_m and MultiphaseMRT.collision)
+        F_tree = list(F_tree)
+        self._export_force_corrected_fields(rho_scalar_tree, velocity_tree, F_tree)
         fout_tree = []
         for channels, rho, velocity, force, omega, mask in zip(
             channels_tree, rho_scalar_tree, velocity_tree, F_tree, self.omega, self.bounceback_mask, strict=True
@@ -3280,10 +3303,12 @@ class MultiphaseMRT(Multiphase):
                 surface_psi_tree = psi_tree
         else:
             F_tree = self.compute_force(rho_tree, T=T)
-        # Compute the interaction force (the psi-gradient stencil) in its own kernel. Fused into the collision it pushes
-        # the kernel to the 255-register limit (spilling) on some shard shapes; split, the values are identical and
-        # e.g. 2-GPU droplet runs are 10-37% faster.
-        F_tree = list(jax.lax.optimization_barrier(tuple(F_tree)))
+        # The psi-gradient stencil is fused into the collision: it reads the padded psi, which _gradient_stencil_m materializes
+        # once, instead of the force being written to memory and read back (3 values per node). Without that psi barrier XLA
+        # recomputed psi - and the density and populations behind it - for every stencil neighbor, which is why the force used
+        # to be split into its own kernel. Values are identical; 2-GPU droplet runs are 11-26% faster than with the split.
+        F_tree = list(F_tree)
+        self._export_force_corrected_fields(rho_scalar_tree, velocity_tree, F_tree)
 
         # Surface-tension source in population space, per component: list of q fields, or None
         surface_tree = [None] * self.n_components
