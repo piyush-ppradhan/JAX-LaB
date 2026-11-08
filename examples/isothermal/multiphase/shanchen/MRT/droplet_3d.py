@@ -194,7 +194,7 @@ if __name__ == "__main__":
         "kappa": [0.0],
         "precision": precision,
         "io_rate": 10000,
-        "compute_MLUPS": True,
+        "compute_MLUPS": False,
         "print_info_rate": 10000,
         "checkpoint_rate": -1,
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
@@ -203,4 +203,4 @@ if __name__ == "__main__":
 
     subprocess.run("rm -rf output*/", shell=True, check=True)
     sim = Droplet3D(**kwargs)
-    sim.run(1000)
+    sim.run(30000)
