@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as orb
-from jax import jit, shard_map, vmap
+from jax import jit, shard_map
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import NamedSharding, PartitionSpec
 
@@ -705,101 +705,6 @@ class Multiphase(LBMBase):
             np.asarray(wx * (1.0 - wy) * wz, dtype=compute_dtype),
             np.asarray((1.0 - wx) * wy * wz, dtype=compute_dtype),
             np.asarray(wx * wy * wz, dtype=compute_dtype),
-        )
-
-    def _build_geometric_3d_lattice_data(self, indices, normals, solid_mask):
-        """
-        Build lattice-node stencil data for the 3D geometric wetting scheme.
-
-        Parameters
-        ----------
-        indices (numpy.ndarray): Boundary node coordinates with shape (n, 3).
-
-        normals (numpy.ndarray): Unit normals pointing from wall nodes toward fluid nodes.
-
-        solid_mask (numpy.ndarray): Boolean mask with True on boundary nodes.
-
-        Returns
-        -------
-        active (numpy.ndarray): Boolean mask with True for nodes that have a valid normal stencil.
-
-        normal_2_indices (tuple): JAX index tuple for the second fluid node along the selected normal direction.
-
-        tangent_indices (tuple): JAX index tuples for up to two opposite tangent node pairs around the first normal node.
-
-        tangent_pair_valid (jax.numpy.ndarray): Boolean mask indicating which tangent pairs are valid for each active node.
-
-        Notes
-        -----
-        This helper constructs the older lattice-node 3D stencil. The active 3D geometric wetting path uses
-        _build_geometric_3d_characteristic_data to sample multiple off-lattice characteristic directions.
-        """
-        lattice_directions = np.array(self.lattice.c, dtype=np.int64).T
-        nonzero_direction_indices = np.flatnonzero(np.linalg.norm(lattice_directions, axis=1) > 0)
-        nonzero_directions = lattice_directions[nonzero_direction_indices]
-        unit_directions = nonzero_directions / np.linalg.norm(nonzero_directions, axis=1, keepdims=True)
-
-        normal_2_indices = np.zeros_like(indices)
-        tangent_indices = [np.zeros_like(indices) for _ in range(4)]
-        active = np.zeros((indices.shape[0],), dtype=bool)
-        tangent_pair_valid = np.zeros((2, indices.shape[0]), dtype=bool)
-
-        for i, (index, normal) in enumerate(zip(indices, normals)):
-            fluid_direction = None
-            sorted_direction_indices = np.argsort(-(unit_directions @ normal))
-            for direction_index in sorted_direction_indices:
-                direction = nonzero_directions[direction_index]
-                unit_direction = unit_directions[direction_index]
-                if unit_direction @ normal <= 1e-12:
-                    break
-                normal_1 = index + direction
-                normal_2 = index + 2 * direction
-                in_bounds_1 = (0 <= normal_1[0] < self.nx) and (0 <= normal_1[1] < self.ny) and (0 <= normal_1[2] < self.nz)
-                in_bounds_2 = (0 <= normal_2[0] < self.nx) and (0 <= normal_2[1] < self.ny) and (0 <= normal_2[2] < self.nz)
-                if in_bounds_1 and in_bounds_2 and not solid_mask[tuple(normal_1)] and not solid_mask[tuple(normal_2)]:
-                    fluid_direction = direction
-                    normal_2_indices[i] = normal_2
-                    active[i] = True
-                    break
-
-            if fluid_direction is None:
-                continue
-
-            normal_1 = index + fluid_direction
-            tangent_candidates = nonzero_directions[nonzero_directions @ fluid_direction == 0]
-            tangent_candidates = tangent_candidates[np.linalg.norm(tangent_candidates, axis=1) > 0]
-            tangent_scores = np.abs(tangent_candidates @ normal)
-            sorted_tangents = tangent_candidates[np.argsort(tangent_scores)]
-            selected_tangents = []
-            for tangent in sorted_tangents:
-                if any(np.all(tangent == selected) or np.all(tangent == -selected) for selected in selected_tangents):
-                    continue
-                plus = normal_1 + tangent
-                minus = normal_1 - tangent
-                in_bounds_plus = (0 <= plus[0] < self.nx) and (0 <= plus[1] < self.ny) and (0 <= plus[2] < self.nz)
-                in_bounds_minus = (0 <= minus[0] < self.nx) and (0 <= minus[1] < self.ny) and (0 <= minus[2] < self.nz)
-                if in_bounds_plus and in_bounds_minus and not solid_mask[tuple(plus)] and not solid_mask[tuple(minus)]:
-                    pair_index = len(selected_tangents)
-                    selected_tangents.append(tangent)
-                    tangent_indices[2 * pair_index][i] = plus
-                    tangent_indices[2 * pair_index + 1][i] = minus
-                    tangent_pair_valid[pair_index, i] = True
-                    if len(selected_tangents) == 2:
-                        break
-
-            for pair_index in range(len(selected_tangents), 2):
-                tangent_indices[2 * pair_index][i] = normal_1
-                tangent_indices[2 * pair_index + 1][i] = normal_1
-
-        if not np.any(active):
-            empty = tuple(jnp.array([], dtype=jnp.int32) for _ in range(3))
-            return active, empty, (), jnp.array([], dtype=jnp.bool_)
-
-        return (
-            active,
-            tuple(jnp.array(index, dtype=jnp.int32) for index in normal_2_indices[active].T),
-            tuple(tuple(jnp.array(index, dtype=jnp.int32) for index in point_indices[active].T) for point_indices in tangent_indices),
-            jnp.array(tangent_pair_valid[:, active], dtype=jnp.bool_),
         )
 
     def _build_geometric_gpu_ray_kernel(self, ray_count):

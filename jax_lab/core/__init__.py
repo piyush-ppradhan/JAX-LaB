@@ -18,7 +18,6 @@ from .shanchen import (
     VanderWaals,
 )
 from .thermal import Thermal
-from .unit import Unit
 from .vof import VoF, VoFBGK, VoFMRT, VoFOpenBoundary
 
 __all__ = [
@@ -45,7 +44,6 @@ __all__ = [
     "RedlichKwong",
     "RedlichKwongSoave",
     "Thermal",
-    "Unit",
     "VanderWaals",
     "VoF",
     "VoFBGK",

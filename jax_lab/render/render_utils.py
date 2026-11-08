@@ -284,7 +284,6 @@ def _shadow_visibility(
         start = positions + normals * (1.5 * minimum_spacing)
         displacement = light_position - start
         distance = jnp.linalg.norm(displacement, axis=-1)
-        direction = displacement / jnp.maximum(distance[..., None], 1.0e-8)
         upper = origin + spacing * (jnp.asarray(field.shape, dtype=spacing.dtype) - 1.0)
 
         def shadow_step(index, occluded):

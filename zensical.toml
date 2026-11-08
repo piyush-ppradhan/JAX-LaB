@@ -24,7 +24,6 @@ nav = [
     { "Equations of State" = "eos.md" },
     { "Lattice" = "lattice.md" },
     { "Precision Policy" = "precision_policy.md" },
-    { "Unit Conversion" = "unit.md" },
     { "Utilities" = "utils.md" },
   ] },
   { "Rendering" = "rendering.md" },

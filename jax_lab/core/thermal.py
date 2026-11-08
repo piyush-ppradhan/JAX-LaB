@@ -9,7 +9,6 @@ Physics of Fluids 32, 103312 (2020).
 """
 
 import logging
-import operator
 import time
 import warnings
 from functools import partial
@@ -21,7 +20,6 @@ import orbax.checkpoint as orb
 from jax import jit, shard_map
 from jax.sharding import PartitionSpec
 from jax.tree import map as tree_map
-from jax.tree import reduce
 from jax.experimental.multihost_utils import process_allgather
 
 from .models import MRTSim

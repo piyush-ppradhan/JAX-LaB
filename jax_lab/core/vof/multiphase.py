@@ -791,7 +791,6 @@ class VoF(LBMBase):
         numbers of interface and neighbor cells over all shards.
         """
         dtype = self.precision_policy.compute_dtype
-        spatial = flags.shape[:-1]
         rest = np.asarray(self.lattice.w, dtype=np.float64)
         # The dense pass reads its own (barrier) copy of the cell types: sharing them with the band-size reduction below, XLA fuses both into
         # one kernel emitted as a far slower reduction

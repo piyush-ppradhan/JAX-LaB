@@ -1,7 +1,6 @@
 """Singlephase lattice Boltzmann simulation structure, later modified for multiphase implementation."""
 
 import logging
-import os
 import time
 import warnings
 from contextlib import contextmanager
@@ -23,7 +22,6 @@ from .boundary_conditions import (
     BounceBack,
     BounceBackHalfway,
     EquilibriumBC,
-    Regularized,
     ZouHe,
 )
 from .precision_policy import PrecisionPolicy

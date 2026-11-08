@@ -1116,16 +1116,6 @@ def live_volume_rendering(timestep, field):
         plt.pause(0.1)
 
 
-def live_volume_randering(timestep, field):
-    """Call :func:`live_volume_rendering` using the deprecated spelling."""
-    warnings.warn(
-        "live_volume_randering is deprecated; use live_volume_rendering instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return live_volume_rendering(timestep, field)
-
-
 def save_BCs_vtk(timestep, BCs, grid_info, output_dir="."):
     """
     Save boundary conditions as VTK format to the specified directory.
