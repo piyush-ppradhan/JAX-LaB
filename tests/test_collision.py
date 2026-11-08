@@ -1,25 +1,49 @@
-"""Taylor-Green vortex regression tests for BGK and MRT collision models."""
+"""Collision-model tests: Taylor-Green vortex decay (single-phase and multiphase BGK/MRT), the single-phase cascaded
+collision, the fused multiphase cascaded force evaluation, the fused single-phase MRT collision with forcing, and
+single-phase BGK/MRT exact-difference forcing."""
 
 import os
 import shutil
 from pathlib import Path
 
-# os.environ.setdefault("JAX_PLATFORMS", "cpu")
-
 import jax
-
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.tree import map as tree_map
 
 from jax_lab.core.shanchen.eos import VanderWaals
 from jax_lab.core.lattice import LatticeD2Q9, LatticeD3Q19
-from jax_lab.core.models import BGKSim, MRTSim
-from jax_lab.core.shanchen.multiphase import MultiphaseBGK, MultiphaseMRT
+from jax_lab.core.models import BGKSim, CLBMSim, MRTSim
+from jax_lab.core.shanchen.multiphase import MultiphaseBGK, MultiphaseCascade, MultiphaseMRT
 
 
+@pytest.fixture(autouse=True)
+def _enable_x64():
+    """Enable x64 for each test (the f64 tests need it; other test modules may switch it off after import)."""
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    yield
+    jax.config.update("jax_enable_x64", previous)
+
+
+# Moment basis of the cascaded collision (D2Q9), shared by the single- and multiphase cascaded tests
+CASCADE_MATRIX = np.array([
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [0, 1, 0, -1, 0, 1, -1, -1, 1],
+    [0, 0, 1, 0, -1, 1, 1, -1, -1],
+    [0, 1, 1, 1, 1, 2, 2, 2, 2],
+    [0, 1, -1, 1, -1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, -1, 1, -1],
+    [0, 0, 0, 0, 0, 1, 1, -1, -1],
+    [0, 0, 0, 0, 0, 1, -1, -1, 1],
+    [0, 0, 0, 0, 0, 1, 1, 1, 1],
+])
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Taylor-Green vortex decay
+# ---------------------------------------------------------------------------------------------------------------------
 DOMAIN_CASES = (
     pytest.param(LatticeD2Q9, (16, 16, 0), 0.08, id="2d"),
     pytest.param(LatticeD3Q19, (10, 10, 10), 0.12, id="3d"),
@@ -227,3 +251,234 @@ def test_multiphase_collision_against_taylor_green(model_class, lattice_class, d
     _, analytical_velocity = _taylor_green_fields(domain, time=NUMBER_OF_UPDATES)
 
     assert _relative_velocity_error(velocity_tree[0], analytical_velocity) < maximum_error
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Single-phase cascaded collision
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def test_cascaded_collision_uses_relaxed_moments():
+    sim = CLBMSim(
+        lattice=LatticeD2Q9("f32/f32"),
+        omega=1.0,
+        nx=4,
+        ny=4,
+        nz=0,
+        precision="f32/f32",
+        io_rate=0,
+        print_info_rate=0,
+        checkpoint_rate=0,
+        M=CASCADE_MATRIX,
+        s_0=1.0,
+        s_1=1.0,
+        s_b=1.0,
+        s_2=1.0,
+        s_3=1.0,
+        s_4=1.0,
+    )
+    fin = jnp.broadcast_to(sim.w, (4, 4, sim.q)).at[..., 1].add(0.01)
+
+    fout = sim.collision(fin)
+
+    assert np.max(np.abs(np.asarray(fout - fin))) > 1e-4
+    np.testing.assert_allclose(np.asarray(jnp.sum(fout, axis=-1)), np.asarray(jnp.sum(fin, axis=-1)), atol=1e-5)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Multiphase cascaded collision: fused force/potential evaluation
+# ---------------------------------------------------------------------------------------------------------------------
+
+CASCADE_FORCE_DOMAIN = (12, 10)
+
+
+def _build_multiphase_cascade():
+    return MultiphaseCascade(
+        n_components=1,
+        lattice=LatticeD2Q9("f32/f32"),
+        nx=CASCADE_FORCE_DOMAIN[0],
+        ny=CASCADE_FORCE_DOMAIN[1],
+        nz=0,
+        g_kkprime=-np.ones((1, 1)),
+        body_force=[1e-6, -2e-6],
+        lambda_=[1.0],
+        EOS=VanderWaals(a=[9.0 / 49.0], b=[2.0 / 21.0], R=[1.0], T=0.8 * 0.5714285714),
+        M=[CASCADE_MATRIX],
+        s_0=[1.0],
+        s_1=[1.0],
+        s_b=[0.8],
+        s_2=[0.8],
+        s_3=[1.0],
+        s_4=[1.0],
+        sigma=[0.05],
+        precision="f32/f32",
+        io_rate=0,
+        print_info_rate=0,
+        checkpoint_rate=0,
+    )
+
+
+def _reference_cascade_collision(sim, fin_tree):
+    """Previous collision dataflow, which evaluated force once for velocity and again in apply_force."""
+    fin_tree = tree_map(lambda f: sim.precision_policy.cast_to_compute(f), fin_tree)
+    rho_tree, _ = sim.update_macroscopic(fin_tree)
+    u_tree = sim.macroscopic_velocity(fin_tree, rho_tree)
+    moment_tree = tree_map(lambda f, M: jnp.dot(f, M), fin_tree, sim.M)
+    central_tree = sim.compute_central_moment(moment_tree, u_tree)
+    equilibrium_tree = sim.compute_eq_central_moments(rho_tree)
+    relaxed_tree = tree_map(
+        lambda central, equilibrium, S: jnp.dot(central, jnp.eye(sim.q) - S) + jnp.dot(equilibrium, S),
+        central_tree,
+        equilibrium_tree,
+        sim.S,
+    )
+    forced_tree = sim.apply_force(relaxed_tree, rho_tree, u_tree)
+    shifted_tree = sim.compute_central_moment_inverse(forced_tree, u_tree)
+    return tree_map(lambda shifted, inverse: jnp.dot(shifted, inverse), shifted_tree, sim.M_inv)
+
+
+def test_cascade_collision_matches_previous_force_dataflow():
+    sim = _build_multiphase_cascade()
+    rng = np.random.default_rng(0)
+    fin_tree = [sim.assign_fields_sharded()[0] + jnp.asarray(rng.uniform(-1e-3, 1e-3, size=(*CASCADE_FORCE_DOMAIN, sim.q)), dtype=jnp.float32)]
+    # Both at full float32 matrix-product precision: at the default precision GPUs may evaluate jnp.dot in TF32 (~1e-3
+    # relative), which is coarser than this tolerance (the collision's moment sums are exact, but update_macroscopic uses dot).
+    with jax.default_matmul_precision("float32"):
+        actual = sim.collision(fin_tree)
+        expected = _reference_cascade_collision(sim, fin_tree)
+    assert np.max(np.abs(np.asarray(actual[0]) - np.asarray(expected[0]))) < 2e-6
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Fused single-phase MRT collision with forcing, against an unfused reference
+# ---------------------------------------------------------------------------------------------------------------------
+
+FUSED_MRT_DOMAIN = (10, 10, 10)
+FUSED_MRT_FORCE = (1e-4, -2e-4, 5e-5)
+
+
+class ForcedMRT3D(MRTSim):
+    def get_force(self):
+        return jnp.array(FUSED_MRT_FORCE, dtype=jnp.float64)
+
+
+def _build_forced_mrt_3d():
+    nx, ny, nz = FUSED_MRT_DOMAIN
+    lattice = LatticeD3Q19("f64/f64")
+    s = 1.0
+    return ForcedMRT3D(
+        lattice=lattice,
+        nx=nx,
+        ny=ny,
+        nz=nz,
+        precision="f64/f64",
+        M=_mrt_matrix(lattice),
+        s_rho=s,
+        s_e=s,
+        s_eta=s,
+        s_j=s,
+        s_q=s,
+        s_v=s,
+        s_pi=s,
+        s_m=s,
+    )
+
+
+def _reference_mrt_collision(sim, f):
+    """Independent unfused reference: m = f @ M; mout = -(m - meq) @ S + delta_meq; fout = f + mout @ M_inv."""
+    f = sim.precision_policy.cast_to_compute(f)
+    m = jnp.dot(f, sim.M)
+    rho, u = sim.update_macroscopic(f)
+    feq = sim.equilibrium(rho, u)
+    meq = jnp.dot(feq, sim.M)
+    mout = -jnp.dot(m - meq, sim.S)
+    mout = sim.apply_force(mout, meq, rho, u)
+    return sim.precision_policy.cast_to_output(f + jnp.dot(mout, sim.M_inv))
+
+
+def test_fused_symbolic_collision_matches_reference():
+    sim = _build_forced_mrt_3d()
+    f = sim.assign_fields_sharded()
+    rng = np.random.default_rng(0)
+    f = f + jnp.asarray(rng.uniform(-0.01, 0.01, size=f.shape))
+
+    actual = sim.collision(f)
+    expected = _reference_mrt_collision(sim, f)
+
+    assert np.max(np.abs(np.asarray(actual) - np.asarray(expected))) < 1e-9
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Single-phase BGK/MRT exact-difference (EDM) forcing, against two-equilibrium references
+# ---------------------------------------------------------------------------------------------------------------------
+
+EDM_DOMAIN = (8, 8, 0)
+EDM_FORCE = (0.001, -0.0005)
+
+
+class ForcedBGK2D(BGKSim):
+    def get_force(self):
+        return jnp.array(EDM_FORCE, dtype=jnp.float64)
+
+
+class ForcedMRT2D(MRTSim):
+    def get_force(self):
+        return jnp.array(EDM_FORCE, dtype=jnp.float64)
+
+
+def _random_edm_fields():
+    nx, ny = EDM_DOMAIN[0], EDM_DOMAIN[1]
+    rng = np.random.default_rng(0)
+    rho = jnp.asarray(rng.uniform(0.5, 2.0, size=(nx, ny, 1)))
+    u = jnp.asarray(rng.uniform(-0.02, 0.02, size=(nx, ny, 2)))
+    return rho, u
+
+
+def test_bgk_apply_force_matches_population_space_reference():
+    sim = ForcedBGK2D(lattice=LatticeD2Q9("f64/f64"), omega=1.0, nx=EDM_DOMAIN[0], ny=EDM_DOMAIN[1], nz=EDM_DOMAIN[2], precision="f64/f64")
+    rho, u = _random_edm_fields()
+    feq = sim.equilibrium(rho, u, cast_output=False)
+    rng = np.random.default_rng(1)
+    fout = feq + jnp.asarray(rng.uniform(-0.01, 0.01, size=feq.shape))
+
+    actual = sim.apply_force(fout, feq, rho, u)
+
+    du = sim.get_force()
+    feq_force = sim.equilibrium(rho, u + du, cast_output=False)
+    expected = fout + feq_force - feq
+
+    assert np.max(np.abs(np.asarray(actual) - np.asarray(expected))) < 1e-12
+
+
+def test_mrt_apply_force_matches_moment_space_reference():
+    lattice = LatticeD2Q9("f64/f64")
+    s = 1.0
+    sim = ForcedMRT2D(
+        lattice=lattice,
+        nx=EDM_DOMAIN[0],
+        ny=EDM_DOMAIN[1],
+        nz=EDM_DOMAIN[2],
+        precision="f64/f64",
+        M=_mrt_matrix(lattice),
+        s_rho=s,
+        s_e=s,
+        s_eta=s,
+        s_j=s,
+        s_q=s,
+        s_v=s,
+    )
+    rho, u = _random_edm_fields()
+    feq = sim.equilibrium(rho, u, cast_output=False)
+    meq = jnp.dot(feq, sim.M)
+    rng = np.random.default_rng(2)
+    m = meq + jnp.asarray(rng.uniform(-0.01, 0.01, size=meq.shape))
+
+    actual = sim.apply_force(m, meq, rho, u)
+
+    du = sim.get_force()
+    feq_force = sim.equilibrium(rho, u + du, cast_output=False)
+    # Correctly space-matched reference: transform both equilibria into moment space before subtracting,
+    # instead of subtracting a moment-space meq from a population-space feq_force.
+    expected = m + jnp.dot(feq_force, sim.M) - jnp.dot(feq, sim.M)
+
+    assert np.max(np.abs(np.asarray(actual) - np.asarray(expected))) < 1e-10
