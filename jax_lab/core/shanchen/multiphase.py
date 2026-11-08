@@ -22,7 +22,7 @@ from jax.sharding import NamedSharding, PartitionSpec
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
-from ..base import Components, LBMBase, _lattice_dot, _lattice_sum, component_mode, matvec_components, stack_components
+from ..base import Components, LBMBase, _lattice_dot, _lattice_sum, component_mode, lattice_density_momentum, matvec_components, stack_components
 
 # User-defined libraries
 from ..boundary_conditions import (
@@ -97,6 +97,11 @@ class Multiphase(LBMBase):
     2. Pytrees contain one leaf per component in the order defined by ``initialize_macroscopic_fields``.
     3. Component-specific lists and arrays must use the same ordering.
     """
+
+    # Interaction force of the current time step, already computed by a coupled solver (MultiphaseThermal.step) from the
+    # same populations and temperature; the fused collisions use it instead of computing it again. Only set while that
+    # solver traces the fluid step inline (see MultiphaseThermal._shares_fluid_force); None otherwise.
+    _shared_force = None
 
     def __init__(self, **kwargs):
         self.n_components = kwargs.get("n_components")
@@ -205,14 +210,21 @@ class Multiphase(LBMBase):
 
         self.solid_mask_streamed = None
         self.average_density_denominator = None
+        self.average_density_second_layer = None
         if self.scalar_neighbor_sum is not None:
             self.solid_mask_streamed = self.get_solid_mask_streamed()
             self.average_density_denominator = [
                 self.scalar_neighbor_sum(1 - mask) if has_wetting_bc else None
                 for mask, has_wetting_bc in zip(self.solid_mask_streamed, self._has_wetting_bc, strict=True)
             ]
+            # Weighted count of first-layer neighbors (nodes with a fluid neighbor), for the second-layer average
+            # in compute_average_density
+            self.average_density_second_layer = [
+                self.scalar_neighbor_sum((denominator > 0).astype(denominator.dtype)) if denominator is not None else None
+                for denominator in self.average_density_denominator
+            ]
         if self.average_density_denominator is not None:
-            for denominator in self.average_density_denominator:
+            for denominator in self.average_density_denominator + self.average_density_second_layer:
                 if denominator is not None:
                     denominator.block_until_ready()
         self.geometric_force_mask = None
@@ -1394,6 +1406,10 @@ class Multiphase(LBMBase):
                 bc.create_local_mask_and_normal_arrays(grid_mask)
             logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
+    def _make_bounceback_mask(self):
+        """One full-way BounceBack mask (or None) per component (see LBMBase._bounceback_mask_for)."""
+        return [self._bounceback_mask_for(BCs) for BCs in self.BCs]
+
     def _make_local_bounceback_indices(self):
         """
         Distribute one padded local BounceBack index array per component (self.BCs is a list of per-component
@@ -1897,19 +1913,35 @@ class Multiphase(LBMBase):
         -------
         pytree of jax.Array
             Averaged component density fields with the same shapes as the inputs.
+
+        Notes
+        -----
+        Solid nodes with no fluid neighbor (the second layer of a thick solid) have a zero denominator. The fourth-order
+        pseudopotential gradient reads psi two cells into the solid, so instead of 0/0 = NaN these nodes take the average of
+        the neighboring first-layer values (denominator average_density_second_layer); deeper nodes, which no stencil reads,
+        keep their own density. Nodes with a fluid neighbor are unchanged.
         """
         if self.scalar_neighbor_sum is None or self.average_density_denominator is None:
             return rho_tree
 
-        return [
-            self.scalar_neighbor_sum(rho * (1 - solid_mask)) / denominator if denominator is not None else rho
-            for rho, solid_mask, denominator in zip(
-                rho_tree,
-                self.solid_mask_streamed,
-                self.average_density_denominator,
-                strict=True,
-            )
-        ]
+        out = []
+        for rho, solid_mask, denominator, second_layer in zip(
+            rho_tree,
+            self.solid_mask_streamed,
+            self.average_density_denominator,
+            self.average_density_second_layer,
+            strict=True,
+        ):
+            if denominator is None:
+                out.append(rho)
+                continue
+            has_fluid_neighbor = denominator > 0
+            first = self.scalar_neighbor_sum(rho * (1 - solid_mask)) / jnp.where(has_fluid_neighbor, denominator, 1)
+            first = jnp.where(has_fluid_neighbor, first, 0)
+            has_first_layer_neighbor = second_layer > 0
+            second = self.scalar_neighbor_sum(first) / jnp.where(has_first_layer_neighbor, second_layer, 1)
+            out.append(jnp.where(has_fluid_neighbor, first, jnp.where(has_first_layer_neighbor, second, rho)))
+        return out
 
     @partial(jit, static_argnums=(0,))
     def apply_contact_angle(self, rho_tree):
@@ -2168,9 +2200,11 @@ class Multiphase(LBMBase):
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
         """
         f_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), f_tree)
-        rho_tree = tree_map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
-        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
-        u_tree = tree_map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)  # Component velocity
+        rho_tree, u_tree = [], []
+        for f in f_tree:
+            rho, momentum = lattice_density_momentum(self.lattice.c, f)
+            rho_tree.append(rho)
+            u_tree.append(momentum / rho)  # Component velocity
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -2191,9 +2225,10 @@ class Multiphase(LBMBase):
         -------
         u_tree (pytree of jax.numpy.ndarray): Velocity field.
         """
-        # rho_tree = tree_map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
-        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
-        u_tree = tree_map(lambda f, rho: jnp.dot(f, c) / rho, f_tree, rho_tree)
+        u_tree = [
+            lattice_density_momentum(self.lattice.c, self.precision_policy.cast_to_compute(f))[1] / rho
+            for f, rho in zip(f_tree, rho_tree, strict=True)
+        ]
         F_tree = self.compute_force(rho_tree, T=T)
         return tree_map(lambda rho, u, F: u + 0.5 * F / rho, rho_tree, u_tree, F_tree)
 
@@ -2493,9 +2528,11 @@ class Multiphase(LBMBase):
             fout_tree = [__apply_bc__(fout, fin, BCs) for fout, fin, BCs in zip(fout_tree, fin_tree, self.BCs, strict=True)]
 
         if implementation_step == "PostCollision":
+            # Components whose bounce-back the collision already applied (see LBMBase.apply_fused_bounceback) are skipped
+            fused = self._collision_applies_bounceback()
             fout_tree = [
-                self.local_bounceback(fout, fin, local_indices) if local_indices is not None else fout
-                for fout, fin, local_indices in zip(fout_tree, fin_tree, self.local_bounceback_indices, strict=True)
+                self.local_bounceback(fout, fin, local_indices) if local_indices is not None and not (fused and mask is not None) else fout
+                for fout, fin, local_indices, mask in zip(fout_tree, fin_tree, self.local_bounceback_indices, self.bounceback_mask, strict=True)
             ]
 
         if implementation_step == "PostStreaming":
@@ -2850,10 +2887,18 @@ class MultiphaseBGK(Multiphase):
     # see LBMBase._direction_major_step)
     _direction_major_dims = (2, 3)
 
+    def _collision_applies_bounceback(self):
+        """The per-direction collision applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is MultiphaseBGK.collision and self._uses_default_bgk_methods()
+
     def _uses_default_bgk_methods(self):
         """Whether the macroscopic fields, equilibrium and forcing are the defaults (then the per-direction collision applies)."""
         cls = type(self)
-        return cls.update_macroscopic is Multiphase.update_macroscopic and cls.equilibrium is Multiphase.equilibrium and cls.apply_force is Multiphase.apply_force
+        return (
+            cls.update_macroscopic is Multiphase.update_macroscopic
+            and cls.equilibrium is Multiphase.equilibrium
+            and cls.apply_force is Multiphase.apply_force
+        )
 
     def _collision_components(self, fin_tree, T=None):
         """
@@ -2875,9 +2920,12 @@ class MultiphaseBGK(Multiphase):
             for channels, rho in zip(channels_tree, rho_scalar_tree, strict=True)
         ]
         rho_tree = [rho[..., None] for rho in rho_scalar_tree]
-        F_tree = list(jax.lax.optimization_barrier(tuple(self.compute_force(rho_tree, T=T))))
+        F_tree = self._shared_force if self._shared_force is not None else self.compute_force(rho_tree, T=T)
+        F_tree = list(jax.lax.optimization_barrier(tuple(F_tree)))
         fout_tree = []
-        for channels, rho, velocity, force, omega in zip(channels_tree, rho_scalar_tree, velocity_tree, F_tree, self.omega, strict=True):
+        for channels, rho, velocity, force, omega, mask in zip(
+            channels_tree, rho_scalar_tree, velocity_tree, F_tree, self.omega, self.bounceback_mask, strict=True
+        ):
             du = [force[..., axis] / rho for axis in range(self.dim)]
             usqr = 1.5 * sum(v * v for v in velocity)
             delta_usqr = 1.5 * sum(2.0 * v * d + d * d for v, d in zip(velocity, du, strict=True))
@@ -2891,6 +2939,7 @@ class MultiphaseBGK(Multiphase):
             if self.wetting_formulation == "geometric" and self.dim == 3:
                 # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
                 outputs[0] = outputs[0] + (rho - sum(outputs))
+            outputs = self.apply_fused_bounceback(outputs, channels, mask)
             fout_tree.append(self.stack_populations([self.precision_policy.cast_to_output(output) for output in outputs]))
         return fout_tree
 
@@ -2929,6 +2978,10 @@ class MultiphaseMRT(Multiphase):
 
     # Direction-major populations in run() by default (2.2-4.4x faster in 3D, 4-9% in 2D; see LBMBase._direction_major_step)
     _direction_major_dims = (2, 3)
+
+    def _collision_applies_bounceback(self):
+        """The fused collision (every configuration) applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is MultiphaseMRT.collision
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -3289,7 +3342,10 @@ class MultiphaseMRT(Multiphase):
         # Force, and the potential/moments the surface-tension source is built from
         uses_wetting = self.wetting_formulation is not None and any(self._has_wetting_bc)
         surface_psi_tree = moments_tree = None
-        if self._uses_default_compute_force:
+        if self._shared_force is not None:
+            # Already computed for this time step by the coupled solver (identical values; see Multiphase._shared_force)
+            F_tree = list(self._shared_force)
+        elif self._uses_default_compute_force:
             force_rho_tree = self.apply_contact_angle(rho_tree)
             psi_tree = self.compute_potential(force_rho_tree, T=T)
             fused_surface = (
@@ -3377,6 +3433,7 @@ class MultiphaseMRT(Multiphase):
             if restore_mass:
                 # Restore the density lost to roundoff on the rest population, from the per-direction values (no re-read).
                 outputs[0] = outputs[0] + (rho - sum(outputs))
+            outputs = self.apply_fused_bounceback(outputs, channels, self.bounceback_mask[component])
             fout_tree.append(self.stack_populations([self.precision_policy.cast_to_output(output) for output in outputs]))
         return fout_tree
 
@@ -4336,6 +4393,12 @@ class MultiphaseCascade(Multiphase):
         "_apply_force_fields",
     )
 
+    def _collision_applies_bounceback(self):
+        """The per-direction collision applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return (
+            type(self).collision is MultiphaseCascade.collision and self._uses_default_cascade_apply_force and self._uses_default_cascade_transforms()
+        )
+
     def _uses_default_cascade_transforms(self):
         """Whether all moment transforms used by the collision are this class's own (then the component-mode collision applies)."""
         return all(getattr(type(self), name) is getattr(MultiphaseCascade, name) for name in self._CASCADE_TRANSFORMS)
@@ -4371,13 +4434,16 @@ class MultiphaseCascade(Multiphase):
                 forcing = matvec_components(C, self.sparse_collision_terms(eye - 0.5 * S), dtype)
                 Tout_tree.append(Components([a + b + c for a, b, c in zip(relaxed, equilibrium, forcing, strict=True)], dtype))
             m_out_tree = transform("compute_central_moment_inverse")(self, Tout_tree, u_tree)
-            fout_tree = [matvec_components(m, self.sparse_collision_terms(np.asarray(M_inv)), dtype) for m, M_inv in zip(m_out_tree, self.M_inv, strict=True)]
+            fout_tree = [
+                matvec_components(m, self.sparse_collision_terms(np.asarray(M_inv)), dtype) for m, M_inv in zip(m_out_tree, self.M_inv, strict=True)
+            ]
         populations_tree = []
-        for fin, rho, fout in zip(fin_tree, rho_tree, fout_tree, strict=True):
+        for fin, rho, fout, mask in zip(fin_tree, rho_tree, fout_tree, self.bounceback_mask, strict=True):
             fout = [jnp.broadcast_to(x, fin.shape[:-1]) for x in fout]
             if self.wetting_formulation == "geometric" and self.dim == 3:
                 # Preserve the density moment after the 3D geometric wetting update by applying any roundoff-level mismatch to the rest population.
                 fout[0] = fout[0] + (rho[..., 0] - sum(fout))
+            fout = self.apply_fused_bounceback(fout, [fin[..., i] for i in range(self.q)], mask)
             populations_tree.append(self.stack_populations([self.precision_policy.cast_to_output(x) for x in fout]))
         return populations_tree
 

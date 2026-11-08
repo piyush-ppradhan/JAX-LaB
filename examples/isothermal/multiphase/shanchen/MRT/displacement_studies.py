@@ -35,7 +35,9 @@ logger = logging.getLogger(__name__)
 class Droplet3D(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
         rho_tree = []
-        dist = (x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2 - r**2
+        # Distance from the droplet center (the tanh profile below needs a distance, not a squared distance minus r**2,
+        # which collapses the interface to ~0.1 cell and makes the run diverge)
+        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2)
 
         # Water
         rho_inside = rho_w_l
@@ -127,7 +129,9 @@ class Droplet3D(MultiphaseMRT):
 # Multi-component droplet on wall example to tune contact angle
 class DropletOnWall3D(MultiphaseMRT):
     def initialize_macroscopic_fields(self):
-        dist = (x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2 - r**2
+        # Distance from the droplet center (the tanh profile below needs a distance, not a squared distance minus r**2,
+        # which collapses the interface to ~0.1 cell and makes the run diverge)
+        dist = np.sqrt((x - self.nx / 2) ** 2 + (y - self.ny / 2) ** 2 + (z - self.nz / 2) ** 2)
         rho_tree = []
 
         # Water

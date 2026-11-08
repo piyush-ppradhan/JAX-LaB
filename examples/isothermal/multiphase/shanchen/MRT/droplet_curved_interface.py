@@ -165,7 +165,9 @@ if __name__ == "__main__":
         "s_j": s_j,
         "s_q": s_q,
         "s_v": s_v,
-        "kappa": [2.0],  # = old kappa 1.0 under the papers' convention (sigma ~ 1 - kappa): negative surface tension, retune
+        # Unmodified surface tension (sigma ~ 1 - kappa). The old kappa 1.0 maps to kappa 2.0 here, which gives negative surface
+        # tension: the droplet dissolves (density ~1.0 everywhere after 20000 steps).
+        "kappa": [0.0],
         "wetting_formulation": "improved_virtual_density",
         "precision": precision,
         "io_rate": 10000,

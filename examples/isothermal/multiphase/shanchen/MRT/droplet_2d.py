@@ -134,7 +134,10 @@ if __name__ == "__main__":
         "s_j": s_j,
         "s_q": s_q,
         "s_v": s_v,
-        "kappa": [2.0],  # = old kappa 1.0 under the papers' convention (sigma ~ 1 - kappa): negative surface tension, retune
+        # Surface tension scales as (1 - kappa). Laplace test (r = 30, 45): sigma = r * delta_p = 0.56 (EOS pressure; times
+        # lambda_^2 in mesh units) at kappa = 0 and 0.31 at kappa = 0.5. The old kappa 1.0 maps to kappa 2.0 here, which gives
+        # negative surface tension: the droplet dissolves.
+        "kappa": [0.0],
         "precision": precision,
         "io_rate": 10000,
         "compute_MLUPS": True,

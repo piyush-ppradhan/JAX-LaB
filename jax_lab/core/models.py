@@ -2,7 +2,7 @@ import jax.numpy as jnp
 from jax import jit
 import numpy as np
 from functools import partial
-from .base import Components, LBMBase, _lattice_dot, _lattice_sum, component_mode, matvec_components, stack_components
+from .base import Components, LBMBase, _lattice_dot, _lattice_sum, component_mode, lattice_density_momentum, matvec_components, stack_components
 from .lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 
 """
@@ -25,10 +25,15 @@ def _per_direction_moments(lattice, f):
     return directions, weights, channels, rho, velocity
 
 
-def _per_direction_force(get_force, dim, velocity):
+def _is_default_method(obj, name, default):
+    """Whether obj uses the given default method: not overridden by its class, nor replaced on the instance (as
+    Thermal does with fluid_solver.apply_force)."""
+    return getattr(type(obj), name) is default and name not in vars(obj)
+
+
+def _per_direction_force(du, dim, velocity):
     """Per-axis fields of the body-force velocity increment du and the scalar 1.5 (2 u.du + du.du) of the exact-difference
     forcing, as used by LBMBase.apply_force; None when there is no force."""
-    du = get_force()
     if du is None:
         return None, None
     du = [du[..., axis] for axis in range(dim)]
@@ -68,10 +73,18 @@ class BGKSim(LBMBase):
             fout = self.apply_force(fout, feq, rho, u)
         return self.precision_policy.cast_to_output(fout)
 
+    def _collision_applies_bounceback(self):
+        """The per-direction collision applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is BGKSim.collision and self._uses_default_bgk_methods()
+
     def _uses_default_bgk_methods(self):
         """Whether the macroscopic fields, equilibrium and forcing are the defaults (then the per-direction collision applies)."""
         cls = type(self)
-        return cls.update_macroscopic is LBMBase.update_macroscopic and cls.equilibrium is LBMBase.equilibrium and cls.apply_force is LBMBase.apply_force
+        return (
+            cls.update_macroscopic is LBMBase.update_macroscopic
+            and cls.equilibrium is LBMBase.equilibrium
+            and _is_default_method(self, "apply_force", LBMBase.apply_force)
+        )
 
     def _collision_components(self, f):
         """
@@ -84,7 +97,7 @@ class BGKSim(LBMBase):
         """
         directions, weights, channels, rho, velocity = _per_direction_moments(self.lattice, f)
         usqr = 1.5 * sum(v * v for v in velocity)
-        du, delta_usqr = _per_direction_force(self.get_force, self.dim, velocity) if self.force is not None else (None, None)
+        du, delta_usqr = _per_direction_force(self.get_force_field(rho[..., None]), self.dim, velocity) if self.force is not None else (None, None)
         outputs = []
         for direction, w, fi in zip(directions, weights, channels, strict=True):
             cu = 3.0 * _lattice_dot(direction, velocity)
@@ -95,6 +108,7 @@ class BGKSim(LBMBase):
                 dcu = 3.0 * _lattice_dot(direction, du)
                 out = out + rho_w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr)
             outputs.append(out)
+        outputs = self.apply_fused_bounceback(outputs, channels, self.bounceback_mask)
         return self.stack_populations([self.precision_policy.cast_to_output(out) for out in outputs])
 
 
@@ -146,6 +160,10 @@ class KBCSim(LBMBase):
 
     _KBC_METHODS = ("fdecompose_shear_d2q9", "fdecompose_shear_d3q27", "entropic_scalar_product")
 
+    def _collision_applies_bounceback(self):
+        """The per-direction collision applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is KBCSim.collision and self._uses_default_kbc_methods()
+
     def _uses_default_kbc_methods(self):
         """Whether the macroscopic fields, equilibrium, forcing, momentum flux and the KBC decomposition are the defaults
         (then the per-direction collision applies)."""
@@ -153,7 +171,7 @@ class KBCSim(LBMBase):
         return (
             cls.update_macroscopic is LBMBase.update_macroscopic
             and cls.equilibrium is LBMBase.equilibrium
-            and cls.apply_force is LBMBase.apply_force
+            and _is_default_method(self, "apply_force", LBMBase.apply_force)
             and cls.momentum_flux is LBMBase.momentum_flux
             and all(getattr(cls, name) is getattr(KBCSim, name) for name in self._KBC_METHODS)
         )
@@ -188,7 +206,7 @@ class KBCSim(LBMBase):
         numerator = sum(ds * dh / fe for ds, dh, fe in zip(deltaS, deltaH, feq, strict=True))
         denominator = tiny + sum(dh * dh / fe for dh, fe in zip(deltaH, feq, strict=True))
         gamma = invBeta - (2.0 - invBeta) * numerator / denominator
-        du, delta_usqr = _per_direction_force(self.get_force, self.dim, velocity) if self.force is not None else (None, None)
+        du, delta_usqr = _per_direction_force(self.get_force_field(rho[..., None]), self.dim, velocity) if self.force is not None else (None, None)
         outputs = []
         for direction, w, fi, ds, dh in zip(directions, weights, channels, deltaS, deltaH, strict=True):
             out = fi - beta * (2.0 * ds + gamma * dh)
@@ -197,7 +215,8 @@ class KBCSim(LBMBase):
                 dcu = 3.0 * _lattice_dot(direction, du)
                 out = out + rho * w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr)
             outputs.append(out)
-        return self.stack_populations([self.precision_policy.cast_to_output(jnp.broadcast_to(out, rho.shape)) for out in outputs])
+        outputs = self.apply_fused_bounceback([jnp.broadcast_to(out, rho.shape) for out in outputs], channels, self.bounceback_mask)
+        return self.stack_populations([self.precision_policy.cast_to_output(out) for out in outputs])
 
     @partial(jit, static_argnums=(0,))
     def collision_modified(self, f):
@@ -384,6 +403,10 @@ class AdvectionDiffusionBGK(LBMBase):
         if self.vel is None:
             raise ValueError("Velocity must be specified for AdvectionDiffusionBGK.")
 
+    def _collision_applies_bounceback(self):
+        """The per-direction collision applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is AdvectionDiffusionBGK.collision and type(self).equilibrium is LBMBase.equilibrium
+
     @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
@@ -402,6 +425,7 @@ class AdvectionDiffusionBGK(LBMBase):
                 cu = 3.0 * _lattice_dot(direction, velocity)
                 feq = rho * w * (1.0 + cu * (1.0 + 0.5 * cu) - usqr)
                 outputs.append(fi - self.omega * (fi - feq))
+            outputs = self.apply_fused_bounceback(outputs, channels, self.bounceback_mask)
             return self.stack_populations([self.precision_policy.cast_to_output(out) for out in outputs])
         rho = jnp.sum(f, axis=-1, keepdims=True)
         feq = self.equilibrium(rho, self.vel, cast_output=False)
@@ -496,9 +520,20 @@ class MRTSim(LBMBase):
             outputs.append(f[..., output_direction] - relaxed)
 
         if self.force is not None:
-            delta_feq = self._compute_force_delta_feq(rho, u)
-            outputs = [output + delta_feq[..., i] for i, output in enumerate(outputs)]
+            if _is_default_method(self, "apply_force", MRTSim.apply_force):
+                delta_feq = self._compute_force_delta_feq(rho, u)
+                outputs = [output + delta_feq[..., i] for i, output in enumerate(outputs)]
+            else:
+                # A user (or Thermal) apply_force takes moment-space quantities (m, meq), as documented in apply_force
+                m = self.apply_force(jnp.dot(jnp.stack(outputs, axis=-1), self.M), jnp.dot(feq, self.M), rho, u)
+                fout = jnp.dot(m, self.M_inv)
+                outputs = [fout[..., i] for i in range(self.q)]
+        outputs = self.apply_fused_bounceback(outputs, [f[..., i] for i in range(self.q)], self.bounceback_mask)
         return self.stack_populations([self.precision_policy.cast_to_output(output) for output in outputs])
+
+    def _collision_applies_bounceback(self):
+        """Both collision paths apply the full-way bounce-back themselves (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is MRTSim.collision
 
     def _uses_default_mrt_methods(self):
         """Whether the macroscopic fields, equilibrium and forcing are the defaults (then the per-direction collision applies)."""
@@ -507,6 +542,7 @@ class MRTSim(LBMBase):
             cls.update_macroscopic is LBMBase.update_macroscopic
             and cls.equilibrium is LBMBase.equilibrium
             and cls._compute_force_delta_feq is MRTSim._compute_force_delta_feq
+            and _is_default_method(self, "apply_force", MRTSim.apply_force)
         )
 
     def _collision_components(self, f):
@@ -527,12 +563,13 @@ class MRTSim(LBMBase):
         for output_direction, terms in enumerate(self.collision_terms):
             relaxed = sum(difference[input_direction] * coefficient for input_direction, coefficient in terms)
             outputs.append(channels[output_direction] - relaxed)
-        if self.force is not None:
-            du, delta_usqr = _per_direction_force(self.get_force, self.dim, velocity)
+        du, delta_usqr = _per_direction_force(self.get_force_field(rho[..., None]), self.dim, velocity) if self.force is not None else (None, None)
+        if du is not None:
             for i, (direction, w) in enumerate(zip(directions, weights, strict=True)):
                 cu = 3.0 * _lattice_dot(direction, velocity)
                 dcu = 3.0 * _lattice_dot(direction, du)
                 outputs[i] = outputs[i] + rho * w * (dcu * (1.0 + cu + 0.5 * dcu) - delta_usqr)
+        outputs = self.apply_fused_bounceback(outputs, channels, self.bounceback_mask)
         return self.stack_populations([self.precision_policy.cast_to_output(output) for output in outputs])
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -553,7 +590,7 @@ class MRTSim(LBMBase):
         -------
         (jax.numpy.ndarray): Real-space delta_feq.
         """
-        du = self.get_force()
+        du = self.get_force_field(rho)
         c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
         cu = 3.0 * jnp.dot(u, c)
         dcu = 3.0 * jnp.dot(du, c)
@@ -570,8 +607,9 @@ class MRTSim(LBMBase):
         transformed into moment space with M: since M is linear, dot(delta_feq, M) ==
         dot(feq(rho, u + du), M) - dot(feq(rho, u), M), an exact substitute for subtracting a moment-space
         equilibrium from a population-space one. Provided for callers using the unfused, moment-space collision
-        path (e.g. Thermal.apply_force_thermal, when the wrapped fluid_solver is an MRTSim); collision() itself
-        adds delta_feq directly in real space instead.
+        path (e.g. Thermal.apply_force_thermal, when the wrapped fluid_solver is an MRTSim). collision() adds
+        delta_feq directly in real space for this default, and calls apply_force with the post-collision and equilibrium
+        moments only when it is overridden (by a subclass or on the instance).
 
         Parameters
         ----------
@@ -717,9 +755,7 @@ class CLBMSim(LBMBase):
         u: jax.numpy.ndarray
             Velocity fields.
         """
-        # rho_tree = map(lambda f: jnp.sum(f, axis=-1, keepdims=True), f_tree)
-        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
-        u = jnp.dot(f, c) / rho
+        u = lattice_density_momentum(self.lattice.c, self.precision_policy.cast_to_compute(f))[1] / rho
         if self.force is not None:
             return u + 0.5 * self.force / rho
         else:
@@ -1502,6 +1538,10 @@ class CLBMSim(LBMBase):
         "apply_force",
     )
 
+    def _collision_applies_bounceback(self):
+        """The per-direction collision applies the full-way bounce-back itself (see LBMBase.apply_fused_bounceback)."""
+        return type(self).collision is CLBMSim.collision and self._uses_default_cascade_transforms()
+
     def _uses_default_cascade_transforms(self):
         """Whether all moment transforms used by the collision are this class's own (then the component-mode collision applies)."""
         return all(getattr(type(self), name) is getattr(CLBMSim, name) for name in self._CASCADE_TRANSFORMS)
@@ -1534,7 +1574,10 @@ class CLBMSim(LBMBase):
             Tout = Components([a + b + c for a, b, c in zip(relaxed, equilibrium, forcing, strict=True)], dtype)
             m_out = transform("compute_central_moment_inverse")(self, Tout, u)
             fout = matvec_components(m_out, self.sparse_collision_terms(np.asarray(self.M_inv)), dtype)
-        return self.stack_populations([self.precision_policy.cast_to_output(jnp.broadcast_to(x, fin.shape[:-1])) for x in fout])
+        outputs = self.apply_fused_bounceback(
+            [jnp.broadcast_to(x, fin.shape[:-1]) for x in fout], [fin[..., i] for i in range(q)], self.bounceback_mask
+        )
+        return self.stack_populations([self.precision_policy.cast_to_output(x) for x in outputs])
 
     @partial(jit, static_argnums=(0,))
     def collision(self, fin):

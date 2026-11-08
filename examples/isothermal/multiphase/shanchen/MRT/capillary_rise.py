@@ -54,7 +54,8 @@ class Droplet2D(MultiphaseMRT):
         timestep = kwargs["timestep"]
         fields = {"p": p[..., 0], "rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1]}
         offset_x = 95
-        offset_y = 95
+        # Gas probes: ny = 100, so the vertical ones sit at y = 1 and y = ny - 1 (an offset of 95 indexed past the domain)
+        offset_y = self.ny // 2 - 1
         rho_north = rho[self.nx // 2, self.ny // 2 - offset_y, 0]
         rho_south = rho[self.nx // 2, self.ny // 2 + offset_y, 0]
         rho_west = rho[self.nx // 2 - offset_x, self.ny // 2, 0]
@@ -255,7 +256,7 @@ if __name__ == "__main__":
             "s_j": s_j,
             "s_q": s_q,
             "s_v": s_v,
-            "kappa": [1.0],  # = old kappa 0.5 under the papers' convention (sigma ~ 1 - kappa): zero surface tension, retune
+            "kappa": [0.99],  # Laplace test (stage 1): sigma = d(delta_p)/d(1/r) = 0.22 (EOS pressure); 0.21 at kappa = 1.0
             "precision": precision,
             "EOS": eos,
             "io_rate": 60000,
@@ -293,7 +294,7 @@ if __name__ == "__main__":
             "s_j": s_j,
             "s_q": s_q,
             "s_v": s_v,
-            "kappa": [1.0],  # = old kappa 0.5 under the papers' convention (sigma ~ 1 - kappa): zero surface tension, retune
+            "kappa": [0.99],  # Laplace test (stage 1): sigma = d(delta_p)/d(1/r) = 0.22 (EOS pressure); 0.21 at kappa = 1.0
             "wetting_formulation": "improved_virtual_density",
             "precision": precision,
             "io_rate": 40000,
@@ -330,7 +331,7 @@ if __name__ == "__main__":
         "s_j": s_j,
         "s_q": s_q,
         "s_v": s_v,
-        "kappa": [1.0],  # = old kappa 0.5 under the papers' convention (sigma ~ 1 - kappa): zero surface tension, retune
+        "kappa": [0.99],  # Laplace test (stage 1): sigma = d(delta_p)/d(1/r) = 0.22 (EOS pressure); 0.21 at kappa = 1.0
         "EOS": eos,
         "wetting_formulation": "improved_virtual_density",
         "precision": precision,

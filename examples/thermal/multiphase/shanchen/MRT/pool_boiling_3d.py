@@ -12,6 +12,7 @@ from jax import config, jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
+from jax_lab.core.base import _lattice_dot, _lattice_sum
 from jax_lab.core.boundary_conditions import BounceBack, DirichletTemperature
 from jax_lab.core.shanchen.eos import PengRobinson
 from jax_lab.core.lattice import LatticeD3Q19
@@ -65,6 +66,52 @@ class PoolFluid3D(MultiphaseMRT):
         gravity_active = jnp.asarray(timestep > gravity_relaxation_steps, dtype=self.precision_policy.compute_dtype)
         return tree_map(lambda rho: gravity_active * (rho - rho_average) * gravity_vector, rho_tree)
 
+    # Fluid-fluid force of the current time step, shared by the coupled step with the collision (see the thermal step)
+    _shared_force = None
+
+    def compute_force(self, rho_tree, T=None):
+        """Fluid-fluid force. Within the coupled step it returns the force already computed for this time step from the
+        same populations and temperature (identical values) instead of computing it a second time in the collision.
+
+        Parameters
+        ----------
+        rho_tree (pytree of jax.numpy.ndarray): Component density fields.
+        T (jax.numpy.ndarray, optional): Temperature field.
+
+        Returns
+        -------
+        pytree of jax.numpy.ndarray: Fluid-fluid force fields.
+        """
+        if self._shared_force is not None:
+            return self._shared_force
+        return super().compute_force(rho_tree, T=T)
+
+    def force_corrected_fields(self, f_tree, T, timestep):
+        """Density and force-corrected velocity (as macroscopic_velocity), with the density and momentum summed per lattice
+        direction instead of matrix products of the populations (exact in single precision, and fused into one kernel).
+
+        Parameters
+        ----------
+        f_tree (pytree of jax.numpy.ndarray): Component populations.
+        T (jax.numpy.ndarray): Temperature field.
+        timestep (int): Current timestep.
+
+        Returns
+        -------
+        tuple: Component density, velocity and fluid-fluid force fields.
+        """
+        directions = self._lattice_directions
+        channels_tree = [[self.precision_policy.cast_to_compute(f[..., i]) for i in range(self.q)] for f in f_tree]
+        rho_tree = [sum(channels)[..., None] for channels in channels_tree]
+        momentum_tree = [jnp.stack([_lattice_sum(directions, channels, axis) for axis in range(self.dim)], axis=-1) for channels in channels_tree]
+        force_tree = self.compute_force(rho_tree, T=T)
+        buoyancy_tree = self.compute_buoyancy_force(rho_tree, timestep)
+        u_tree = [
+            (momentum + 0.5 * force + 0.5 * buoyancy) / rho
+            for momentum, force, buoyancy, rho in zip(momentum_tree, force_tree, buoyancy_tree, rho_tree, strict=True)
+        ]
+        return rho_tree, u_tree, force_tree
+
     @partial(jit, static_argnums=(0,))
     def macroscopic_velocity(self, f_tree, rho_tree, T=None, timestep=None):
         """Compute force-corrected velocity with delayed buoyancy.
@@ -86,6 +133,47 @@ class PoolFluid3D(MultiphaseMRT):
         buoyancy_tree = self.compute_buoyancy_force(rho_tree, timestep)
         return tree_map(lambda u, force, rho: u + 0.5 * force / rho, u_tree, buoyancy_tree, rho_tree)
 
+    def add_buoyancy(self, f_poststreaming_tree, f_postcollision_tree, timestep):
+        """Add the delayed density-relative buoyancy to the post-collision populations.
+
+        Exact-difference forcing f* += feq(rho, u + F / rho) - feq(rho, u) with F = (rho - mean(rho)) g (after
+        gravity_relaxation_steps), then the rest population is reset to f*_0 = rho - sum_(i>0) f*_i. Same formulas as
+        compute_buoyancy_force and equilibrium, evaluated per lattice direction so XLA fuses the whole update into one kernel
+        instead of building two full equilibrium arrays.
+
+        Parameters
+        ----------
+        f_poststreaming_tree (pytree of jax.numpy.ndarray): Pre-collision populations (rho and u are taken from them).
+        f_postcollision_tree (pytree of jax.numpy.ndarray): Post-collision populations.
+        timestep (int): Current timestep.
+
+        Returns
+        -------
+        pytree of jax.numpy.ndarray: Post-collision populations with the buoyancy applied.
+        """
+        dtype = self.precision_policy.compute_dtype
+        directions, weights = self._lattice_directions, self._lattice_weights
+        channels_tree = [[self.precision_policy.cast_to_compute(f[..., i]) for i in range(self.q)] for f in f_poststreaming_tree]
+        rho_tree = [sum(channels) for channels in channels_tree]
+        rho_average = reduce(operator.add, rho_tree).mean()
+        gravity_active = jnp.asarray(timestep > gravity_relaxation_steps, dtype=dtype)
+        out_tree = []
+        for channels, rho, f_post in zip(channels_tree, rho_tree, f_postcollision_tree, strict=True):
+            u = [_lattice_sum(directions, channels, axis) / rho for axis in range(self.dim)]
+            u_forced = [v + gravity_active * (rho - rho_average) * g / rho for v, g in zip(u, (0.0, 0.0, -gravity), strict=True)]
+            usqr = 1.5 * sum(v * v for v in u)
+            usqr_forced = 1.5 * sum(v * v for v in u_forced)
+            out = []
+            for i, (direction, w) in enumerate(zip(directions, weights, strict=True)):
+                cu = 3.0 * _lattice_dot(direction, u)
+                cu_forced = 3.0 * _lattice_dot(direction, u_forced)
+                feq = rho * w * (1.0 + cu * (1.0 + 0.5 * cu) - usqr)
+                feq_forced = rho * w * (1.0 + cu_forced * (1.0 + 0.5 * cu_forced) - usqr_forced)
+                out.append(self.precision_policy.cast_to_compute(f_post[..., i]) + feq_forced - feq)
+            out[0] = rho - sum(out[1:])
+            out_tree.append(self.stack_populations([self.precision_policy.cast_to_output(o) for o in out]))
+        return out_tree
+
     @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
     def step(self, f_poststreaming_tree, timestep, return_fpost=False, T=None):
         """Advance the fluid with delayed buoyancy.
@@ -102,22 +190,7 @@ class PoolFluid3D(MultiphaseMRT):
         tuple: Post-streaming and optional post-collision populations.
         """
         f_postcollision_tree = self.collision(f_poststreaming_tree, T=T)
-        rho_tree, u_tree = self.update_macroscopic(f_poststreaming_tree)
-        buoyancy_tree = self.compute_buoyancy_force(rho_tree, timestep)
-        u_forced_tree = tree_map(lambda u, force, rho: u + force / rho, u_tree, buoyancy_tree, rho_tree)
-        feq_tree = self.equilibrium(rho_tree, u_tree, cast_output=False)
-        feq_forced_tree = self.equilibrium(rho_tree, u_forced_tree, cast_output=False)
-        f_postcollision_tree = tree_map(
-            lambda f, feq_forced, feq: f + feq_forced - feq,
-            f_postcollision_tree,
-            feq_forced_tree,
-            feq_tree,
-        )
-        f_postcollision_tree = tree_map(
-            lambda f, rho: f.at[..., 0].set(rho[..., 0] - jnp.sum(f[..., 1:], axis=-1)),
-            f_postcollision_tree,
-            rho_tree,
-        )
+        f_postcollision_tree = self.add_buoyancy(f_poststreaming_tree, f_postcollision_tree, timestep)
         f_postcollision_tree = self.apply_bc(f_postcollision_tree, f_poststreaming_tree, timestep, "PostCollision")
         f_poststreaming_tree = tree_map(self.streaming, f_postcollision_tree)
         f_poststreaming_tree = self.apply_bc(f_poststreaming_tree, f_postcollision_tree, timestep, "PostStreaming")
@@ -159,11 +232,20 @@ class PoolBoiling3D(MultiphaseThermal):
         """
         T = self.precision_policy.cast_to_compute(T_prev)
         T = self.apply_bc(T, timestep)
-        f_compute_tree = tree_map(self.precision_policy.cast_to_compute, f_poststreaming_tree)
-        rho_tree, _ = self.fluid_solver.update_macroscopic(f_compute_tree)
-        u_tree = self.fluid_solver.macroscopic_velocity(f_compute_tree, rho_tree, T=T, timestep=timestep)
+        fluid = self.fluid_solver
+        rho_tree, u_tree, force_tree = fluid.force_corrected_fields(f_poststreaming_tree, T, timestep)
 
-        f_poststreaming_tree, f_postcollision_tree = self.fluid_solver.step(f_poststreaming_tree, timestep, return_fpost, T)
+        # The collision reuses force_tree (same populations and temperature): the fluid step and its collision are traced
+        # inline here, so the shared force belongs to this trace
+        fluid_step = type(fluid).step.__wrapped__
+        collision = type(fluid).collision.__wrapped__
+        fluid._shared_force = force_tree
+        fluid.collision = lambda fin_tree, T=None: collision(fluid, fin_tree, T=T)
+        try:
+            f_poststreaming_tree, f_postcollision_tree = fluid_step(fluid, f_poststreaming_tree, timestep, return_fpost, T)
+        finally:
+            fluid._shared_force = None
+            del fluid.collision
         T = self._advance_temperature(T, timestep, rho_tree, u_tree)
         T = self.apply_bc(T, timestep)
         return self.precision_policy.cast_to_output(T), f_poststreaming_tree, f_postcollision_tree
@@ -182,18 +264,31 @@ class PoolBoiling3D(MultiphaseThermal):
         -------
         jax.numpy.ndarray: Temperature time derivative.
         """
-        grad_T = self.grad_x(T)
+        return self.RHS_prepared(T, self.prepare_RHS(rho_tree, u_tree))
+
+    def prepare_RHS(self, rho_tree, u_tree):
+        """T-independent parts of RHS, evaluated once per time step (they are frozen over the Runge-Kutta substeps)."""
         rho = self.fluid_solver.compute_total_density(rho_tree)
         u = self.fluid_solver.compute_total_velocity(rho_tree, u_tree)
         u = u.at[:, :, (0, -1), :].set(0.0)
         conductivity = rho * self.thermal_diffusivity_factor
+        # Regrouped coefficients, so each Runge-Kutta stage reads as few fields as possible (see Thermal.prepare_RHS):
+        # RHS = v . grad T + a lap T - T dp_EOS/dT w (+ S / (rho c_v))
+        rho_c_v = rho * self.c_v
+        velocity = -u + self.grad_x(conductivity) / rho_c_v
+        diffusivity = conductivity / rho_c_v
+        expansion = self.divergence_x(u) / rho_c_v
+        return rho_tree, velocity, diffusivity, expansion, None if self._uses_default_source() else rho_c_v
 
-        advection = jnp.sum(u * grad_T, axis=-1, keepdims=True)
-        diffusion = conductivity * self.laplacian_x(T) + jnp.sum(self.grad_x(conductivity) * grad_T, axis=-1, keepdims=True)
-        div_u = self.divergence_x(u)
+    def RHS_prepared(self, T, prepared):
+        """RHS from the output of prepare_RHS (same formula as RHS, terms regrouped)."""
+        rho_tree, velocity, diffusivity, expansion, rho_c_v = prepared
+        grad_T, lap_T = self.grad_and_laplacian(T)
         dp_eos_dT = reduce(operator.add, self.fluid_solver.eos.dp_eos_dT(rho_tree, T))
-        phase_change = T * dp_eos_dT * div_u
-        return -advection + (diffusion - phase_change + self.source(T)) / (rho * self.c_v)
+        rhs = jnp.sum(velocity * grad_T, axis=-1, keepdims=True) + diffusivity * lap_T - T * dp_eos_dT * expansion
+        if rho_c_v is not None:
+            rhs = rhs + self.source(T) / rho_c_v
+        return rhs
 
     def output_data(self, **kwargs):
         timestep = kwargs["timestep"]

@@ -734,8 +734,10 @@ def save_fields_hdf5_xdmf(
     else:
         output_stem = Path(output_dir) / f"{prefix}_{int(timestep):07d}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
-        h5_path = output_stem.with_suffix(".hdf5")
-        xdmf_path = output_stem.with_suffix(".xdmf")
+        # Append the suffixes: with_suffix would replace everything after a dot in the prefix (e.g. "fields_K0.333_0002000"
+        # -> "fields_K0.hdf5"), so every timestep would overwrite the same file
+        h5_path = output_stem.parent / f"{output_stem.name}.hdf5"
+        xdmf_path = output_stem.parent / f"{output_stem.name}.xdmf"
         static_meta = {}
         static_ref_path = None
 

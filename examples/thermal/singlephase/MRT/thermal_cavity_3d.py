@@ -137,7 +137,7 @@ if __name__ == "__main__":
         "specific_heat": 1.0,
         "thermal_conductivity": 0.05,
         "apply_buoyancy": True,
-        "gravity": np.array([0.0, -1e-4]),
+        "gravity": np.array([0.0, 0.0, -1e-4]),  # along -z: hot bottom wall at z = 0, cold lid at z = nz-1
     }
     sim = ThermalCavity(**thermal_kwargs)
     sim.run(1000)

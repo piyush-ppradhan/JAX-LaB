@@ -89,11 +89,11 @@ class PoreDoublet(MultiphaseMRT):
         self.BCs[1].append(EquilibriumBC(tuple(outlet.T), self.grid_info, self.precision_policy, rho_outlet, vel_outlet))
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree):
+    def compute_pressure(self, rho_tree, psi_tree, T=None):
         def f(g_kk):
             return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 

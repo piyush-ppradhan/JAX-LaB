@@ -38,7 +38,7 @@ class DropletOnWall2D(MultiphaseMRT):
         rho_tree = [rho]
 
         u = np.zeros((self.nx, self.ny, 2))
-        u = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=u)
+        u = self.distributed_array_init((self.nx, self.ny, 2), self.precision_policy.compute_dtype, init_val=u)
         u = self.precision_policy.cast_to_output(u)
         u_tree = [u]
         return rho_tree, u_tree
@@ -53,7 +53,10 @@ class DropletOnWall2D(MultiphaseMRT):
         rho = np.array(kwargs["rho_tree"][0][0, ...])
         u = np.array(kwargs["u_tree"][0][0, ...])
         timestep = kwargs["timestep"]
-        fields = {"rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1], "flag": np.array(self.solid_mask_streamed[0][..., 0])}
+        # Solid flag from the bounce-back nodes (solid_mask_streamed is only built for the improved virtual density scheme)
+        flag = np.zeros((self.nx, self.ny))
+        flag[tuple(ind.T)] = 1.0
+        fields = {"rho": rho[..., 0], "ux": u[..., 0], "uy": u[..., 1], "flag": flag}
         u_sp = np.sqrt(np.sum(np.square(u), axis=-1))
         logger.info(f"Max spurious velocity: {np.max(u_sp)}")
         # HDF5/XDMF output option:

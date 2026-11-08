@@ -61,12 +61,12 @@ class Droplet3D(MultiphaseBGK):
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree=None):
+    def compute_pressure(self, rho_tree, psi_tree=None, T=None):
         p_tree = tree_map(lambda rho: rho * self.lattice.cs2, rho_tree)
         return p_tree
 
@@ -166,12 +166,12 @@ class DropletOnWall3D(MultiphaseBGK):
         )
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree=None):
+    def compute_pressure(self, rho_tree, psi_tree=None, T=None):
         p_tree = tree_map(lambda rho: rho * self.lattice.cs2, rho_tree)
         return p_tree
 
@@ -258,12 +258,12 @@ class PorousMedia(MultiphaseBGK):
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree=None):
+    def compute_pressure(self, rho_tree, psi_tree=None, T=None):
         p_tree = tree_map(lambda rho: rho * self.lattice.cs2, rho_tree)
         return p_tree
 

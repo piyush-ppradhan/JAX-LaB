@@ -56,11 +56,11 @@ class Channel2D(MultiphaseMRT):
         self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta[walls], phi[walls], delta_rho[walls]))
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree):
+    def compute_pressure(self, rho_tree, psi_tree, T=None):
         def f(g_kk):
             return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 
@@ -110,16 +110,26 @@ class CocurrentFlow(MultiphaseMRT):
 
         rho_tree = []
 
+        # Non-wetting fluid fraction: 1 inside the central band [ny/2 - a, ny/2 + a), 0 outside, with the two interfaces
+        # smoothed by a tanh profile of width interface_width cells. A sharp one-cell step makes the first time steps violent
+        # (velocities ~0.8) and the fourth-order pseudopotential gradient diverges from it for g >= 0.02. A width of 3 keeps
+        # every saturation / viscosity ratio below stable (2 still fails for viscosity ratio 10 at S_w = 0.4).
+        interface_width = 3.0
+        yc = np.arange(self.ny) + 0.5
+        if a > 0:
+            band = 0.5 * (np.tanh((yc - (self.ny // 2 - a)) / interface_width) - np.tanh((yc - (self.ny // 2 + a)) / interface_width))
+        else:
+            band = np.zeros(self.ny)
+        band = np.broadcast_to(band[None, :, None], (self.nx, self.ny, 1))
+
         # Wetting fluid
-        rho = fraction * rho_t * np.ones((self.nx, self.ny, 1))
-        rho[:, self.ny // 2 - a : self.ny // 2 + a] = (1 - fraction) * rho_t
+        rho = (fraction - (2 * fraction - 1) * band) * rho_t
         rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
         rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
 
         # Non-wetting fluid
-        rho = (1 - fraction) * rho_t * np.ones((self.nx, self.ny, 1))
-        rho[:, self.ny // 2 - a : self.ny // 2 + a] = fraction * rho_t
+        rho = ((1 - fraction) + (2 * fraction - 1) * band) * rho_t
         rho = self.distributed_array_init((self.nx, self.ny, 1), self.precision_policy.compute_dtype, init_val=rho)
         rho = self.precision_policy.cast_to_output(rho)
         rho_tree.append(rho)
@@ -139,11 +149,11 @@ class CocurrentFlow(MultiphaseMRT):
         self.BCs[1].append(BounceBack(walls, self.grid_info, self.precision_policy, theta_nw[walls], phi_nw[walls], delta_rho_nw[walls]))
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree):
+    def compute_pressure(self, rho_tree, psi_tree, T=None):
         def f(g_kk):
             return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 
@@ -278,7 +288,9 @@ if __name__ == "__main__":
                 "nx": nx,
                 "ny": ny,
                 "nz": 0,
-                "g_kkprime": g_kkprime,
+                # Single-phase reference flow: no self-interaction (the diagonal of the two-component g_kkprime is zero).
+                # A negative g with psi = rho puts the uniform fluid inside the spinodal (dp/drho < 0) and blows up.
+                "g_kkprime": np.zeros((1, 1)),
                 "body_force": [fx, 0.0],
                 "precision": precision,
                 "M": [M],

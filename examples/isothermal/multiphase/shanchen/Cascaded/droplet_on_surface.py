@@ -102,7 +102,7 @@ class DropletOnWall(MultiphaseCascade):
         return tree_map(lambda psi, nt_1: psi * nt_1, psi_tree, ffk_1())
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         p_tree = self.compute_pressure(rho_tree)
         # Shan-Chen potential using modified pressure
@@ -110,7 +110,7 @@ class DropletOnWall(MultiphaseCascade):
         return psi_tree
 
     @partial(jit, static_argnums=(0, 2))
-    def compute_force(self, rho_tree, inter_component_interaction=True):
+    def compute_force(self, rho_tree, inter_component_interaction=True, T=None):
         rho_tree = self.apply_contact_angle(rho_tree)
         psi_tree = self.compute_potential(rho_tree)
         fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree)
@@ -147,7 +147,7 @@ class DropletOnWall(MultiphaseCascade):
         return tree_map(lambda F, F_intra, sigma, psi, s_b: f(F, F_intra, sigma, psi, s_b), F_tree, F_intra_tree, self.sigma, psi_tree, self.s_b)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def apply_force(self, Tdash_tree, rho_tree, u_tree):
+    def apply_force(self, Tdash_tree, rho_tree, u_tree, T=None):
         F_tree = self.compute_force(rho_tree)
         F_intra_tree = self.compute_force(rho_tree, inter_component_interaction=False)
         psi_tree = self.compute_potential(rho_tree)
@@ -261,6 +261,9 @@ if __name__ == "__main__":
         "nz": nz,
         "g_kkprime": g_kkprime,
         "EOS": eos,
+        # Scale factor of the fourth-order pseudopotential force (psi = sqrt(2 (lambda_^2 p - cs2 rho) / g)); 1.0 matches this
+        # example's compute_potential, which has no pressure scaling
+        "lambda_": [1.0],
         "M": [M],
         "s_0": s_0,
         "s_1": s_1,

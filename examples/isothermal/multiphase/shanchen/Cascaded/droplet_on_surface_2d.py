@@ -49,13 +49,13 @@ class DropletOnWall2D(MultiphaseCascade):
         return rho_tree, u_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         rho_tree = tree_map(lambda rho: self.precision_policy.cast_to_compute(rho), rho_tree)
         p_tree = self.compute_pressure(rho_tree)
-        # Shan-Chen potential using modified pressure
+        # Shan-Chen potential using the scaled pressure lambda_^2 * p (the library's convention; lambda_ replaces the old k = lambda_^2)
         psi_tree = tree_map(
-            lambda k, p, rho, G: jnp.sqrt(2 * (k * p - self.lattice.cs2 * rho) / G),
-            self.k,
+            lambda lam, p, rho, G: jnp.sqrt(2 * (lam**2 * p - self.lattice.cs2 * rho) / G),
+            self.lambda_,
             p_tree,
             rho_tree,
             self.g_kkprime.diagonal().tolist(),
@@ -65,7 +65,7 @@ class DropletOnWall2D(MultiphaseCascade):
         return psi_tree
 
     @partial(jit, static_argnums=(0, 2))
-    def compute_force(self, rho_tree, inter_component_interaction=True):
+    def compute_force(self, rho_tree, inter_component_interaction=True, T=None):
         rho_tree = self.apply_contact_angle(rho_tree)
         psi_tree = self.compute_potential(rho_tree)
         fluid_fluid_force = self.compute_fluid_fluid_force(psi_tree)
@@ -114,7 +114,7 @@ class DropletOnWall2D(MultiphaseCascade):
         return tree_map(lambda F, F_intra, sigma, psi, s_b: f(F, F_intra, sigma, psi, s_b), F_tree, F_intra_tree, self.sigma, psi_tree, self.s_b)
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def apply_force(self, Tdash_tree, rho_tree, u_tree):
+    def apply_force(self, Tdash_tree, rho_tree, u_tree, T=None):
         F_tree = self.compute_force(rho_tree)
         F_intra_tree = self.compute_force(rho_tree, inter_component_interaction=False)
         psi_tree = self.compute_potential(rho_tree)
@@ -123,7 +123,7 @@ class DropletOnWall2D(MultiphaseCascade):
         return tree_map(lambda Tdash, Tf: Tdash + Tf, Tdash_tree, Tf_tree)
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree=None):
+    def compute_pressure(self, rho_tree, psi_tree=None, T=None):
         p_tree = self.eos.EOS(rho_tree)
         p_tree[1] = self.lattice.cs2 * rho_tree[1]
         return p_tree

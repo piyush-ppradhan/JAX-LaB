@@ -1335,9 +1335,7 @@ def _construct_symmetric_lattice_moment(cc, dim):
 
 def _zouhe_calculate_vel(fpop, normals, imiddle_mask, iknown_mask, rho):
     """Velocity from prescribed density (Zou/He BC), for a per-node gathered fpop block."""
-    unormal = -1.0 + 1.0 / rho * (
-        jnp.sum(fpop * imiddle_mask, axis=-1, keepdims=True) + 2.0 * jnp.sum(fpop * iknown_mask, axis=-1, keepdims=True)
-    )
+    unormal = -1.0 + 1.0 / rho * (jnp.sum(fpop * imiddle_mask, axis=-1, keepdims=True) + 2.0 * jnp.sum(fpop * iknown_mask, axis=-1, keepdims=True))
     return unormal * normals
 
 

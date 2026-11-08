@@ -52,12 +52,12 @@ class Poiseuille2D(MultiphaseCascade):
         self.BCs[0].append(BounceBack(walls, self.grid_info, self.precision_policy, theta=theta[walls], phi=phi[walls], delta_rho=delta_rho[walls]))
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         psi_tree = tree_map(lambda rho: jnp.exp(-1 / rho), rho_tree)
         return psi_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree):
+    def compute_pressure(self, rho_tree, psi_tree, T=None):
         def f(g_kk):
             return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 

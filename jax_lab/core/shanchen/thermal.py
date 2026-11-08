@@ -11,7 +11,9 @@ from jax import jit
 from jax.tree import map as tree_map
 from jax.tree import reduce
 
+from ..base import lattice_density_momentum
 from ..thermal import Thermal
+from .multiphase import Multiphase, MultiphaseBGK, MultiphaseMRT
 
 
 class MultiphaseThermal(Thermal):
@@ -42,6 +44,27 @@ class MultiphaseThermal(Thermal):
         if self.apply_buoyancy:
             raise ValueError("apply_buoyancy is not supported for MultiphaseThermal; use the body_force parameter of the fluid solver instead.")
 
+    def _shares_fluid_force(self):
+        """
+        Whether step() can compute the interaction force once and share it with the fluid collision: only when every part
+        involved is the library default (so the shared force is exactly what the collision would compute) and the
+        collision is a fused one that takes it (MultiphaseMRT, or MultiphaseBGK on its per-direction path), without the
+        kappa surface-tension term (whose fused path computes the force through its own stencil).
+        """
+        fluid = self.fluid_solver
+        cls = type(fluid)
+        if not (
+            cls.step is Multiphase.step
+            and cls.compute_force is Multiphase.compute_force
+            and cls.macroscopic_velocity is Multiphase.macroscopic_velocity
+            and cls.update_macroscopic is Multiphase.update_macroscopic
+            and not getattr(fluid, "_has_surface_tension", False)
+        ):
+            return False
+        if cls.collision is MultiphaseMRT.collision:
+            return True
+        return cls.collision is MultiphaseBGK.collision and fluid._uses_default_bgk_methods()
+
     @partial(jit, static_argnums=(0,), inline=True)
     def divergence_x(self, u):
         """
@@ -57,6 +80,9 @@ class MultiphaseThermal(Thermal):
         -------
         jax.numpy.ndarray: Divergence of the field, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
         """
+        if type(self).grad_x is Thermal.grad_x:
+            # One stencil pass over the vector field (instead of dim gradients of its components)
+            return self.lattice_stencil(u, ("div",))[0]
         div_u = jnp.zeros_like(u[..., :1])
         for alpha in range(self.dim):
             div_u = div_u + self.grad_x(u[..., alpha : alpha + 1])[..., alpha : alpha + 1]
@@ -84,20 +110,33 @@ class MultiphaseThermal(Thermal):
         -------
         jax.numpy.ndarray: RHS of the thermal equation, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
         """
-        grad_T = self.grad_x(T)
-        lap_T = self.laplacian_x(T)
+        return self.RHS_prepared(T, self.prepare_RHS(rho_tree, u_tree))
+
+    def prepare_RHS(self, rho_tree, u_tree):
+        """
+        The parts of RHS that do not depend on T (frozen over the Runge-Kutta substeps; see Thermal.prepare_RHS): the
+        mixture velocity, its divergence and rho * c_v of the mixture density, plus the component densities for the
+        temperature-dependent dp_EOS/dT.
+        """
         # Mixture (total) density and velocity
         rho = self.fluid_solver.compute_total_density(rho_tree)
         u = self.fluid_solver.compute_total_velocity(rho_tree, u_tree)
+        # Regrouped coefficients (see Thermal.prepare_RHS): RHS = v . grad T + a lap T - T dp_EOS/dT w (+ S / (rho c_v))
+        rho_c_v = rho * self.c_v
+        velocity = -u + self.grad_K / rho_c_v
+        diffusivity = self.K / rho_c_v
+        expansion = self.divergence_x(u) / rho_c_v
+        return rho_tree, velocity, diffusivity, expansion, None if self._uses_default_source() else rho_c_v
 
-        advection = jnp.sum(u * grad_T, axis=-1, keepdims=True)
-        diffusion = self.K * lap_T + jnp.sum(self.grad_K * grad_T, axis=-1, keepdims=True)
-
-        div_u = self.divergence_x(u)
-        dp_eos_dT_tree = self.fluid_solver.eos.dp_eos_dT(rho_tree, T)
-        phase_change = T * reduce(operator.add, dp_eos_dT_tree) * div_u
-
-        return -advection + (diffusion - phase_change + self.source(T)) / (rho * self.c_v)
+    def RHS_prepared(self, T, prepared):
+        """RHS from the output of prepare_RHS (same formula as RHS, terms regrouped)."""
+        rho_tree, velocity, diffusivity, expansion, rho_c_v = prepared
+        grad_T, lap_T = self.grad_and_laplacian(T)
+        dp_eos_dT = reduce(operator.add, self.fluid_solver.eos.dp_eos_dT(rho_tree, T))
+        rhs = jnp.sum(velocity * grad_T, axis=-1, keepdims=True) + diffusivity * lap_T - T * dp_eos_dT * expansion
+        if rho_c_v is not None:
+            rhs = rhs + self.source(T) / rho_c_v
+        return rhs
 
     @partial(jit, static_argnums=(0, 4), donate_argnums=(1, 2))
     def step(self, T_prev, f_poststreaming_tree, timestep, return_fpost=False):
@@ -131,10 +170,30 @@ class MultiphaseThermal(Thermal):
         T = self.precision_policy.cast_to_compute(T_prev)
         T = self.apply_bc(T, timestep)
         f_compute_tree = tree_map(lambda f: self.precision_policy.cast_to_compute(f), f_poststreaming_tree)
-        rho_tree, _ = self.fluid_solver.update_macroscopic(f_compute_tree)
-        u_tree = self.fluid_solver.macroscopic_velocity(f_compute_tree, rho_tree, T=T)
-
-        f_poststreaming_tree, f_postcollision_tree = self.fluid_solver.step(f_poststreaming_tree, timestep, return_fpost, T)
+        fluid = self.fluid_solver
+        rho_tree, _ = fluid.update_macroscopic(f_compute_tree)
+        if self._shares_fluid_force():
+            # The interaction force is computed once and shared with the collision of this step (same populations and
+            # temperature, so identical values), instead of once for the velocity here and again in the collision
+            force_tree = fluid.compute_force(rho_tree, T=T)
+            # Multiphase.macroscopic_velocity with that force
+            u_tree = [
+                lattice_density_momentum(fluid.lattice.c, f)[1] / rho + 0.5 * force / rho
+                for f, rho, force in zip(f_compute_tree, rho_tree, force_tree, strict=True)
+            ]
+            # The fluid step and its collision are traced inline, so the shared force belongs to this trace
+            fluid_step = type(fluid).step.__wrapped__
+            collision = type(fluid).collision.__wrapped__
+            fluid._shared_force = force_tree
+            fluid.collision = lambda fin_tree, T=None: collision(fluid, fin_tree, T=T)
+            try:
+                f_poststreaming_tree, f_postcollision_tree = fluid_step(fluid, f_poststreaming_tree, timestep, return_fpost, T)
+            finally:
+                fluid._shared_force = None
+                del fluid.collision
+        else:
+            u_tree = fluid.macroscopic_velocity(f_compute_tree, rho_tree, T=T)
+            f_poststreaming_tree, f_postcollision_tree = fluid.step(f_poststreaming_tree, timestep, return_fpost, T)
         T = self._advance_temperature(T, timestep, rho_tree, u_tree)
 
         T = self.apply_bc(T, timestep)

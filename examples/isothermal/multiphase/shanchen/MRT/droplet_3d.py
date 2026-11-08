@@ -59,19 +59,8 @@ class Droplet3D(MultiphaseMRT):
 
         self.S = [relaxation_matrix(s_0, s_1, s_2, s_plus, s_minus, s_3, s_4)]
         self.collision_matrix = tree_map(lambda M, S, M_inv: jnp.dot(jnp.dot(M, S), M_inv), self.M, self.S, self.M_inv)
-        self.collision_terms = []
-        for collision_matrix in self.collision_matrix:
-            matrix = np.asarray(collision_matrix)
-            columns = []
-            for output_direction in range(self.lattice.q):
-                columns.append(
-                    tuple(
-                        (input_direction, np.float32(matrix[input_direction, output_direction]))
-                        for input_direction in range(self.lattice.q)
-                        if not np.isclose(matrix[input_direction, output_direction], 0.0, atol=1e-7)
-                    )
-                )
-            self.collision_terms.append(tuple(columns))
+        # Rebuild the sparse collision columns for the new S, in the compute precision
+        self.collision_terms = [self.sparse_collision_terms(collision_matrix) for collision_matrix in self.collision_matrix]
 
     def initialize_macroscopic_fields(self):
         x = np.arange(self.nx, dtype=np.float32)[:, None, None]
@@ -205,7 +194,7 @@ if __name__ == "__main__":
         "kappa": [0.0],
         "precision": precision,
         "io_rate": 10000,
-        "compute_MLUPS": False,
+        "compute_MLUPS": True,
         "print_info_rate": 10000,
         "checkpoint_rate": -1,
         "checkpoint_dir": os.path.abspath("./checkpoints_"),
@@ -214,4 +203,4 @@ if __name__ == "__main__":
 
     subprocess.run("rm -rf output*/", shell=True, check=True)
     sim = Droplet3D(**kwargs)
-    sim.run(30000)
+    sim.run(1000)

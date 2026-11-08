@@ -86,11 +86,11 @@ class PorousMedia(MultiphaseBGK):
         )
 
     @partial(jit, static_argnums=(0,))
-    def compute_potential(self, rho_tree):
+    def compute_potential(self, rho_tree, T=None):
         return rho_tree
 
     @partial(jit, static_argnums=(0,))
-    def compute_pressure(self, rho_tree, psi_tree):
+    def compute_pressure(self, rho_tree, psi_tree, T=None):
         def f(g_kk):
             return reduce(operator.add, tree_map(lambda _gkk, psi: _gkk * psi, list(g_kk), psi_tree))
 

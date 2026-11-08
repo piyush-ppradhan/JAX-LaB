@@ -18,7 +18,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as orb
-from jax import jit
+from jax import jit, shard_map
+from jax.sharding import PartitionSpec
 from jax.tree import map as tree_map
 from jax.tree import reduce
 from jax.experimental.multihost_utils import process_allgather
@@ -78,6 +79,7 @@ class Thermal(object):
         self.nz = self.fluid_solver.nz
         self.dim = self.fluid_solver.dim
         self.streaming = self.fluid_solver.streaming
+        self._stencil_kernels = {}
         self.io_rate = self.fluid_solver.io_rate
         self._output_writer = self.fluid_solver._output_writer
         self.print_info_rate = self.fluid_solver.print_info_rate
@@ -111,10 +113,16 @@ class Thermal(object):
             if gravity is None:
                 raise ValueError("gravity must be provided when apply_buoyancy is True.")
             self.gravity = jnp.array(np.array(gravity, dtype=np.float64), dtype=self.precision_policy.compute_dtype)
-            # The fluid collision only invokes apply_force when a force is present
+            # The fluid collision only applies a force when one is present
             if self.fluid_solver.force is None:
                 self.fluid_solver.force = jnp.zeros(self.dim, dtype=self.precision_policy.compute_dtype)
-            self.fluid_solver.apply_force = self.apply_force_thermal
+            if type(self).apply_force_thermal is Thermal.apply_force_thermal:
+                # Buoyancy as a force field (LBMBase.get_force_field, same formula as apply_force_thermal), so the fluid
+                # solver keeps its fused collision kernels
+                self.fluid_solver.buoyancy_gravity = self.gravity
+            else:
+                # A customized apply_force_thermal replaces the fluid solver's apply_force, as before
+                self.fluid_solver.apply_force = self.apply_force_thermal
 
         self.set_thermal_boundary_conditions()
 
@@ -331,9 +339,7 @@ class Thermal(object):
         -------
         jax.numpy.ndarray: Gradient of the field, of shape (nx, ny, 2) in 2D or (nx, ny, nz, 3) in 3D.
         """
-        field_streamed = self.streaming(jnp.repeat(field, repeats=self.lattice.q, axis=-1))
-        c = jnp.array(self.lattice.c, dtype=self.precision_policy.compute_dtype).T
-        return -self.lattice.inv_cs2 * jnp.dot(self.lattice.w * field_streamed, c)
+        return self.lattice_stencil(field, ("grad",))[0]
 
     @partial(jit, static_argnums=(0,), inline=True)
     def laplacian_x(self, field):
@@ -352,8 +358,121 @@ class Thermal(object):
         -------
         jax.numpy.ndarray: Laplacian of the field, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
         """
-        field_streamed = self.streaming(jnp.repeat(field, repeats=self.lattice.q, axis=-1))
-        return 2.0 * self.lattice.inv_cs2 * jnp.sum(self.lattice.w * (field_streamed - field), axis=-1, keepdims=True)
+        return self.lattice_stencil(field, ("lap",))[0]
+
+    def lattice_stencil(self, field, ops):
+        """
+        Evaluate isotropic lattice difference operators of a field in one pass: the field is padded once (one-cell x halo
+        exchanged between devices, periodic wrap in y/z - the same periodic semantics as streaming) and every neighbor
+        value phi(x + c_i) is a static slice of the padded array, so XLA fuses each operator into a single loop. Replaces
+        streaming a q-channel repeat of the field, which materializes q full arrays per operator.
+
+        Parameters
+        ----------
+        field (jax.numpy.ndarray): Field of shape (nx, ny, C) in 2D or (nx, ny, nz, C) in 3D.
+
+        ops (tuple of str): Operators to evaluate, in order: "grad" (shape (..., C * dim), the gradient of channel k in
+            entries k * dim ... k * dim + dim - 1), "lap" (shape (..., C)) and "div" (shape (..., 1); C must equal dim).
+
+        Returns
+        -------
+        tuple of jax.numpy.ndarray: One array per requested operator.
+        """
+        ops = tuple(ops)
+        kernel = self._stencil_kernels.get(ops)
+        if kernel is None:
+            spec = PartitionSpec("x", *([None] * self.dim))
+            kernel = jit(
+                shard_map(
+                    partial(self._lattice_stencil_m, ops=ops),
+                    mesh=self.fluid_solver.mesh,
+                    in_specs=spec,
+                    out_specs=tuple(spec for _ in ops),
+                    check_vma=False,
+                )
+            )
+            self._stencil_kernels[ops] = kernel
+        return kernel(self.precision_policy.cast_to_compute(field))
+
+    def _lattice_stencil_m(self, field, ops):
+        """
+        Local-shard body of lattice_stencil. Uses phi(x + c_i), which gives the same operators as the streamed form
+        (phi(x - c_i), with the sign flip for odd operators) because the lattice is symmetric:
+
+            grad phi = (1/cs2) sum_i w_i c_i phi(x + c_i)
+            lap phi = (2/cs2) sum_i w_i (phi(x + c_i) - phi(x))
+            div u = (1/cs2) sum_i w_i c_i . u(x + c_i)
+        """
+        fs = self.fluid_solver
+        if set(fs.right_perm) == set(fs.left_perm):
+            # One or two devices: the left and right neighbors are the same device, so both halo planes travel in one
+            # message (one collective instead of two; each is latency-bound at these sizes)
+            received = fs.send_right(jnp.concatenate((field[-1:], field[:1]), axis=0), "x")
+            left, right = received[:1], received[1:]
+        else:
+            left = fs.send_right(field[-1:], "x")
+            right = fs.send_left(field[:1], "x")
+        padded = jnp.concatenate((left, field, right), axis=0)
+        padded = jnp.pad(padded, ((0, 0),) + ((1, 1),) * (self.dim - 1) + ((0, 0),), mode="wrap")
+        # Materialize the padded field once: without the barrier XLA fuses its producer (e.g. the previous RK stage, itself
+        # a stencil) into every neighbor read, recomputing it once per lattice direction. Placing the barrier after the
+        # padding lets the producer write straight into the padded layout (no separate copy of the field)
+        padded = jax.lax.optimization_barrier(padded)
+        spatial = field.shape[:-1]
+        field = padded[tuple(slice(1, 1 + n) for n in spatial)]
+        channels = field.shape[-1]
+        inv_cs2 = float(self.lattice.inv_cs2)
+
+        grad = [[None] * self.dim for _ in range(channels)]
+        lap = [None] * channels
+        div = None
+
+        def accumulate(total, term):
+            return term if total is None else total + term
+
+        for direction, w in zip(np.asarray(self.lattice.c).T, np.asarray(self.lattice.w, dtype=np.float64), strict=True):
+            direction = [int(v) for v in direction[: self.dim]]
+            if not any(direction):
+                continue
+            value = padded[tuple(slice(1 + c, 1 + c + n) for c, n in zip(direction, spatial, strict=True))]
+            for k in range(channels):
+                channel = value[..., k : k + 1]
+                if "grad" in ops:
+                    for axis, c in enumerate(direction):
+                        if c:
+                            grad[k][axis] = accumulate(grad[k][axis], (inv_cs2 * float(w) * c) * channel)
+                if "lap" in ops:
+                    lap[k] = accumulate(lap[k], float(w) * (channel - field[..., k : k + 1]))
+            if "div" in ops:
+                for axis, c in enumerate(direction):
+                    if c:
+                        div = accumulate(div, (inv_cs2 * float(w) * c) * value[..., axis : axis + 1])
+
+        zeros = jnp.zeros((*spatial, 1), dtype=field.dtype)
+        outputs = []
+        for op in ops:
+            if op == "grad":
+                outputs.append(jnp.concatenate([g if g is not None else zeros for row in grad for g in row], axis=-1))
+            elif op == "lap":
+                outputs.append(jnp.concatenate([(2.0 * inv_cs2) * l if l is not None else zeros for l in lap], axis=-1))
+            elif op == "div":
+                if channels != self.dim:
+                    raise ValueError("The divergence needs a vector field with dim channels.")
+                outputs.append(div if div is not None else zeros)
+            else:
+                raise ValueError(f"Unknown lattice stencil operator {op!r}.")
+        return tuple(outputs)
+
+    def _uses_default_difference_operators(self):
+        """Whether grad_x and laplacian_x are the defaults (then RHS evaluates both from one stencil pass)."""
+        cls = type(self)
+        return cls.grad_x is Thermal.grad_x and cls.laplacian_x is Thermal.laplacian_x
+
+    def grad_and_laplacian(self, T):
+        """Gradient and laplacian of T, from one stencil pass when the operators are the defaults."""
+        if self._uses_default_difference_operators():
+            return self.lattice_stencil(T, ("grad", "lap"))
+        return self.grad_x(T), self.laplacian_x(T)
 
     @partial(jit, static_argnums=(0,), inline=True)
     def source(self, T):
@@ -392,13 +511,51 @@ class Thermal(object):
         -------
         jax.numpy.ndarray: RHS of the thermal equation, of shape (nx, ny, 1) in 2D or (nx, ny, nz, 1) in 3D.
         """
-        grad_T = self.grad_x(T)
-        lap_T = self.laplacian_x(T)
+        return self.RHS_prepared(T, self.prepare_RHS(rho, u))
 
-        advection = jnp.sum(u * grad_T, axis=-1, keepdims=True)
-        diffusion = self.K * lap_T + jnp.sum(self.grad_K * grad_T, axis=-1, keepdims=True)
+    def prepare_RHS(self, rho, u):
+        """
+        The parts of RHS that do not depend on T. They are frozen over the Runge-Kutta substeps of a time step, so
+        _advance_temperature evaluates them once per step (when RHS is the default) instead of once per stage.
 
-        return -advection + (diffusion + self.source(T)) / (rho * self.c_v)
+        The coefficients are combined so that each stage reads as few fields as possible (the stages are memory bound):
+
+            RHS = v . grad T + a lap T (+ S / (rho c_v)),   v = -u + grad K / (rho c_v),   a = K / (rho c_v)
+
+        which is the RHS formula with its terms regrouped (results differ from the ungrouped form at roundoff level).
+
+        Returns
+        -------
+        tuple: (v, a, rho * c_v); rho * c_v is None when source is the default (zero).
+        """
+        rho_c_v = rho * self.c_v
+        velocity = -u + self.grad_K / rho_c_v
+        diffusivity = self.K / rho_c_v
+        return velocity, diffusivity, None if self._uses_default_source() else rho_c_v
+
+    def RHS_prepared(self, T, prepared):
+        """RHS from the output of prepare_RHS (same formula as RHS, terms regrouped)."""
+        velocity, diffusivity, rho_c_v = prepared
+        grad_T, lap_T = self.grad_and_laplacian(T)
+        rhs = jnp.sum(velocity * grad_T, axis=-1, keepdims=True) + diffusivity * lap_T
+        if rho_c_v is not None:
+            rhs = rhs + self.source(T) / rho_c_v
+        return rhs
+
+    def _uses_default_source(self):
+        """Whether source is the default (zero everywhere), so prepared right hand sides can drop the term."""
+        return type(self).source is Thermal.source
+
+    def _uses_prepared_RHS(self):
+        """
+        Whether _advance_temperature can prepare the T-independent parts of RHS once per time step: true when the class
+        that defines RHS also defines RHS_prepared (the library defaults do; a subclass overriding only RHS keeps its own
+        formula, evaluated per stage).
+        """
+        for cls in type(self).__mro__:
+            if "RHS" in vars(cls):
+                return "RHS_prepared" in vars(cls)
+        return False
 
     @partial(jit, static_argnums=(0,), inline=True)
     def _advance_temperature(self, T, timestep, *fields):
@@ -421,15 +578,20 @@ class Thermal(object):
         jax.numpy.ndarray: Temperature field advanced by one time unit.
         """
         dt = 1.0 / self.rkSubsteps
+        if self._uses_prepared_RHS():
+            prepared = self.prepare_RHS(*fields)
+            rhs = lambda T: self.RHS_prepared(T, prepared)  # noqa: E731
+        else:
+            rhs = lambda T: self.RHS(T, *fields)  # noqa: E731
         for _ in range(self.rkSubsteps):
             T = self.apply_bc(T, timestep)
-            k1 = self.RHS(T, *fields)
+            k1 = rhs(T)
             T_stage = self.apply_bc(T + 0.5 * dt * k1, timestep)
-            k2 = self.RHS(T_stage, *fields)
+            k2 = rhs(T_stage)
             T_stage = self.apply_bc(T + 0.5 * dt * k2, timestep)
-            k3 = self.RHS(T_stage, *fields)
+            k3 = rhs(T_stage)
             T_stage = self.apply_bc(T + dt * k3, timestep)
-            k4 = self.RHS(T_stage, *fields)
+            k4 = rhs(T_stage)
             T = T + dt * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
         return self.apply_bc(T, timestep)
 
@@ -492,6 +654,50 @@ class Thermal(object):
 
         return self.precision_policy.cast_to_output(T), f_poststreaming, f_postcollision
 
+    def _direction_major_step(self, f, return_fpost):
+        """
+        The coupled step used by run(), compiled with the populations held direction-major in device memory (see
+        LBMBase._direction_major_step; the temperature field keeps its default layout). The step, the fluid step inside it
+        and every override are unchanged; only the physical storage order of the populations differs.
+
+        Parameters
+        ----------
+        f (jax.Array or pytree): Populations, already in the direction-major layout (see LBMBase._to_direction_major).
+
+        return_fpost (bool): Whether the step also returns the post-collision populations.
+
+        Returns
+        -------
+        (callable): step(T, f, timestep) -> (T, f, fstar), like self.step.
+        """
+        fs = self.fluid_solver
+        if not fs.direction_major_layout:
+            return lambda T, f, timestep: self.step(T, f, timestep, return_fpost=return_fpost)
+        steps = self.__dict__.setdefault("_direction_major_steps", {})
+        key = (return_fpost, jax.tree.structure(f))
+        if key not in steps:
+            formats = jax.tree.map(lambda x: fs._population_format(x, True), f)
+            step_function = getattr(type(self).step, "__wrapped__", type(self).step)
+            fluid_step = getattr(type(fs).step, "__wrapped__", type(fs).step)
+
+            def direction_major_step(T, f, timestep):
+                # Trace the fluid step inline (not from its own jit cache) with its direction-major layout hints active
+                fs._tracing_direction_major = True
+                fs.step = partial(fluid_step, fs)
+                try:
+                    return step_function(self, T, f, timestep, return_fpost)
+                finally:
+                    fs._tracing_direction_major = False
+                    del fs.step
+
+            steps[key] = jax.jit(
+                direction_major_step,
+                in_shardings=(None, formats, None),
+                out_shardings=(None, formats, formats if return_fpost else None),
+                donate_argnums=(0, 1),
+            )
+        return steps[key]
+
     def run(self, t_max):
         """
         This function runs the hybrid thermal LBM simulation for a specified number of time steps.
@@ -543,6 +749,11 @@ class Thermal(object):
                 if not (t_max > start_step):
                     raise ValueError(f"Simulation already exceeded maximum allowable steps (t_max = {t_max}). Consider increasing t_max.")
 
+        fs = self.fluid_solver
+        # Populations are held direction-major inside the time loop (see _direction_major_step) and moved back to the
+        # default layout wherever they leave it (output, checkpoints, the returned value)
+        f = fs._to_direction_major(f)
+        step = self._direction_major_step(f, self.return_fpost)
         if self.compute_MLUPS:
             start = time.time()
         # Loop over all time steps
@@ -553,7 +764,7 @@ class Thermal(object):
 
             if io_flag:
                 # Save the previous values of the macroscopic fields (for error computation)
-                rho_prev, u_prev = self.update_macroscopic_output(f, T)
+                rho_prev, u_prev = self.update_macroscopic_output(fs._to_default_layout(f), T)
                 rho_prev = tree_map(lambda x: downsample_field(x, self.downsampling_factor), rho_prev)
                 u_prev = tree_map(lambda x: downsample_field(x, self.downsampling_factor), u_prev)
                 T_prev = downsample_field(T, self.downsampling_factor)
@@ -563,7 +774,7 @@ class Thermal(object):
                 T_prev = process_allgather(T_prev)
 
             # Perform one time-step (fluid step followed by the temperature update)
-            T, f, fstar = self.step(T, f, timestep, return_fpost=self.return_fpost)
+            T, f, fstar = step(T, f, timestep)
 
             # Print the progress of the simulation
             if print_iter_flag:
@@ -578,7 +789,8 @@ class Thermal(object):
             if io_flag:
                 # Save the simulation data
                 logger.info(f"Saving data at timestep {timestep}/{t_max}")
-                rho, u = self.update_macroscopic_output(f, T)
+                f_out = fs._to_default_layout(f)
+                rho, u = self.update_macroscopic_output(f_out, T)
                 rho = tree_map(lambda x: downsample_field(x, self.downsampling_factor), rho)
                 u = tree_map(lambda x: downsample_field(x, self.downsampling_factor), u)
                 T_out = downsample_field(T, self.downsampling_factor)
@@ -589,7 +801,7 @@ class Thermal(object):
                 T_out = process_allgather(T_out)
 
                 # Save the data
-                self.handle_io_timestep(timestep, f, fstar, T_out, rho, u, T_prev, rho_prev, u_prev)
+                self.handle_io_timestep(timestep, f_out, fs._to_default_layout(fstar), T_out, rho, u, T_prev, rho_prev, u_prev)
 
             if self.stop_simulation:
                 logger.info(f"Stopping the simulation early at timestep {timestep} (requested by output_data).")
@@ -600,7 +812,7 @@ class Thermal(object):
                 logger.info(f"Saving checkpoint at timestep {timestep}/{t_max}")
                 self.mngr.save(timestep, args=orb.args.StandardSave({"T": T}))
                 if self.fluid_solver.mngr is not None:
-                    self.fluid_solver.mngr.save(timestep, args=orb.args.StandardSave({"f": f}))
+                    self.fluid_solver.mngr.save(timestep, args=orb.args.StandardSave({"f": fs._to_default_layout(f)}))
 
             # Start the timer for the MLUPS computation after the first timestep (to remove compilation overhead)
             if self.compute_MLUPS and timestep == 1:
@@ -624,7 +836,7 @@ class Thermal(object):
         if self.fluid_solver.mngr is not None:
             self.fluid_solver.mngr.wait_until_finished()
         self._output_writer.finish()
-        return f, T
+        return fs._to_default_layout(f), T
 
     def handle_io_timestep(self, timestep, f, fstar, T, rho, u, T_prev, rho_prev, u_prev):
         """

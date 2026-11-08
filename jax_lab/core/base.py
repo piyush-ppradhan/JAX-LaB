@@ -16,7 +16,16 @@ from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
-from .boundary_conditions import INLET_OUTLET_BC_TYPES, WALL_BC_TYPES, BounceBack, BounceBackHalfway, EquilibriumBC, Regularized, ZouHe
+from .boundary_conditions import (
+    INLET_OUTLET_BC_TYPES,
+    WALL_BC_TYPES,
+    BoundaryCondition,
+    BounceBack,
+    BounceBackHalfway,
+    EquilibriumBC,
+    Regularized,
+    ZouHe,
+)
 from .precision_policy import PrecisionPolicy
 from .utils import AsyncOutputWriter, colored, downsample_field
 
@@ -91,6 +100,36 @@ def _lattice_sum(directions, channels, axis):
         term = value * float(component) if abs(component) != 1 else (value if component > 0 else -value)
         total = term if total is None else total + term
     return total
+
+
+def lattice_density_momentum(c, f):
+    """
+    Density rho = sum_i f_i and momentum sum_i c_i f_i of populations f (..., q), summed per lattice direction: the lattice
+    velocities (0 and +-1 entries) are compile-time constants, so this is additions and subtractions of the q fields, fused
+    into one pass. Replaces jnp.dot(f, c), a matrix product that runs at reduced (TF32) precision for f32 on recent GPUs by
+    default and does not fuse with its neighbors.
+
+    Parameters
+    ----------
+    c (array-like): Lattice velocities, shape (dim, q).
+
+    f (jax.numpy.ndarray): Populations, shape (..., q).
+
+    Returns
+    -------
+    rho (jax.numpy.ndarray): Density, shape (..., 1).
+
+    momentum (jax.numpy.ndarray): Momentum, shape (..., dim).
+    """
+    c = np.asarray(c)
+    directions = tuple(tuple(int(v) for v in c[:, i]) for i in range(c.shape[1]))
+    channels = [f[..., i] for i in range(len(directions))]
+    rho = sum(channels)
+    momentum = []
+    for axis in range(c.shape[0]):
+        total = _lattice_sum(directions, channels, axis)
+        momentum.append(jnp.zeros_like(rho) if total is None else total)
+    return rho[..., None], jnp.stack(momentum, axis=-1)
 
 
 def stack_components(components, like):
@@ -272,7 +311,7 @@ class LBMBase(object):
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "value"))
             self.sharding = NamedSharding(self.mesh, P("x", "y", "value"))
 
-            self.streaming = jit(
+            self._streaming_kernel = jit(
                 shard_map(
                     self.streaming_m,
                     mesh=self.mesh,
@@ -317,7 +356,7 @@ class LBMBase(object):
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "z", "value"))
             self.sharding = NamedSharding(self.mesh, P("x", "y", "z", "value"))
 
-            self.streaming = jit(
+            self._streaming_kernel = jit(
                 shard_map(
                     self.streaming_m,
                     mesh=self.mesh,
@@ -365,6 +404,8 @@ class LBMBase(object):
         self._create_boundary_data()
         # Local (per-shard, int32) BounceBack indices, used by apply_bc's fast bounce-back path.
         self.local_bounceback_indices = self._make_local_bounceback_indices()
+        # Solid-node mask of the full-way BounceBack nodes, applied inside the fused collisions (see apply_fused_bounceback)
+        self.bounceback_mask = self._make_bounceback_mask()
         # Local (per-shard, int32) data for BounceBackHalfway/InterpolatedBounceBack* and the solid-node pin,
         # used by apply_bc's fast wall boundary condition path.
         self.wall_bc_data, self.solid_pin_indices = self._make_local_wall_bc_data()
@@ -374,6 +415,8 @@ class LBMBase(object):
         # global-index path.
         self.inlet_outlet_bc_data = self._make_local_inlet_outlet_data()
         self.local_equilibrium_bc_indices, self.local_equilibrium_bc_values = self._make_local_equilibrium_bc_data()
+        # Gravity of the density-deviation buoyancy force, set by Thermal (see get_force_field); None otherwise
+        self.buoyancy_gravity = None
         self.force = self.get_force()
 
     @property
@@ -1252,6 +1295,77 @@ class LBMBase(object):
         """
         return self._distribute_local(self._collect_bounceback_indices(self.BCs), jnp.int32)
 
+    def _bounceback_mask_for(self, BCs):
+        """
+        Boolean mask (spatial shape, sharded along x) of the full-way BounceBack nodes of BCs, for applying the bounce-back
+        inside the fused collisions. None when BCs has no BounceBack, or when another boundary condition could interact
+        with it at the post-collision stage (one applied post-collision, or one preparing populations), so that moving the
+        bounce-back into the collision cannot change the order in which boundary conditions act.
+
+        Parameters
+        ----------
+        BCs (list): Boundary conditions for one component (or the whole simulation for single-phase).
+
+        Returns
+        -------
+        (jax.Array or None): The mask.
+        """
+        bounceback = [bc for bc in BCs if isinstance(bc, BounceBack)]
+        if not bounceback:
+            return None
+        for bc in BCs:
+            if isinstance(bc, BounceBack):
+                continue
+            if bc.implementation_step == "PostCollision" or type(bc).prepare_populations is not BoundaryCondition.prepare_populations:
+                return None
+        spatial = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
+        mask = np.zeros(spatial, dtype=bool)
+        for bc in bounceback:
+            mask[tuple(np.asarray(index) for index in bc.indices)] = True
+        sharding = NamedSharding(self.mesh, PartitionSpec("x", *([None] * (self.dim - 1))))
+        mask = jax.device_put(mask, sharding)
+        mask.block_until_ready()
+        return mask
+
+    def _make_bounceback_mask(self):
+        """
+        The full-way BounceBack mask used by the fused collisions (see _bounceback_mask_for). Overridden by Multiphase to
+        return one mask per component.
+        """
+        return self._bounceback_mask_for(self.BCs)
+
+    def apply_fused_bounceback(self, outputs, channels, mask):
+        """
+        Full-way bounce-back inside a fused collision: at the BounceBack nodes the post-collision population of direction i
+        is the pre-collision population of the opposite direction (fout_i = fin_opp(i), as in local_bounceback_m). Applied
+        per direction before the populations are stacked, with the pre-collision populations the collision already reads,
+        so it adds no memory pass; applying it afterwards as a scatter into the stacked array makes XLA materialize the
+        whole post-collision array once more.
+
+        Parameters
+        ----------
+        outputs (list): Post-collision populations, one field per direction.
+
+        channels (list): Pre-collision populations (the collision input), one field per direction.
+
+        mask (jax.Array or None): BounceBack node mask (see _bounceback_mask_for); None leaves outputs unchanged.
+
+        Returns
+        -------
+        (list): The post-collision populations with the bounce-back applied.
+        """
+        if mask is None:
+            return outputs
+        opposite = np.asarray(self.lattice.opp_indices)
+        return [jnp.where(mask, channels[int(opposite[i])], output) for i, output in enumerate(outputs)]
+
+    def _collision_applies_bounceback(self):
+        """
+        Whether collision() applies the full-way bounce-back itself (with apply_fused_bounceback), so apply_bc skips it.
+        Each model returns True exactly when its collision takes the path that does; False here (the generic collision).
+        """
+        return False
+
     def _collect_wall_bc_data(self, BCs, bc_type, has_weights):
         """
         Build padded local (per-shard, int32) fluid-node indices and aligned auxiliary data (imissing, iknown,
@@ -1536,9 +1650,8 @@ class LBMBase(object):
         u (jax.numpy.ndarray): Computed velocity.
         """
         f = self.precision_policy.cast_to_compute(f)
-        rho = jnp.sum(f, axis=-1, keepdims=True)
-        c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype).T
-        u = jnp.dot(f, c) / rho
+        rho, momentum = lattice_density_momentum(self.lattice.c, f)
+        u = momentum / rho
 
         return rho, u
 
@@ -1584,7 +1697,9 @@ class LBMBase(object):
                     fout = fout.at[bc.indices].set(bc.apply(fout, fin))
 
         if implementation_step == "PostCollision" and self.local_bounceback_indices is not None:
-            fout = self.local_bounceback(fout, fin, self.local_bounceback_indices)
+            # Skipped when the collision already applied it (see apply_fused_bounceback)
+            if self.bounceback_mask is None or not self._collision_applies_bounceback():
+                fout = self.local_bounceback(fout, fin, self.local_bounceback_indices)
 
         if implementation_step == "PostStreaming":
             if self.solid_pin_indices is not None:
@@ -1685,6 +1800,14 @@ class LBMBase(object):
         if not self.direction_major_layout or f is None:
             return f
         return jax.tree.map(lambda x: jax.device_put(x, self._population_format(x, False)), f)
+
+    def streaming(self, f):
+        """
+        Stream the populations (the shard_map'd streaming_m kernel). Inside the direction-major step of run() the input and
+        output are constrained to the direction-major layout (see _direction_major_hint), so custom step() overrides that
+        call streaming directly keep contiguous, per-direction streaming too.
+        """
+        return self._direction_major_hint(self._streaming_kernel(self._direction_major_hint(f)))
 
     def _direction_major_hint(self, f):
         """
@@ -2032,6 +2155,26 @@ class LBMBase(object):
         """
         pass
 
+    def get_force_field(self, rho):
+        """
+        Velocity increment du of the body force, given the density field: used by apply_force and the fused collision
+        kernels. By default it is get_force() (uniform, or whatever the user returns). When Thermal enables buoyancy
+        (buoyancy_gravity is set) it is the density-deviation buoyancy plus the fluid force, the same formula as
+        Thermal.apply_force_thermal - provided as a force field so that the fused per-direction collisions keep applying.
+
+        Parameters
+        ----------
+        rho (jax.numpy.ndarray): Density field, shape (..., 1).
+
+        Returns
+        -------
+        (jax.numpy.ndarray or None): du, broadcastable to (..., dim).
+        """
+        if self.buoyancy_gravity is None:
+            return self.get_force()
+        buoyancy = jnp.repeat(rho - rho.mean(), repeats=self.dim, axis=-1) * self.buoyancy_gravity
+        return buoyancy + self.force
+
     @partial(jit, static_argnums=(0,), inline=True)
     def apply_force(self, f_postcollision, feq, rho, u):
         """
@@ -2064,7 +2207,7 @@ class LBMBase(object):
         Boundary conditions. Physica A, 392, 1925-1930.
         2. Krüger, T., et al. (2017). The lattice Boltzmann method. Springer International Publishing, 10.978-3, 4-15.
         """
-        du = self.get_force()
+        du = self.get_force_field(rho)
         c = jnp.array(self.c, dtype=self.precision_policy.compute_dtype)
         cu = 3.0 * jnp.dot(u, c)
         dcu = 3.0 * jnp.dot(du, c)
