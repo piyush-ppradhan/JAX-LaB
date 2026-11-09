@@ -2767,7 +2767,7 @@ class Multiphase(LBMBase):
                 logger.info(
                     colored("MLUPS: ", "blue")
                     + colored(
-                        f"{self.n_components * self.nx * self.ny * t_max / (end - start) / 1e6}",
+                        f"{self.nx * self.ny * t_max / (end - start) / 1e6}",
                         "red",
                     )
                 )
@@ -2778,7 +2778,7 @@ class Multiphase(LBMBase):
                 logger.info(
                     colored("MLUPS: ", "blue")
                     + colored(
-                        f"{self.n_components * self.nx * self.ny * self.nz * t_max / (end - start) / 1e6}",
+                        f"{self.nx * self.ny * self.nz * t_max / (end - start) / 1e6}",
                         "red",
                     )
                 )
