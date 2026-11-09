@@ -647,6 +647,61 @@ class Multiphase(LBMBase):
             return points, valid
         return points
 
+    def _ray_passes_through_solid(self, indices, directions, distance, solid_mask, max_crossings=None):
+        """
+        Check whether characteristic rays pass through solid before reaching their sample points.
+
+        A ray passes through solid (a grain) when one of its lattice-plane crossings before the sample point has an
+        interpolation stencil with no fluid node. A crossing whose stencil is partly fluid, such as the face between a
+        flat wall layer and its first fluid layer that a ray at theta < 45 deg (or > 135 deg) crosses first, does not
+        count: rejecting those would discard every cone on a flat voxel wall.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Wall node coordinates with shape (n, dim), float.
+
+        directions (numpy.ndarray): Unit ray directions with shape (n, dim).
+
+        distance (numpy.ndarray): Distance along each ray to its sample point, shape (n,).
+
+        solid_mask (numpy.ndarray): Boolean mask with True on solid nodes.
+
+        max_crossings (int, optional): Crossings checked per axis. Defaults to None (every crossing before the sample).
+
+        Returns
+        -------
+        (numpy.ndarray): Boolean mask, True where the ray passes through solid.
+        """
+        eps = 1e-9
+        n = len(indices)
+        through = np.zeros(n, dtype=bool)
+        shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        absolute = np.abs(directions)
+        for axis in range(self.dim):
+            k = 0
+            while max_crossings is None or k < max_crossings:
+                k += 1
+                t = np.divide(k, absolute[:, axis], out=np.full(n, np.inf), where=absolute[:, axis] > eps)
+                rows = np.flatnonzero(t < distance - eps)
+                if len(rows) == 0:
+                    break
+                points = indices[rows] + t[rows, None] * directions[rows]
+                rounded = np.round(points)
+                points = np.where(np.isclose(points, rounded, atol=1e-12), rounded, points)
+                lower = np.floor(points).astype(np.int64)
+                frac = points - lower
+                any_fluid = np.zeros(len(rows), dtype=bool)
+                for corner in np.ndindex(*(2 for _ in range(self.dim))):
+                    corner = np.asarray(corner, dtype=bool)
+                    index = np.where(corner, lower + 1, lower)
+                    weight = np.prod(np.where(corner, frac, 1.0 - frac), axis=1)
+                    inside = np.all((index >= 0) & (index < shape), axis=1)
+                    fluid = np.zeros(len(rows), dtype=bool)
+                    fluid[inside] = ~solid_mask[tuple(index[inside].T)]
+                    any_fluid |= (weight > 1e-12) & fluid
+                through[rows[~any_fluid]] = True
+        return through
+
     def _build_interpolation_data(self, points):
         """
         Build multilinear interpolation data for density samples.
@@ -715,7 +770,8 @@ class Multiphase(LBMBase):
         """
         Build the device ray tracer for geometric-wetting preprocessing: for each ray (a wall node and a direction), march
         through the lattice-plane crossings and return the first crossing point whose interpolation stencil touches only
-        fluid nodes, and whether one was found.
+        fluid nodes, whether one was found, and whether an earlier crossing had an interpolation stencil with no fluid node
+        (the ray passes through solid; the device version of _ray_passes_through_solid).
 
         Plain JAX: one ray is a lax.while_loop, vectorized over the rays with vmap (all rays advance together until the last
         one finishes). The arithmetic is the same float64 sequence as the CPU path (_first_fluid_mesh_intersection).
@@ -727,7 +783,7 @@ class Multiphase(LBMBase):
         Returns
         -------
         (callable): fn(indices (ray_count, 3) int32, directions (ray_count, 3) float64, solid (nx, ny, nz) bool) ->
-            (points (ray_count, 3) float64, valid (ray_count,) bool).
+            (points (ray_count, 3) float64, valid (ray_count,) bool, through (ray_count,) bool).
         """
         nx, ny, nz = self.nx, self.ny, self.nz
         max_steps = nx + ny + nz
@@ -766,11 +822,11 @@ class Multiphase(LBMBase):
             )
 
             def condition(state):
-                iteration, _, _, _, _, _, _, _, done = state
+                iteration, _, _, _, _, _, _, _, _, done = state
                 return (iteration < candidate_slots) & ~done
 
             def body(state):
-                iteration, k0, k1, k2, out0, out1, out2, found, _ = state
+                iteration, k0, k1, k2, out0, out1, out2, found, through, _ = state
                 t0 = jnp.where(active[0] & (k0 <= max_steps), round_half_to_even(k0 / absolute[0], 1e12), jnp.inf)
                 t1 = jnp.where(active[1] & (k1 <= max_steps), round_half_to_even(k1 / absolute[1], 1e12), jnp.inf)
                 t2 = jnp.where(active[2] & (k2 <= max_steps), round_half_to_even(k2 / absolute[2], 1e12), jnp.inf)
@@ -790,6 +846,7 @@ class Multiphase(LBMBase):
                 upper = tuple(component + 1 for component in lower)
                 frac = tuple(point[axis] - lower[axis] for axis in range(3))
                 fluid = finite
+                any_fluid = jnp.zeros((), dtype=bool)
                 for corner in np.ndindex(2, 2, 2):
                     coordinates = tuple(upper[axis] if corner[axis] else lower[axis] for axis in range(3))
                     weight = (
@@ -810,7 +867,9 @@ class Multiphase(LBMBase):
                         jnp.clip(coordinates[1], 0, ny - 1),
                         jnp.clip(coordinates[2], 0, nz - 1),
                     )
-                    fluid &= (weight <= 1e-12) | (in_bounds & ~solid[safe])
+                    node_fluid = in_bounds & ~solid[safe]
+                    fluid &= (weight <= 1e-12) | node_fluid
+                    any_fluid |= (weight > 1e-12) & node_fluid
                 return (
                     iteration + 1,
                     k0 + (t0 == value),
@@ -820,16 +879,18 @@ class Multiphase(LBMBase):
                     jnp.where(fluid, point[1], out1),
                     jnp.where(fluid, point[2], out2),
                     found | fluid,
+                    through | (finite & ~fluid & ~any_fluid),
                     fluid | ~finite,
                 )
 
-            result = jax.lax.while_loop(condition, body, (0, 1, 1, 1, *initial_point, False, False))
-            return jnp.stack(result[4:7]), result[7]
+            result = jax.lax.while_loop(condition, body, (0, 1, 1, 1, *initial_point, False, False, False))
+            return jnp.stack(result[4:7]), result[7], result[8]
 
         return jax.jit(jax.vmap(trace, in_axes=(0, 0, None)))
 
-    def _first_fluid_mesh_intersection_gpu(self, indices, directions, solid_mask):
-        """Trace 3D characteristic rays on every local GPU with bounded temporary device memory."""
+    def _first_fluid_mesh_intersection_gpu(self, indices, directions, solid_mask, return_through=False):
+        """Trace 3D characteristic rays on every local GPU with bounded temporary device memory. Returns (points, valid), and
+        with return_through also whether each ray passed through solid before its point (see _ray_passes_through_solid)."""
         devices = tuple(device for device in jax.local_devices() if device.platform == "gpu")
         if not devices:
             raise RuntimeError("GPU geometric preprocessing requested, but no local GPU is available.")
@@ -838,6 +899,7 @@ class Multiphase(LBMBase):
         directions = np.asarray(directions, dtype=np.float64)
         points = np.empty_like(directions)
         valid = np.empty((len(indices),), dtype=bool)
+        through = np.empty((len(indices),), dtype=bool)
         batch_size = self.geometric_preprocessing_batch_size
 
         with jax.enable_x64():
@@ -870,7 +932,8 @@ class Multiphase(LBMBase):
                     count = stop - start
                     points[start:stop] = np.asarray(output[0])[:count]
                     valid[start:stop] = np.asarray(output[1])[:count]
-        return points, valid
+                    through[start:stop] = np.asarray(output[2])[:count]
+        return (points, valid, through) if return_through else (points, valid)
 
     def _nearest_fluid_lattice_points(self, indices, normals, solid_mask):
         """Select the adjacent fluid lattice node most aligned with each wall normal."""
@@ -963,9 +1026,7 @@ class Multiphase(LBMBase):
         cos_angle = np.cos(angle)
         sin_angle = np.sin(angle)
         gpu_devices = tuple(device for device in jax.local_devices() if device.platform == "gpu")
-        use_gpu = self.geometric_preprocessing_backend == "gpu" or (
-            self.geometric_preprocessing_backend == "auto" and bool(gpu_devices) and len(indices) * sample_count >= 262144
-        )
+        use_gpu = self.geometric_preprocessing_backend == "gpu" or (self.geometric_preprocessing_backend == "auto" and bool(gpu_devices))
         if self.geometric_preprocessing_backend == "gpu" and not gpu_devices:
             raise RuntimeError("GPU geometric preprocessing requested, but no local GPU is available.")
         point_data = []
@@ -978,7 +1039,7 @@ class Multiphase(LBMBase):
             directions = cos_angle[:, None] * normals + sin_angle[:, None] * tangent_direction
             if use_gpu:
                 try:
-                    points, valid = self._first_fluid_mesh_intersection_gpu(indices, directions, solid_mask)
+                    points, valid, through = self._first_fluid_mesh_intersection_gpu(indices, directions, solid_mask, return_through=True)
                 except Exception as error:
                     if self.geometric_preprocessing_backend == "gpu":
                         raise
@@ -987,28 +1048,29 @@ class Multiphase(LBMBase):
                     points, valid = self._first_fluid_mesh_intersection(indices, directions, solid_mask, return_valid=True)
             else:
                 points, valid = self._first_fluid_mesh_intersection(indices, directions, solid_mask, return_valid=True)
-            # A characteristic belongs to this wall only when its first mesh crossing is fluid.  Continuing through
-            # solid until a remote pore is found can import a density from the opposite side of a grain.  In thin
-            # throats, the extrema selection then creates a liquid-density wall inside vapor and can drive the
-            # adjacent fluid density negative in one step.  Treat later crossings like unresolved rays so they use a
-            # local same-wall sample (or the nearest adjacent fluid node when every ray is unresolved).
-            first_points = self._first_mesh_intersection(indices, directions)
-            first_distance = np.linalg.norm(first_points - indices, axis=1)
-            point_distance = np.linalg.norm(points - indices, axis=1)
-            local = point_distance <= first_distance + 1e-10
-            crosses_solid |= valid & ~local
-            valid &= local
+            if not use_gpu:
+                indices_f = np.asarray(indices, dtype=np.float64)
+                through = np.zeros(len(indices), dtype=bool)
+                rows = np.flatnonzero(valid)
+                distance = np.linalg.norm(points[rows] - indices_f[rows], axis=1)
+                through[rows] = self._ray_passes_through_solid(indices_f[rows], directions[rows], distance, solid_mask)
+            # A characteristic belongs to this wall only when it reaches its sample without passing through solid.
+            # Continuing through solid until a remote pore is found can import a density from the opposite side of a
+            # grain.  In thin throats, the extrema selection then creates a liquid-density wall inside vapor and can
+            # drive the adjacent fluid density negative in one step.  Treat such rays like unresolved ones so they use
+            # a local same-wall sample (or the nearest adjacent fluid node when every ray is unresolved).
+            crosses_solid |= valid & through
+            valid &= ~through
             first_valid = valid & ~has_fallback
             fallback_points[first_valid] = points[first_valid]
             has_fallback |= valid
             validity.append(valid)
             point_data.append(self._build_interpolation_data(points))
-        # A partial contact-angle cone has a directional bias.  If any otherwise-valid ray first crossed solid,
-        # replace the whole cone at that wall by its nearest adjacent fluid node.  Fully resolved cones—and thus
-        # ordinary flat/curved-wall behavior—remain unchanged.
+        # Only the rays that pass through solid are dropped: _repair_invalid_geometric_point_data replaces each of them by
+        # a valid ray of the same wall node, which leaves the extremum over the cone unchanged. A node falls back to its
+        # nearest adjacent fluid node (a neutral wall) only when none of its rays is valid.
         if np.any(crosses_solid):
-            for valid in validity:
-                valid[crosses_solid] = False
+            logger.info("Dropped geometric rays through solid at %d wall nodes.", np.count_nonzero(crosses_solid))
         return self._repair_invalid_geometric_point_data(
             point_data,
             validity,

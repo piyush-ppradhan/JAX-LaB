@@ -300,24 +300,14 @@ def test_geometric_3d_rejects_rays_crossing_solid_and_underresolved_force_nodes(
         theta=np.array([np.pi / 3]),
         solid_mask=solid,
     )
-    for point_data in points:
-        x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point_data
-        weights = np.stack((w000, w100, w010, w110, w001, w101, w011, w111), axis=1)
-        corners = np.stack(
-            (
-                np.column_stack((x0, y0, z0)),
-                np.column_stack((x1, y0, z0)),
-                np.column_stack((x0, y1, z0)),
-                np.column_stack((x1, y1, z0)),
-                np.column_stack((x0, y0, z1)),
-                np.column_stack((x1, y0, z1)),
-                np.column_stack((x0, y1, z1)),
-                np.column_stack((x1, y1, z1)),
-            ),
-            axis=1,
-        )
-        sample = np.sum(weights[..., None] * corners, axis=1)
-        np.testing.assert_allclose(sample, np.array([[7.0, 7.0, 4.0]]), rtol=0.0, atol=1e-6)
+    # Rays through the grain to the remote pore are dropped and replaced by the node's local sample: every sample stays
+    # on the local fluid stencil (7, 7..8, 4), none comes from the pore at z >= 10.
+    samples = np.concatenate([_sample_points_3d(point_data) for point_data in points])
+    np.testing.assert_allclose(samples[:, [0, 2]], np.tile([7.0, 4.0], (len(samples), 1)), rtol=0.0, atol=1e-5)
+    assert np.all((samples[:, 1] >= 7.0 - 1e-5) & (samples[:, 1] <= 8.0 + 1e-5))
+    fluid_mask = ~solid
+    fluid_mask[:, :, 10:] = False  # samples must not use the remote pore
+    _assert_geometric_samples_use_fluid_nodes([{"points": points}], fluid_mask)
 
     fluid = np.zeros((5, 5, 5), dtype=bool)
     fluid[2, 2, 2] = True
@@ -326,6 +316,86 @@ def test_geometric_3d_rejects_rays_crossing_solid_and_underresolved_force_nodes(
     assert not sim._create_geometric_force_mask(fluid)[2, 2, 2]
     fluid[1, 2, 2] = True
     assert sim._create_geometric_force_mask(fluid)[2, 2, 2]
+
+
+def _sample_points_3d(point_data):
+    x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point_data
+    weights = np.stack((w000, w100, w010, w110, w001, w101, w011, w111), axis=1)
+    corners = np.stack(
+        [
+            np.column_stack(c)
+            for c in ((x0, y0, z0), (x1, y0, z0), (x0, y1, z0), (x1, y1, z0), (x0, y0, z1), (x1, y0, z1), (x0, y1, z1), (x1, y1, z1))
+        ],
+        axis=1,
+    )
+    return np.sum(weights[..., None] * corners, axis=1)
+
+
+@pytest.mark.parametrize("theta_degrees", [15, 30, 40, 50, 60, 120, 140, 165])
+def test_geometric_3d_flat_wall_samples_first_fluid_layer(theta_degrees):
+    # On a flat voxel wall the characteristic rays must reach the first fluid layer at a tangential distance |cot(theta)|.
+    # Below 45 (and above 135) degrees they first cross a mesh line inside the wall layer; that must not count as crossing
+    # solid, otherwise the whole cone falls back to the node above the wall, i.e. a neutral 90 degree wall.
+    domain = (24, 24, 8)
+    solid = np.zeros(domain, dtype=bool)
+    solid[:, :, 0] = True
+    sim = RandomSolidNoWetting(solid, **_simulation_kwargs(domain, LatticeD3Q19))
+    sim.geometric_preprocessing_backend = "cpu"
+    wall = np.array([[12, 12, 0]], dtype=np.int32)
+    theta = np.radians(theta_degrees)
+
+    points = sim._build_geometric_3d_characteristic_data(wall, np.array([[0.0, 0.0, 1.0]]), np.array([theta]), solid)
+    samples = np.concatenate([_sample_points_3d(point_data) for point_data in points])
+    np.testing.assert_allclose(samples[:, 2], 1.0, atol=1e-5)  # interpolation weights are stored in f32
+    np.testing.assert_allclose(np.linalg.norm(samples[:, :2] - wall[0, :2], axis=1), abs(1.0 / np.tan(theta)), atol=1e-5)
+
+
+def _wetted_geometry_sim(solid, theta, backend):
+    class Wall(MultiphaseBGK):
+        def set_boundary_conditions(self):
+            indices = tuple(np.nonzero(solid))
+            self.BCs[0].append(BounceBack(indices, self.grid_info, self.precision_policy, np.full(len(indices[0]), theta)))
+
+    kwargs = _simulation_kwargs(solid.shape, LatticeD3Q19)
+    for key in ("M", "s_rho", "s_e", "s_eta", "s_j", "s_q", "s_v", "s_pi", "s_m"):
+        kwargs.pop(key)
+    return Wall(wetting_formulation="geometric", geometric_preprocessing_backend=backend, **kwargs)
+
+
+def _porous_solid(n, seed=SEED):
+    rng = np.random.default_rng(seed)
+    grid = np.meshgrid(*(np.arange(n),) * 3, indexing="ij")
+    solid = np.zeros((n, n, n), dtype=bool)
+    for center in rng.uniform(0, n, (int(0.4 * n**3 / (4 / 3 * np.pi * 27)), 3)):
+        solid |= sum(np.minimum(np.abs(g - c), n - np.abs(g - c)) ** 2 for g, c in zip(grid, center, strict=True)) <= 9
+    return solid
+
+
+@pytest.mark.parametrize("theta_degrees", [20, 30, 150])
+def test_geometric_3d_curved_wall_keeps_contact_angle(theta_degrees):
+    # On a staircased sphere some cone rays clip the next voxel step. Only those rays are dropped: no wall node may fall
+    # back to the neutral nearest-fluid sample (all eight samples on one lattice node).
+    n = 40
+    grid = np.meshgrid(*(np.arange(n),) * 3, indexing="ij")
+    solid = sum((g - n / 2) ** 2 for g in grid) <= 12**2
+    sim = _wetted_geometry_sim(solid, np.radians(theta_degrees), "cpu")
+    global_data, _ = sim._create_geometric_wetting_data(localize=False)
+    (data,) = global_data[0]
+    samples = np.stack([_sample_points_3d(point_data) for point_data in data["points"]], axis=1)  # (nodes, 8, 3)
+    neutral = np.all(np.abs(samples - samples[:, :1]) < 1e-5, axis=(1, 2)) & np.all(np.abs(samples[:, 0] - np.round(samples[:, 0])) < 1e-5, axis=1)
+    assert not np.any(neutral)
+    _assert_geometric_samples_use_fluid_nodes([data], ~solid)
+
+
+@pytest.mark.skipif(not any(device.platform == "gpu" for device in jax.local_devices()), reason="GPU required")
+def test_geometric_3d_gpu_preprocessing_matches_cpu_in_porous_medium():
+    solid = _porous_solid(32)
+    sim = _wetted_geometry_sim(solid, np.radians(30.0), "gpu")
+    gpu_data, _ = sim._create_geometric_wetting_data(localize=False)
+    sim.geometric_preprocessing_backend = "cpu"
+    cpu_data, _ = sim._create_geometric_wetting_data(localize=False)
+    for gpu_leaf, cpu_leaf in zip(jax.tree.leaves(gpu_data), jax.tree.leaves(cpu_data), strict=True):
+        np.testing.assert_array_equal(gpu_leaf, cpu_leaf)
 
 
 @pytest.mark.skipif(jax.device_count() < 2, reason="Multiple devices required for local geometric-wetting coverage")
