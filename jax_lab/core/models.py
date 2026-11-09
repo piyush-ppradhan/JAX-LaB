@@ -248,16 +248,18 @@ class KBCSim(LBMBase):
 
     def _shear_from_momentum_flux_d2q9(self, Pi, like):
         """Shear part of the D2Q9 non-equilibrium populations from their momentum flux Pi (see fdecompose_shear_d2q9)."""
+        # s_i = N (c_ix^2 - c_iy^2) + Pi_xy c_ix c_iy with N = Pi_xx - Pi_yy (Pi ordered xx, xy, yy), built from the
+        # lattice vectors so that it holds for this lattice's direction ordering (with the later factor 1/4 it reproduces
+        # the deviatoric part of Pi: N and Pi_xy)
         N = Pi[..., 0] - Pi[..., 2]
+        c = np.asarray(self.lattice.c)
         s = {}
-        s[6] = N
-        s[3] = N
-        s[2] = -N
-        s[1] = -N
-        s[8] = Pi[..., 1]
-        s[4] = -Pi[..., 1]
-        s[5] = -Pi[..., 1]
-        s[7] = Pi[..., 1]
+        for i in range(self.lattice.q):
+            cx, cy = int(c[0, i]), int(c[1, i])
+            if cx * cx != cy * cy:
+                s[i] = N if cx * cx > cy * cy else -N
+            elif cx * cy != 0:
+                s[i] = Pi[..., 1] if cx * cy > 0 else -Pi[..., 1]
         s = stack_components(s, like)
 
         return s

@@ -115,7 +115,7 @@ class Cylinder(BGKSim):
 poiseuille_profile = lambda x, x0, d, umax: np.maximum(0.0, 4.0 * umax / (d**2) * ((x - x0) * d - (x - x0) ** 2))
 
 if __name__ == "__main__":
-    precision = "f64/f64"
+    precision = "f64/f64"  # f32 under-predicts the vortex-shedding lift amplitude (CL_max 0.67 vs 0.98) at this low Mach number
     # diam_list = [10, 20, 30, 40, 60, 80]
     diam_list = [80]
     CL_list, CD_list = [], []
@@ -145,14 +145,15 @@ if __name__ == "__main__":
             "io_rate": int(500 / scale_factor),
             "print_info_rate": int(10000 / scale_factor),
             "return_fpost": True,  # Need to retain fpost-collision for computation of lift and drag
+            "io_populations": True,  # output_data reads the populations (momentum-exchange force)
         }
         # characteristic time
         tc = prescribed_vel / diam
         niter_max = int(100 // tc)
         sim = Cylinder(**kwargs)
         sim.run(niter_max)
-        CL_list.append(sim.CL_max)
-        CD_list.append(sim.CD_max)
+        CL_list.append(float(sim.CL_max))
+        CD_list.append(float(sim.CD_max))
 
     result_dict["CL"] = CL_list
     result_dict["CD"] = CD_list

@@ -15,7 +15,7 @@ from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import NamedSharding, PartitionSpec
 
 from ..base import LBMBase
-from ..boundary_conditions import INLET_OUTLET_BC_TYPES, WALL_BC_TYPES, BounceBack, BounceBackHalfway, NonEquilibriumExtrapolation
+from ..boundary_conditions import INLET_OUTLET_BC_TYPES, WALL_BC_TYPES, BounceBack, BounceBackHalfway, NonEquilibriumExtrapolation, link_fullway_walls
 from ..lattice import LatticeD2Q9, LatticeD3Q19
 from ..utils import colored, downsample_field
 from .boundary_conditions import VoFOpenBoundary
@@ -288,6 +288,7 @@ class VoF(LBMBase):
             for bc in BCs:
                 assert bc.implementation_step in ["PostStreaming", "PostCollision"]
                 bc.create_local_mask_and_normal_arrays(grid_mask)
+            link_fullway_walls(BCs)
             logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
     def _make_local_bounceback_indices(self):

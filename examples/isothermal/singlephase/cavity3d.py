@@ -52,15 +52,7 @@ class Cavity(KBCSim):
         vel_wall = np.zeros(moving_wall.shape, dtype=self.precision_policy.compute_dtype)
         vel_wall[:, 0] = prescribed_vel
         # self.BCs.append(BounceBackHalfway(tuple(moving_wall.T), self.grid_info, self.precision_policy, vel_wall))
-        self.BCs.append(
-            Regularized(
-                tuple(moving_wall.T),
-                self.grid_info,
-                self.precision_policy,
-                "velocity",
-                vel_wall,
-            )
-        )
+        self.BCs.append(Regularized(tuple(moving_wall.T), self.grid_info, self.precision_policy, "velocity", vel_wall))
 
         # concatenate the indices of the left, right, and bottom walls
         walls = np.concatenate((
@@ -73,15 +65,7 @@ class Cavity(KBCSim):
         # apply bounce back boundary condition to the walls
         # self.BCs.append(BounceBackHalfway(tuple(walls.T), self.grid_info, self.precision_policy))
         vel_wall = np.zeros(walls.shape, dtype=self.precision_policy.compute_dtype)
-        self.BCs.append(
-            Regularized(
-                tuple(walls.T),
-                self.grid_info,
-                self.precision_policy,
-                "velocity",
-                vel_wall,
-            )
-        )
+        self.BCs.append(Regularized(tuple(walls.T), self.grid_info, self.precision_policy, "velocity", vel_wall))
         return
 
     def output_data(self, **kwargs):
@@ -96,12 +80,7 @@ class Cavity(KBCSim):
 
         err = np.sum(np.abs(u_old - u_new))
         logger.info("error= {:07.6f}".format(err))
-        fields = {
-            "rho": rho[..., 0],
-            "u_x": u[..., 0],
-            "u_y": u[..., 1],
-            "u_z": u[..., 2],
-        }
+        fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
         # HDF5/XDMF output option:
         # from jax_lab.core.utils import save_fields_hdf5_xdmf
         # save_fields_hdf5_xdmf(timestep, fields)
@@ -111,17 +90,8 @@ class Cavity(KBCSim):
         output_filename = "./profiles_" + f"{timestep:07d}.json"
         ux_mid = 0.5 * (u[0, nx // 2, ny // 2, :, 0] + u[0, nx // 2 + 1, ny // 2 + 1, :, 0])
         uz_mid = 0.5 * (u[0, :, ny // 2, nz // 2, 2] + u[0, :, ny // 2 + 1, nz // 2 + 1, 2])
-        ldc_ref_result = {
-            "ux(x=y=0)": list(ux_mid / prescribed_vel),
-            "uz(z=y=0)": list(uz_mid / prescribed_vel),
-        }
-        json.dump(
-            ldc_ref_result,
-            codecs.open(output_filename, "w", encoding="utf-8"),
-            separators=(",", ":"),
-            sort_keys=True,
-            indent=4,
-        )
+        ldc_ref_result = {"ux(x=y=0)": list(ux_mid / prescribed_vel), "uz(z=y=0)": list(uz_mid / prescribed_vel)}
+        json.dump(ldc_ref_result, codecs.open(output_filename, "w", encoding="utf-8"), separators=(",", ":"), sort_keys=True, indent=4)
 
         # Calculate the velocity magnitude
         # u_mag = np.linalg.norm(u, axis=2)
@@ -131,7 +101,7 @@ class Cavity(KBCSim):
 if __name__ == "__main__":
     # Note:
     # We have used BGK with D3Q19 (or D3Q27) for Re=(1000, 3200) and KBC with D3Q27 for Re=10,000
-    precision = "f64/f64"
+    precision = "f32/f32"
     lattice = LatticeD3Q27(precision)
 
     nx = 512

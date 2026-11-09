@@ -23,6 +23,7 @@ from .boundary_conditions import (
     BounceBackHalfway,
     EquilibriumBC,
     ZouHe,
+    link_fullway_walls,
 )
 from .precision_policy import PrecisionPolicy
 from .utils import AsyncOutputWriter, colored, downsample_field
@@ -651,6 +652,7 @@ class LBMBase(object):
         for bc in self.BCs:
             assert bc.implementation_step in ["PostStreaming", "PostCollision"]
             bc.create_local_mask_and_normal_arrays(grid_mask)
+        link_fullway_walls(self.BCs)
         logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
     @partial(jit, static_argnums=(0, 1, 2, 4))

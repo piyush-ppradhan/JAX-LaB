@@ -99,8 +99,9 @@ class Cylinder(KBCSim):
         u_prev = kwargs["u_prev"][..., 1:-1, :]
 
         # compute lift and drag over the cyliner
-        cylinder = self.BCs[0]
-        boundary_force = cylinder.momentum_exchange_force(kwargs["f_poststreaming"], kwargs["f_postcollision"])
+        # The moving cylinder is BCs[1] (BCs[0] are the channel walls); it moves, so its force needs the time step
+        cylinder = self.BCs[1]
+        boundary_force = cylinder.momentum_exchange_force(kwargs["f_poststreaming"], kwargs["f_postcollision"], timestep)
         boundary_force = np.sum(boundary_force, axis=0)
         drag = boundary_force[0]
         lift = boundary_force[1]
@@ -125,7 +126,7 @@ class Cylinder(KBCSim):
 poiseuille_profile = lambda x, x0, d, umax: np.maximum(0.0, 4.0 * umax / (d**2) * ((x - x0) * d - (x - x0) ** 2))
 
 if __name__ == "__main__":
-    precision = "f64/f64"
+    precision = "f32/f32"
     lattice = LatticeD2Q9(precision)
     prescribed_vel = 0.005
     diam = 20
@@ -147,6 +148,7 @@ if __name__ == "__main__":
         "io_rate": 500,
         "print_info_rate": 500,
         "return_fpost": True,  # Need to retain fpost-collision for computation of lift and drag
+        "io_populations": True,  # output_data reads the populations (momentum-exchange force)
     }
     sim = Cylinder(**kwargs)
 

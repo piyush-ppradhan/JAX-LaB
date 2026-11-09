@@ -56,6 +56,9 @@ class BoundaryCondition(object):
         self.is_dynamic = False
         self.needs_extra_configuration = False
         self.implementation_step = "PostStreaming"
+        # The other full-way bounce-back conditions of the same simulation (and component), set by link_fullway_walls:
+        # their nodes are solid too when the momentum exchange force decides which links come from fluid nodes
+        self.other_fullway_walls = ()
 
     def create_local_mask_and_normal_arrays(self, grid_mask):
         """
@@ -327,6 +330,10 @@ class BoundaryCondition(object):
         This method computes the force exerted on the solid geometry at each boundary node using the momentum exchange method.
         The force is computed based on the post-streaming and post-collision distribution functions. This method
         should be called after the boundary conditions are imposed.
+
+        This form is for boundaries placed on the fluid nodes next to the solid (e.g. BounceBackHalfway,
+        InterpolatedBounceBackBouzidi). The full-way bounce-back conditions, placed on the solid nodes, override it
+        (see _fullway_momentum_exchange_force).
         """
         c = jnp.array(self.lattice.c, dtype=self.precision_policy.compute_dtype)
         nbd = len(self.indices[0])
@@ -334,6 +341,55 @@ class BoundaryCondition(object):
         phi = f_postcollision[self.indices][bindex, self.iknown] + f_poststreaming[self.indices][bindex, self.imissing]
         force = jnp.sum(c[:, self.iknown] * phi, axis=-1).T
         return force
+
+    def _fullway_momentum_exchange_force(self, indices, f_poststreaming, f_postcollision, timestep=None):
+        """
+        Momentum exchange force for a full-way bounce-back boundary, whose indices are the solid nodes [1, 3].
+
+        Every link from a fluid node x - c_i into a solid node x carries the population f_i that arrives at x after
+        streaming and the population f_opp(i) that the bounce-back sends back along it, so the momentum given to the
+        solid at x is
+            F(x) = sum_i c_i [f_poststreaming(x, i) + f_postcollision(x, opp(i))],
+        summed over the directions i whose source node x - c_i (periodic, as in streaming) is a fluid node: not a node of
+        this boundary nor of the simulation's other full-way bounce-back conditions (other_fullway_walls). This excludes,
+        e.g., the populations that wrap periodically from one wall on the domain edge to the opposite wall and never
+        reach the fluid. A moving wall's velocity correction is included through f_postcollision.
+
+        Parameters
+        ----------
+        indices (tuple of arrays): Solid-node coordinates (global), one array per spatial axis.
+        f_poststreaming (array): Populations after streaming and the post-streaming boundary conditions, (..., q).
+        f_postcollision (array): Populations after collision and the post-collision boundary conditions, (..., q).
+        timestep (int, optional): Time step of the populations, to place moving walls among other_fullway_walls (their
+            initial position is used when it is not given).
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Force on the solid at each boundary node, shape (number of nodes, dim).
+        """
+        dtype = self.precision_policy.compute_dtype
+        c_host = np.asarray(self.lattice.c)
+        c = jnp.asarray(c_host, dtype=dtype)
+        opp = np.asarray(self.lattice.opp_indices)
+        shape = f_poststreaming.shape[:-1]
+        indices = tuple(jnp.asarray(i) for i in indices)
+        solid = jnp.zeros(shape, dtype=bool).at[indices].set(True)
+        for wall in self.other_fullway_walls:
+            wall_indices = wall.indices
+            if wall.is_dynamic and timestep is not None:
+                wall_indices, _ = wall.update_function(timestep)
+            solid = solid.at[tuple(jnp.asarray(i) for i in wall_indices)].set(True)
+        # Fluid links: the source node x - c_i (periodic, as in streaming) is not solid
+        links = jnp.stack(
+            [
+                ~solid[tuple((idx - int(c_host[axis, i])) % n for axis, (idx, n) in enumerate(zip(indices, shape, strict=True)))]
+                for i in range(self.lattice.q)
+            ],
+            axis=-1,
+        )
+        arriving = jnp.asarray(f_poststreaming, dtype=dtype)[indices]
+        returning = jnp.asarray(f_postcollision, dtype=dtype)[indices][..., opp]
+        return jnp.where(links, arriving + returning, 0.0) @ c.T
 
 
 class BounceBack(BoundaryCondition):
@@ -363,6 +419,17 @@ class BounceBack(BoundaryCondition):
         self.theta = theta
         self.phi = phi
         self.delta_rho = delta_rho
+
+    def momentum_exchange_force(self, f_poststreaming, f_postcollision):
+        """
+        Momentum exchange force on the solid at each boundary (solid) node; see
+        BoundaryCondition._fullway_momentum_exchange_force. Call it with the populations output_data receives.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Force on the solid at each boundary node, shape (number of nodes, dim).
+        """
+        return self._fullway_momentum_exchange_force(self.indices, f_poststreaming, f_postcollision)
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
@@ -426,6 +493,26 @@ class BounceBackMoving(BoundaryCondition):
         self.phi = phi
         self.delta_rho = delta_rho
 
+    def momentum_exchange_force(self, f_poststreaming, f_postcollision, timestep=None):
+        """
+        Momentum exchange force on the moving solid at each of its nodes; see
+        BoundaryCondition._fullway_momentum_exchange_force.
+
+        Parameters
+        ----------
+        f_poststreaming, f_postcollision (array): The populations output_data receives.
+        timestep (int): The time step of those populations (output_data's timestep); the solid nodes are taken from
+            update_function at that time, since they move.
+
+        Returns
+        -------
+        (jax.numpy.ndarray): Force on the solid at each of its nodes, shape (number of nodes, dim).
+        """
+        if timestep is None:
+            raise ValueError("BounceBackMoving.momentum_exchange_force needs the timestep of the populations (the solid moves).")
+        indices, _ = self.update_function(timestep)
+        return self._fullway_momentum_exchange_force(indices, f_poststreaming, f_postcollision, timestep)
+
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin, time):
         """
@@ -445,8 +532,20 @@ class BounceBackMoving(BoundaryCondition):
         """
         indices, vel = self.update_function(time)
         c = jnp.array(self.lattice.c, dtype=self.precision_policy.compute_dtype)
+        # Moving-wall bounce-back: the population sent back along c_i gains 2 w_i rho_w (c_i . u_w) / c_s^2 (rho_w = 1)
         cu = 6.0 * self.lattice.w * jnp.dot(vel, c)
-        return fout.at[indices].set(fin[indices][..., self.lattice.opp_indices] - cu)
+        return fout.at[indices].set(fin[indices][..., self.lattice.opp_indices] + cu)
+
+
+def link_fullway_walls(bcs):
+    """
+    Give each full-way bounce-back condition (BounceBack, BounceBackMoving) in bcs the others, so that its momentum
+    exchange force treats their nodes as solid (see BoundaryCondition._fullway_momentum_exchange_force). Called by the
+    solvers once the boundary conditions of a simulation (or of one component) are set.
+    """
+    walls = [bc for bc in bcs if isinstance(bc, (BounceBack, BounceBackMoving))]
+    for wall in walls:
+        wall.other_fullway_walls = tuple(other for other in walls if other is not wall)
 
 
 class BounceBackHalfway(BoundaryCondition):

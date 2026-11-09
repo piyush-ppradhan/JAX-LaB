@@ -149,6 +149,7 @@ if __name__ == "__main__":
         "io_rate": 100,
         "print_info_rate": 100,
         "return_fpost": True,  # Need to retain fpost-collision for computation of lift and drag
+        "io_populations": True,  # output_data reads the populations (momentum-exchange force)
     }
     sim = Car(**kwargs)
     sim.run(200000)

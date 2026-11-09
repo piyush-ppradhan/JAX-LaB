@@ -38,6 +38,7 @@ from ..boundary_conditions import (
     InterpolatedBounceBackDifferentiable,
     ZouHe,
     _neq_extrapolation_math,
+    link_fullway_walls,
 )
 from ..lattice import LatticeD2Q9, LatticeD3Q19, LatticeD3Q27
 from ..utils import colored, downsample_field
@@ -1315,6 +1316,7 @@ class Multiphase(LBMBase):
             for bc in self.BCs[i]:
                 assert bc.implementation_step in ["PostStreaming", "PostCollision"]
                 bc.create_local_mask_and_normal_arrays(grid_mask)
+            link_fullway_walls(self.BCs[i])
             logger.info("Time to create the local masks and normal arrays: %.6f seconds", time.time() - start)
 
     def _export_force_corrected_fields(self, rho_scalar_tree, velocity_tree, force_tree):
