@@ -8,12 +8,19 @@ Peng-Robinson EOS, while temperature is advanced by the hybrid finite-difference
 The vapor density is adjusted across the initial thermal interface to keep the Peng-Robinson pressure equal to the saturation pressure. This avoids a non-physical
 pressure impulse when temperature coupling is enabled. The default conductivity is increased
 to K = 2 with automatic RK substepping so the benchmark completes faster than the published K = 1/3 reference case.
+
+Here the domain is enlarged to fill the memory of the GPUs, with the droplet radius scaled with it (the same benchmark at a higher resolution) and
+the run length and output interval with the square of the scale (the evaporation time grows as D0^2 / K). The interface width is set by the
+equation of state and is not scaled.
+
+Usage: python d2_law_3d.py [--mlups]. With --mlups, only 150 timesteps are run, to measure the performance (MLUPS).
 """
 
 import glob
 import os
 import sys
 
+import jax
 import numpy as np
 from jax import config
 
@@ -33,6 +40,27 @@ logger = logging.getLogger(__name__)
 
 # f32 is accurate and stable for this case (same d2-law slope as f64 to 1e-5, 4.8x faster); enable x64 for f64 runs
 # config.update("jax_enable_x64", True)
+
+
+def memory_filling_size(bytes_per_cell, dim, reference, fill=0.85, multiple=16):
+    """
+    Domain edge length (a multiple of `multiple`) whose simulation fills the fraction `fill` of the memory available to JAX on all devices.
+
+    Parameters
+    ----------
+    bytes_per_cell (float): Peak device memory of the simulation per lattice cell (measured).
+    dim (int): Number of spatial dimensions.
+    reference (int): Edge length used when the devices do not report their memory (e.g. on CPU).
+
+    Returns
+    -------
+    int: Edge length, at least `reference`.
+    """
+    stats = [device.memory_stats() for device in jax.devices()]
+    if any(not stat or "bytes_limit" not in stat for stat in stats):
+        return reference
+    limit = sum(stat["bytes_limit"] for stat in stats)
+    return max(reference, int((fill * limit / bytes_per_cell) ** (1.0 / dim)) // multiple * multiple)
 
 
 def peng_robinson_pressure(rho, T):
@@ -202,12 +230,13 @@ def droplet_diameter(rho):
 
 if __name__ == "__main__":
     precision = "f32/f32"
-    nx = 100
-    ny = 100
-    nz = 100
+    # Reference benchmark (100^3, droplet radius 25) scaled to fill the GPU memory, about 380 bytes per cell in f32
+    reference_size = 100
+    nx = ny = nz = memory_filling_size(bytes_per_cell=380.0, dim=3, reference=reference_size)
+    scale = nx / reference_size
 
-    r = 25
-    width = 5
+    r = 25 * scale
+    width = 5  # Interface width, set by the equation of state (not scaled)
 
     # Parameters used by Huang et al. for the 3D D^2-law benchmark.
     a = 3 / 49
@@ -252,7 +281,11 @@ if __name__ == "__main__":
 
     # Thermal conductivities can also be passed on the command line to run a subset
     K_VALUES = [1.8]
-    io_rate = 1000
+    mlups_run = "--mlups" in sys.argv[1:]
+    # Output interval of the reference benchmark, times scale^2 like the run length; a performance run has no output, so that the timed steps
+    # do not include copies of the fields to the host
+    output_rate = int(round(1000 * scale**2))
+    io_rate = 0 if mlups_run else output_rate
     measurement_start = 1000
 
     # Largest eigenvalue magnitude of the isotropic laplacian stencil (worst mode at k = (pi, pi, 0) for D3Q19, same 16/3 as D2Q9); the explicit RK4
@@ -260,7 +293,8 @@ if __name__ == "__main__":
     lambda_max = 16.0 / 3.0
 
     for K in K_VALUES:
-        t_max = 24000
+        # Reference run length times scale^2 (evaporation time ~ D0^2 / K); a performance run takes 150 timesteps only
+        t_max = 150 if mlups_run else int(round(24000 * scale**2))
         os.makedirs(output_dir, exist_ok=True)
         stale_outputs = glob.glob(os.path.join(output_dir, f"fields_K{K:.3f}_*.hdf5"))
         stale_outputs.extend(glob.glob(os.path.join(output_dir, f"fields_K{K:.3f}_*.xdmf")))
@@ -295,8 +329,9 @@ if __name__ == "__main__":
             "kappa": [0.0],
             "precision": precision,
             "io_rate": io_rate,
-            "print_info_rate": 1000,
+            "print_info_rate": io_rate,
             "checkpoint_rate": 0,
+            "compute_MLUPS": mlups_run,
         }
         fluid = EvaporatingDroplet(**kwargs)
         sim = DropletThermal(
@@ -309,7 +344,7 @@ if __name__ == "__main__":
             minimum_diameter=4.0 * width,
             measurement_start=min(measurement_start, t_max // 2),
         )
-        logger.info(f"K = {K:.4f}: rk_substeps = {rk_substeps}")
+        logger.info(f"K = {K:.4f}: domain {nx} x {ny} x {nz}, droplet radius {r:.1f}, t_max = {t_max}, rk_substeps = {rk_substeps}")
         sim.run(t_max)
 
         history = np.asarray(sim.history, dtype=np.float64).reshape((-1, 5))
@@ -325,6 +360,10 @@ if __name__ == "__main__":
         csv_path = os.path.join(output_dir, f"d2_law_K{K:.3f}.csv")
         np.savetxt(csv_path, curve, delimiter=",", header="timestep,t_star,D,(D/D0)^2,centroid_x,centroid_y,centroid_z", comments="")
         logger.info(f"K = {K:.4f}: saved {csv_path}")
+
+    if mlups_run:
+        # A performance run records no diameter history, so there is nothing to plot
+        sys.exit()
 
     import matplotlib
 

@@ -9,12 +9,19 @@ droplet drives evaporation.
 The simulation is run for each thermal conductivity in K_VALUES. output_data records the droplet diameter every io_rate steps and stops
 before the diffuse interface becomes comparable to the droplet diameter. Each history is written to a CSV file and a combined plot is saved,
 along with HDF5/XDMF snapshots at regular intervals.
+
+The reference benchmark is a 200 x 200 domain with a droplet of radius 30. Here the domain is enlarged to fill the memory of the GPUs, with the
+droplet radius scaled with it (the same benchmark at a higher resolution) and the run length and output intervals with the square of the scale
+(the evaporation time grows as D0^2 / K). The interface width is set by the equation of state and is not scaled.
+
+Usage: python d2_law_2d.py [K ...] [--mlups]. With --mlups, only 150 timesteps are run, to measure the performance (MLUPS).
 """
 
 import glob
 import os
 import sys
 
+import jax
 import numpy as np
 from jax import config
 
@@ -35,6 +42,27 @@ logger = logging.getLogger(__name__)
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_d2_law_2d")
 
 # config.update("jax_enable_x64", True)
+
+
+def memory_filling_size(bytes_per_cell, dim, reference, fill=0.85, multiple=16):
+    """
+    Domain edge length (a multiple of `multiple`) whose simulation fills the fraction `fill` of the memory available to JAX on all devices.
+
+    Parameters
+    ----------
+    bytes_per_cell (float): Peak device memory of the simulation per lattice cell (measured).
+    dim (int): Number of spatial dimensions.
+    reference (int): Edge length used when the devices do not report their memory (e.g. on CPU).
+
+    Returns
+    -------
+    int: Edge length, at least `reference`.
+    """
+    stats = [device.memory_stats() for device in jax.devices()]
+    if any(not stat or "bytes_limit" not in stat for stat in stats):
+        return reference
+    limit = sum(stat["bytes_limit"] for stat in stats)
+    return max(reference, int((fill * limit / bytes_per_cell) ** (1.0 / dim)) // multiple * multiple)
 
 
 def vapor_density_at_pressure(T, pressure):
@@ -177,11 +205,13 @@ def droplet_diameter(rho):
 
 if __name__ == "__main__":
     precision = "f32/f32"
-    nx = 200
-    ny = 200
+    # Reference benchmark (200 x 200, droplet radius 30) scaled to fill the GPU memory, about 205 bytes per cell in f32
+    reference_size = 200
+    nx = ny = memory_filling_size(bytes_per_cell=205.0, dim=2, reference=reference_size)
+    scale = nx / reference_size
 
-    r = 30
-    width = 3
+    r = 30 * scale
+    width = 3  # Interface width, set by the equation of state (not scaled)
 
     # VanderWaals EOS parameters from the isothermal MRT droplet_2d example
     a = 9 / 49
@@ -213,8 +243,12 @@ if __name__ == "__main__":
     M[8, :] = e[:, 0] * e[:, 1]
 
     # Thermal conductivities can also be passed on the command line to run a subset
-    K_VALUES = [float(v) for v in sys.argv[1:]] or [1 / 3, 2 / 3]
-    io_rate = 10000  # min(1000, max(1, t_max // 20))
+    mlups_run = "--mlups" in sys.argv[1:]
+    K_VALUES = [float(v) for v in sys.argv[1:] if v != "--mlups"] or [1 / 3, 2 / 3]
+    # Output interval of the reference benchmark, times scale^2 like the run length; a performance run has no output, so that the timed steps
+    # do not include copies of the fields to the host
+    output_rate = int(round(10000 * scale**2))
+    io_rate = 0 if mlups_run else output_rate
 
     # Largest eigenvalue magnitude of the isotropic laplacian stencil; the
     # explicit RK4 update is stable for alpha * lambda_max * dt < 2.785 with
@@ -222,7 +256,10 @@ if __name__ == "__main__":
     lambda_max = 16.0 / 3.0
 
     for K in K_VALUES:
-        t_max = 270000 if (np.abs(K - np.float32(1 / 3)) <= 1e-4) else 140000
+        # Reference run lengths times scale^2 (evaporation time ~ D0^2 / K); a performance run takes 150 timesteps only
+        t_max = int(round((270000 if (np.abs(K - np.float32(1 / 3)) <= 1e-4) else 140000) * scale**2))
+        if mlups_run:
+            t_max = 150
         os.makedirs(output_dir, exist_ok=True)
         stale_outputs = glob.glob(os.path.join(output_dir, f"fields_K{K:.3f}_*.hdf5"))
         stale_outputs.extend(glob.glob(os.path.join(output_dir, f"fields_K{K:.3f}_*.xdmf")))
@@ -254,8 +291,9 @@ if __name__ == "__main__":
             "kappa": [0.0],
             "precision": precision,
             "io_rate": io_rate,
-            "print_info_rate": 10000,
+            "print_info_rate": io_rate,
             "checkpoint_rate": 0,
+            "compute_MLUPS": mlups_run,
         }
         fluid = EvaporatingDroplet(**kwargs)
         sim = DropletThermal(
@@ -264,14 +302,19 @@ if __name__ == "__main__":
             thermal_conductivity=float(K),
             rk_substeps=rk_substeps,
             xdmf_prefix=f"fields_K{K:.3f}",
+            xdmf_rate=output_rate,
             # vtk_prefix=f"fields_K{K:.3f}",
             minimum_diameter=4.0 * width,
             measurement_start=min(1000, t_max // 2),
         )
-        logger.info(f"K = {K:.4f}: rk_substeps = {rk_substeps}")
+        logger.info(f"K = {K:.4f}: domain {nx} x {ny}, droplet radius {r:.1f}, t_max = {t_max}, rk_substeps = {rk_substeps}")
         sim.run(t_max)
 
-        history = np.array(sim.history)
+        # (timestep, D, centroid_x, centroid_y) rows; empty when the run ends before measurement_start (e.g. a short benchmark run)
+        history = np.asarray(sim.history, dtype=np.float64).reshape((-1, 4))
+        if history.shape[0] == 0:
+            logger.info(f"K = {K:.4f}: no valid diameter samples; skipping curve output.")
+            continue
         diameter = history[:, 1]
         diameter_squared_normalized = (diameter / diameter[0]) ** 2
         kinematic_viscosity = (1.0 / 1.0 - 0.5) / 3.0
@@ -288,6 +331,10 @@ if __name__ == "__main__":
         csv_path = os.path.join(output_dir, f"d2_law_K{K:.3f}.csv")
         np.savetxt(csv_path, curve, delimiter=",", header="timestep,t_star,D,(D/D0)^2,centroid_x,centroid_y", comments="")
         logger.info(f"K = {K:.4f}: saved {csv_path}")
+
+    if mlups_run:
+        # A performance run records no diameter history, so there is nothing to plot
+        sys.exit()
 
     import matplotlib
 

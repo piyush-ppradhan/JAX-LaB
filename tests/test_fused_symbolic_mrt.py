@@ -22,6 +22,7 @@ def _enable_x64():
     yield
     jax.config.update("jax_enable_x64", previous)
 
+
 DOMAIN = (10, 10, 10)
 PRECISION = "f64/f64"
 SEED = 0

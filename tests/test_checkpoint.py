@@ -26,6 +26,7 @@ def _enable_x64():
     yield
     jax.config.update("jax_enable_x64", previous)
 
+
 pytestmark = pytest.mark.slow
 
 
