@@ -5,14 +5,22 @@ Uses nonzero surface tension and body force because Taylor-Green tests do not ex
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from jax_lab.core.shanchen.eos import VanderWaals
 from jax_lab.core.lattice import LatticeD3Q19
 from jax_lab.core.shanchen.multiphase import MultiphaseMRT
+
+
+@pytest.fixture(autouse=True)
+def _enable_x64():
+    # float64 for this module's tests only (a module-level config update would switch it on for the whole test session)
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    yield
+    jax.config.update("jax_enable_x64", previous)
 
 DOMAIN = (10, 10, 10)
 PRECISION = "f64/f64"

@@ -2,8 +2,6 @@
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -18,6 +16,15 @@ SINGLE_PHASE_PRECISION_CASES = (
     pytest.param("f32/f32", 1e-6, id="f32-f32"),
     pytest.param("f64/f64", 1e-12, id="f64-f64"),
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_x64():
+    # float64 for this module's tests only (a module-level config update would switch it on for the whole test session)
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    yield
+    jax.config.update("jax_enable_x64", previous)
 
 pytestmark = pytest.mark.slow
 

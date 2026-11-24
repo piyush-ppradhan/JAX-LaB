@@ -10,8 +10,6 @@ from pathlib import Path
 
 import jax
 
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -36,6 +34,15 @@ PRECISION_CASES = (
     pytest.param(jnp.float32, 2e-5, 2e-5, id="float32"),
     pytest.param(jnp.float64, 2e-7, 2e-7, id="float64"),
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_x64():
+    # float64 for this module's tests only (a module-level config update would switch it on for the whole test session)
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    yield
+    jax.config.update("jax_enable_x64", previous)
 
 
 @pytest.mark.parametrize("eos_class, _, a, b, extra_parameters, __", EOS_CASES)

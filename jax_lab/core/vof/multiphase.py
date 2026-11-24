@@ -650,7 +650,7 @@ class VoF(LBMBase):
             values = neutral(field)
             if points is not None:
                 values = jnp.where(is_ghost, self._interpolate(field, points)[:, None], values)
-            return barrier(field.at[index].set(values, mode="drop"))
+            return barrier(field.at[index].set(values.astype(field.dtype), mode="drop"))
 
         field = eps.astype(dtype)
         points = None
@@ -729,11 +729,15 @@ class VoF(LBMBase):
         return self._band_kernels[capacity]
 
     def _band_capacity_for(self, count):
-        """Static row capacity for count rows: the smallest of 1, 1.25, 1.5, 1.75 or 2 times a power of two that fits, at least 1024."""
+        """
+        Static row capacity for count rows: the smallest of 1, 1.25, 1.5, 1.75 or 2 times a power of two that fits, at least 1024. A
+        capacity above half the shard is the whole shard: compacting to it saves little, and every distinct capacity is a separate
+        compilation of the step (on small domains the band would otherwise switch between the 1024 floor and the shard size).
+        """
         size = self.nx * self.ny * (self.nz if self.dim == 3 else 1) // self.n_devices
         base = 2 ** int(np.floor(np.log2(max(count, 1))))
-        capacity = next(int(base * factor) for factor in (1.0, 1.25, 1.5, 1.75, 2.0) if base * factor >= count)
-        return int(min(size, max(1024, capacity)))
+        capacity = max(1024, next(int(base * factor) for factor in (1.0, 1.25, 1.5, 1.75, 2.0) if base * factor >= count))
+        return int(size if 2 * capacity > size else capacity)
 
     def _halo_slabs(self, planes):
         """x-halo slabs of every population plane of a shard: the plane at x = -1 (left) and x = nx_local (right), periodic across devices."""
@@ -1456,7 +1460,10 @@ class VoF(LBMBase):
         for d in self._neighbor_indices:
             near |= self._host_neighbor(flags, self._lattice_directions[d]) == INTERFACE
         near &= ~interface & (flags != SOLID)
-        count = tuple(int(mask.reshape(self.n_devices, -1).sum(axis=1).max()) for mask in (interface, near))
+        # A replicated int32 array (interface, neighbor), like the band size the step returns: any other type would make the first step
+        # compile a program of its own
+        count = np.array([mask.reshape(self.n_devices, -1).sum(axis=1).max() for mask in (interface, near)], dtype=np.int32)
+        count = jax.device_put(count, NamedSharding(self.mesh, PartitionSpec()))
         state = {"mass": mass, "flags": flags_device, "eps": eps_device, "band_count": count}
         if self.zero_net_capillary_force:
             state["label"] = self._label_droplets(flags_device)

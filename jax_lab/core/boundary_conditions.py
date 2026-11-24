@@ -708,7 +708,7 @@ class BounceBackHalfway(BoundaryCondition):
         """
         bindex = jnp.arange(fbd.shape[0])[:, None]
         cu = 6.0 * w * jnp.dot(vel, c)
-        return fbd.at[bindex, imissing].add(-cu[bindex, iknown])
+        return fbd.at[bindex, imissing].add((-cu[bindex, iknown]).astype(fbd.dtype))
 
     @partial(jit, static_argnums=(0,))
     def impose_boundary_vel(self, fbd, bindex):
@@ -861,7 +861,8 @@ class ZouHe(BoundaryCondition):
         self.name = "ZouHe"
         self.implementation_step = "PostStreaming"
         self.type = ttype
-        self.prescribed = prescribed
+        # In the compute dtype: float64 values (e.g. with jax_enable_x64) would not scatter into float32 populations
+        self.prescribed = precision_policy.cast_to_compute(prescribed)
         self.needs_extra_configuration = True
 
     def configure(self, boundary_mask):
@@ -1281,7 +1282,7 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
 
         # combine near and far contributions
         fmissing = jnp.where(weights < 0.5, fs_near, fs_far)
-        return fbd.at[bindex, imissing].set(fmissing)
+        return fbd.at[bindex, imissing].set(fmissing.astype(fbd.dtype))
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
@@ -1363,7 +1364,7 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         f_postcollision_imissing = fin_bd[bindex, imissing]
         f_poststreaming_iknown = fout_bd[bindex, iknown]
         fmissing = ((1.0 - weights) * f_poststreaming_iknown + weights * (f_postcollision_imissing + f_postcollision_iknown)) / (1.0 + weights)
-        return fbd.at[bindex, imissing].set(fmissing)
+        return fbd.at[bindex, imissing].set(fmissing.astype(fbd.dtype))
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin):
@@ -1707,7 +1708,8 @@ class NonEquilibriumExtrapolation(BoundaryCondition):
         super().__init__(indices, grid_info, precision_policy)
         self.name = "NonEquilibriumExtrapolation"
         self.needs_extra_configuration = False
-        self.prescribed = prescribed
+        # In the compute dtype: float64 values (e.g. with jax_enable_x64) would not scatter into float32 populations
+        self.prescribed = precision_policy.cast_to_compute(prescribed)
         # self.G_ff = self.compute_ff_greens_function()
         self.neighbors_found = False
 
@@ -1777,7 +1779,8 @@ class ExactNonEquilibriumExtrapolation(BoundaryCondition):
         super().__init__(indices, grid_info, precision_policy)
         self.name = "ExactNonEquilibriumExtrapolation"
         self.needs_extra_configuration = False
-        self.prescribed = prescribed
+        # In the compute dtype: float64 values (e.g. with jax_enable_x64) would not scatter into float32 populations
+        self.prescribed = precision_policy.cast_to_compute(prescribed)
         self.type = bc_type
         self.w_NEQ = self.compute_NEQ_weights()
         self.neighbors_found = False

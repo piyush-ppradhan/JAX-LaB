@@ -24,9 +24,10 @@ NX = NY = NZ = 32
 def enable_x64():
     import jax
 
+    previous = jax.config.jax_enable_x64
     jax.config.update("jax_enable_x64", True)
     yield
-    jax.config.update("jax_enable_x64", False)
+    jax.config.update("jax_enable_x64", previous)
 
 
 def make_thermal(dim, K=0.05, c_v=1.0):

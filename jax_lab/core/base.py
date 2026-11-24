@@ -958,7 +958,9 @@ class LBMBase(object):
         if array is None:
             return None
         if dtype is None:
-            dtype = array.dtype
+            # The array's dtype as JAX stores it (float64 host data is float32 unless jax_enable_x64 is set), so that it is not requested
+            # at a precision that is unavailable
+            dtype = jax.dtypes.canonicalize_dtype(array.dtype)
         sharding = NamedSharding(self.mesh, PartitionSpec("x", *([None] * (array.ndim - 1))))
         distributed = self.distributed_array_init(array.shape, dtype, init_val=array, sharding=sharding)
         distributed.block_until_ready()
