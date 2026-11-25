@@ -413,17 +413,10 @@ def test_local_geometric_wetting_matches_global_reference(domain, lattice_class,
         lambda_=[1.0] * n_components,
         EOS=VanderWaals(a=[9.0 / 49.0] * n_components, b=[2.0 / 21.0] * n_components, R=[1.0] * n_components, T=0.8 * 0.5714285714),
         wetting_formulation="geometric",
-        geometric_preprocessing_backend="gpu" if nz != 0 else "cpu",
+        geometric_preprocessing_backend="cpu",
     )
-    if nz != 0:
-        sim.geometric_preprocessing_backend = "cpu"
-        global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
-        sim.geometric_preprocessing_backend = "gpu"
-        gpu_data, _ = sim._create_geometric_wetting_data(localize=False)
-        for gpu_leaf, cpu_leaf in zip(jax.tree.leaves(gpu_data), jax.tree.leaves(global_data), strict=True):
-            np.testing.assert_array_equal(gpu_leaf, cpu_leaf)
-    else:
-        global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
+    # GPU preprocessing is compared with the CPU one in test_geometric_3d_gpu_preprocessing_matches_cpu_in_porous_medium
+    global_data, global_masks = sim._create_geometric_wetting_data(localize=False)
     for component_data, fluid_mask in zip(global_data, global_masks, strict=True):
         _assert_geometric_samples_use_fluid_nodes(component_data, np.asarray(fluid_mask)[..., 0])
     spatial_shape = domain[:2] if nz == 0 else domain
