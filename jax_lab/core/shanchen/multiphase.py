@@ -25,6 +25,7 @@ from jax.tree import reduce
 from ..base import (
     Components,
     LBMBase,
+    PopulationState,
     advance_quiet_steps,
     quiet_steps,
     _lattice_dot,
@@ -81,6 +82,16 @@ class Multiphase(LBMBase):
     geometric_preprocessing_batch_size (int, optional): Rays processed per GPU at once. Used only by geometric
         wetting. Defaults to 65536.
 
+    geometric_interpolation (str, optional): Interpolation of the density at the characteristic sample points of geometric
+        wetting: "cubic" (Catmull-Rom along the grid line (2D) or plane (3D) that holds the sample, falling back to "linear"
+        where its stencil is not all fluid) or "linear" (bi/trilinear). Linear interpolation across the steep liquid-vapor
+        interface biases the sampled extremum and so the contact angle (several degrees between about 95 and 130 degrees);
+        cubic removes most of it. Defaults to "cubic".
+
+    Geometric wetting corrects the full-way bounce-back populations at its wall nodes by the bounce-back defect measured at
+    their characteristic sample (see _create_geometric_wall_correction_data): without it, the kinetic error of bounce-back
+    at the contact line, which depends on the relaxation rates, shifts the contact angle by several degrees.
+
     References
     ----------
     1. Shan, Xiaowen, and Hudong Chen. “Lattice Boltzmann Model for Simulating Flows with Multiple Phases and Components.”
@@ -110,6 +121,11 @@ class Multiphase(LBMBase):
     # List a coupled solver (MultiphaseThermal.step) sets while tracing the fluid step inline: the fused collisions append the
     # density and force-corrected velocity they compute anyway, so the coupled solver does not read the populations again
     _export_macroscopic = None
+    # List the step sets while tracing the collision when the geometric-wetting bounce-back correction is active: the fused
+    # collisions append the density and physical momentum (see _export_force_corrected_fields)
+    _wall_correction_export = None
+    # Same, for the characteristic samples apply_contact_angle chooses (geometric wetting)
+    _wetting_choice_export = None
 
     def __init__(self, **kwargs):
         self.n_components = kwargs.get("n_components")
@@ -121,6 +137,9 @@ class Multiphase(LBMBase):
         self.g_kkprime = kwargs.get("g_kkprime")  # Fluid-fluid interaction strength
         self.body_force = kwargs.get("body_force", None)
         self.wetting_formulation = kwargs.get("wetting_formulation")
+        self.geometric_interpolation = kwargs.get("geometric_interpolation", "cubic")
+        if self.geometric_interpolation not in ("cubic", "linear"):
+            raise ValueError("geometric_interpolation must be 'cubic' or 'linear'.")
         self._uses_default_compute_force = type(self).compute_force is Multiphase.compute_force
         self._uses_default_macroscopic_velocity = type(self).macroscopic_velocity is Multiphase.macroscopic_velocity
 
@@ -226,9 +245,14 @@ class Multiphase(LBMBase):
                 if denominator is not None:
                     denominator.block_until_ready()
         self.geometric_force_mask = None
-        self.geometric_wetting_data, self.geometric_fluid_mask = self._create_geometric_wetting_data() if uses_geometric_wetting else (None, None)
-        if uses_geometric_wetting and self.n_devices > 1:
+        self.geometric_wetting_data, self.geometric_fluid_mask = None, None
+        if uses_geometric_wetting:
+            self._geometric_wetting_halos = []
+            self._geometric_wetting_orders = []  # per component and boundary, the kernel's row order per shard
+            self.geometric_wetting_data, self.geometric_fluid_mask = self._create_geometric_wetting_data()
             self.local_geometric_wetting = self._build_local_geometric_wetting_kernels(scalar_spec)
+        self.geometric_wall_correction_data = self._create_geometric_wall_correction_data() if uses_geometric_wetting else [None] * self.n_components
+        self._geometric_wall_correction_kernels = self._build_geometric_wall_correction_kernels()
         self.local_improved_wetting_data = (
             self._make_local_improved_wetting_data()
             if uses_improved_wetting and self.n_devices > 1
@@ -442,6 +466,38 @@ class Multiphase(LBMBase):
 
         return normals
 
+    def _one_sided_face_normals(self, indices, solid_mask):
+        """
+        Normals of wall nodes whose periodic neighbor normal cancels (see _create_geometric_wetting_data): a one-layer wall
+        on a domain face, with fluid on both sides along an axis through the periodic face. Along such an axis only the
+        side inside the domain counts; the other axes stay periodic.
+
+        Parameters
+        ----------
+        indices (numpy.ndarray): Wall nodes in domain coordinates, shape (n, dim).
+
+        solid_mask (numpy.ndarray): Boolean mask of the domain with True on solid nodes.
+
+        Returns
+        -------
+        (numpy.ndarray): Unit normals (zero where none is defined), shape (n, dim).
+        """
+        shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        indices = np.asarray(indices, dtype=np.int64)
+        fluid = lambda nodes: ~solid_mask[tuple(np.mod(nodes, shape).T)]
+        unit = np.eye(self.dim, dtype=np.int64)
+        two_sided = np.stack([fluid(indices + unit[axis]) & fluid(indices - unit[axis]) for axis in range(self.dim)], axis=1)
+        accumulated = np.zeros(indices.shape, dtype=np.float64)
+        for direction in np.array(self.lattice.c, dtype=np.int64).T:
+            if not direction.any():
+                continue
+            neighbors = indices + direction
+            crosses = (neighbors < 0) | (neighbors >= shape)  # (n, dim): through a periodic face along that axis
+            counted = fluid(neighbors) & ~np.any(crosses & two_sided, axis=1)
+            accumulated[counted] += direction / np.linalg.norm(direction)
+        norm = np.linalg.norm(accumulated, axis=1, keepdims=True)
+        return np.divide(accumulated, norm, out=np.zeros_like(accumulated), where=norm > 1e-12)
+
     def _solid_fluid_interface_mask(self, indices, solid_mask):
         """
         Identify solid boundary nodes that touch at least one fluid node.
@@ -474,6 +530,102 @@ class Multiphase(LBMBase):
             interface[unresolved_rows[in_bounds_rows[fluid]]] = True
 
         return interface
+
+    def _stencil_reach_wall_rows(self, wall_indices, member_mask, solid_mask):
+        """
+        Solid nodes behind the wetted wall layer that the fluid-fluid force stencil still reaches, with the wall row in front of each.
+
+        The fourth-order EFM psi gradient reads psi(x + 2 c_i) (see _build_efm_gradient_offsets), so the first fluid layer also sees the
+        solid layer behind the wall nodes. Those nodes must carry a wetting density too: left at their bounce-back (initial) density they
+        add a spurious fluid-wall interaction that drives the contact angle far from the prescribed one. A node s is reached when, for a
+        lattice direction c_i, w = s + c_i is a wall node and s + 2 c_i is fluid; its wall row is that of w (the first such direction).
+
+        Parameters
+        ----------
+        wall_indices (numpy.ndarray): Wetted wall-layer nodes (solid nodes with a fluid neighbor), shape (n, dim).
+
+        member_mask (numpy.ndarray): Boolean mask with True on the solid nodes of this boundary condition (candidates).
+
+        solid_mask (numpy.ndarray): Boolean mask with True on solid nodes.
+
+        Returns
+        -------
+        inner_indices (numpy.ndarray): Reached solid nodes behind the wall layer, shape (m, dim).
+
+        source_rows (numpy.ndarray): Row of wall_indices in front of each reached node, shape (m,).
+        """
+        reach = max(max(abs(v) for v in offset) for offset, _ in self._efm_offsets)
+        if reach < 2 or len(wall_indices) == 0:
+            return np.zeros((0, self.dim), dtype=wall_indices.dtype), np.zeros((0,), dtype=np.int64)
+        shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        taken = np.zeros(solid_mask.shape, dtype=bool)
+        taken[tuple(wall_indices.T)] = True
+        inner, sources = [], []
+        directions = np.array(self.lattice.c, dtype=np.int64).T
+        for direction in directions[np.any(directions != 0, axis=1)]:
+            behind = wall_indices - direction
+            front = wall_indices + direction
+            ok = np.all((behind >= 0) & (behind < shape), axis=1) & np.all((front >= 0) & (front < shape), axis=1)
+            rows = np.flatnonzero(ok)
+            rows = rows[member_mask[tuple(behind[rows].T)] & ~solid_mask[tuple(front[rows].T)] & ~taken[tuple(behind[rows].T)]]
+            # One wall row per reached node (the first direction, then the first wall row)
+            _, first = np.unique(np.ravel_multi_index(tuple(behind[rows].T), solid_mask.shape), return_index=True)
+            rows = rows[np.sort(first)]
+            taken[tuple(behind[rows].T)] = True
+            inner.append(behind[rows])
+            sources.append(rows)
+        return np.concatenate(inner).astype(wall_indices.dtype), np.concatenate(sources)
+
+    def _interpolation_points(self, point):
+        """The sample points of interpolation data (_build_interpolation_data): the weighted mean of the stencil nodes (exact for
+        multilinear and Catmull-Rom weights, which reproduce linear functions)."""
+        indices, weights = point
+        return np.sum(np.asarray(weights, dtype=np.float64)[..., None] * np.asarray(indices, dtype=np.float64), axis=1)
+
+    def _append_wall_rows(self, data, inner_indices, source_rows, solid_mask):
+        """
+        Append geometric wetting rows for the solid nodes behind the wall layer (see _stencil_reach_wall_rows), and data["source"]:
+        for every row the wall row whose characteristics it uses (itself for the wall rows).
+
+        Each such node s, behind the wall node w = s + c_i, samples along the characteristics of w extended by one layer: a sample point
+        P of w becomes s + 2 (P - w), the same ray direction at twice the length, which on a flat wall is the first fluid layer at twice the
+        tangential distance |cot(theta)| (the characteristic through s). Where that point is outside the domain or its interpolation
+        stencil is not all fluid (curved or thin walls), s uses the samples of w (the wall density extended one layer into the solid).
+        """
+        n_wall = len(data["indices"][0])
+        data = dict(data, source=np.arange(n_wall))
+        if len(source_rows) == 0:
+            return data
+        wall = np.stack(data["indices"], axis=-1).astype(np.float64)[source_rows]
+        inner = np.asarray(inner_indices, dtype=np.float64)
+        shape = np.asarray(solid_mask.shape, dtype=np.float64)
+
+        def extend(point):
+            old = tuple(np.asarray(array)[source_rows] for array in point)
+            sample = inner + 2.0 * (self._interpolation_points(point)[source_rows] - wall)
+            rounded = np.round(sample)
+            sample = np.where(np.isclose(sample, rounded, atol=1e-5), rounded, sample)
+            valid = np.all((sample >= 0) & (sample <= shape - 1), axis=1)
+            valid[valid] = self._uses_only_fluid_nodes_batch(sample[valid], solid_mask)
+            new = self._build_interpolation_data(np.where(valid[:, None], sample, wall), solid_mask)
+            row_mask = lambda array: valid.reshape((-1,) + (1,) * (np.ndim(array) - 1))
+            return tuple(
+                np.concatenate([np.asarray(array), np.where(row_mask(n), n, o).astype(np.asarray(array).dtype)])
+                for array, n, o in zip(point, new, old, strict=True)
+            )
+
+        data = dict(data)
+        data["indices"] = tuple(
+            np.concatenate([index, extra.astype(index.dtype)]) for index, extra in zip(data["indices"], np.asarray(inner_indices).T, strict=True)
+        )
+        data["theta"] = np.concatenate([data["theta"], np.asarray(data["theta"])[source_rows]])
+        data["source"] = np.concatenate([data["source"], np.asarray(source_rows)])  # the wall row each row extends
+        for key in ("point_1", "point_2"):
+            if key in data:
+                data[key] = extend(data[key])
+        if "points" in data:
+            data["points"] = tuple(extend(point) for point in data["points"])
+        return data
 
     def _first_mesh_intersection(self, indices, directions):
         """
@@ -526,9 +678,7 @@ class Multiphase(LBMBase):
         for index, weight in stencil:
             if weight <= eps:
                 continue
-            in_bounds = (0 <= index[0] < self.nx) and (0 <= index[1] < self.ny)
-            if self.dim == 3:
-                in_bounds = in_bounds and (0 <= index[2] < self.nz)
+            in_bounds = all(0 <= index[axis] < solid_mask.shape[axis] for axis in range(self.dim))
             if not in_bounds or solid_mask[tuple(index)]:
                 return False
         return True
@@ -696,69 +846,78 @@ class Multiphase(LBMBase):
                 through[rows[~any_fluid]] = True
         return through
 
-    def _build_interpolation_data(self, points):
+    def _build_interpolation_data(self, points, solid_mask):
         """
-        Build multilinear interpolation data for density samples.
+        Build interpolation data for density samples: the stencil nodes and weights of each sample point.
+
+        With geometric_interpolation = "cubic", a point is interpolated by Catmull-Rom splines along its fractional axes (at most
+        dim - 1 of them: the samples lie on a grid line in 2D or plane in 3D), 4^(dim - 1) nodes; a point whose stencil leaves the
+        domain or touches solid, or with dim fractional axes, uses multilinear interpolation (zero-padded to the same size).
+        With "linear", every point uses multilinear interpolation over its 2^dim cell corners.
 
         Parameters
         ----------
-        points (numpy.ndarray): Off-lattice or on-lattice sample points.
+        points (numpy.ndarray): Off-lattice or on-lattice sample points, shape (n, dim).
+
+        solid_mask (numpy.ndarray): Boolean mask with True on solid nodes.
 
         Returns
         -------
-        data (tuple): Index arrays and weights for multilinear interpolation.
+        data (tuple): (indices, weights): int32 node indices of shape (n, S, dim) and weights of shape (n, S).
         """
-        floor_points = np.floor(points)
-        lower = floor_points.astype(np.int32)
-        upper = lower + 1
-        frac = points - floor_points
+        points = np.asarray(points, dtype=np.float64)
+        rounded = np.round(points)
+        points = np.where(np.abs(points - rounded) < 1e-9, rounded, points)
         compute_dtype = np.dtype(self.precision_policy.compute_dtype)
+        shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        lower = np.floor(points).astype(np.int64)
+        frac = points - lower
 
-        if self.dim == 2:
-            x0 = np.clip(lower[:, 0], 0, self.nx - 1)
-            y0 = np.clip(lower[:, 1], 0, self.ny - 1)
-            x1 = np.clip(upper[:, 0], 0, self.nx - 1)
-            y1 = np.clip(upper[:, 1], 0, self.ny - 1)
-            wx = frac[:, 0]
-            wy = frac[:, 1]
+        # Multilinear: the 2^dim cell corners (indices clipped to the domain)
+        corners = np.array([[(k >> axis) & 1 for axis in range(self.dim)] for k in range(2**self.dim)], dtype=np.int64)
+        linear_indices = np.clip(lower[:, None, :] + corners[None], 0, shape - 1)
+        linear_weights = np.prod(np.where(corners[None] == 1, frac[:, None, :], 1.0 - frac[:, None, :]), axis=-1)
+        if self.geometric_interpolation == "linear":
+            return linear_indices.astype(np.int32), linear_weights.astype(compute_dtype)
 
-            return (
-                np.asarray(x0, dtype=np.int32),
-                np.asarray(y0, dtype=np.int32),
-                np.asarray(x1, dtype=np.int32),
-                np.asarray(y1, dtype=np.int32),
-                np.asarray((1.0 - wx) * (1.0 - wy), dtype=compute_dtype),
-                np.asarray(wx * (1.0 - wy), dtype=compute_dtype),
-                np.asarray((1.0 - wx) * wy, dtype=compute_dtype),
-                np.asarray(wx * wy, dtype=compute_dtype),
+        # Catmull-Rom along the fractional axes: slot j holds the j-th fractional axis of each point (or none)
+        slots = self.dim - 1
+        fractional = frac > 1e-9
+        order = np.argsort(~fractional, axis=1, kind="stable")[:, :slots]
+        slot_used = np.take_along_axis(fractional, order, axis=1)
+        offsets = np.array(np.meshgrid(*([np.arange(-1, 3)] * slots), indexing="ij")).reshape(slots, -1).T  # (4^slots, slots)
+
+        def catmull_rom(o, t):
+            return np.select(
+                [o == -1, o == 0, o == 1, o == 2],
+                [0.5 * (-t + 2 * t**2 - t**3), 0.5 * (2 - 5 * t**2 + 3 * t**3), 0.5 * (t + 4 * t**2 - 3 * t**3), 0.5 * (-(t**2) + t**3)],
             )
 
-        x0 = np.clip(lower[:, 0], 0, self.nx - 1)
-        y0 = np.clip(lower[:, 1], 0, self.ny - 1)
-        z0 = np.clip(lower[:, 2], 0, self.nz - 1)
-        x1 = np.clip(upper[:, 0], 0, self.nx - 1)
-        y1 = np.clip(upper[:, 1], 0, self.ny - 1)
-        z1 = np.clip(upper[:, 2], 0, self.nz - 1)
-        wx = frac[:, 0]
-        wy = frac[:, 1]
-        wz = frac[:, 2]
+        n = len(points)
+        cubic_indices = np.repeat(lower[:, None, :], len(offsets), axis=1)
+        cubic_weights = np.ones((n, len(offsets)))
+        for slot in range(slots):
+            axis = order[:, slot]
+            o = offsets[None, :, slot]
+            t = np.take_along_axis(frac, axis[:, None], axis=1)
+            used = slot_used[:, slot : slot + 1]
+            cubic_weights *= np.where(used, catmull_rom(o, t), (o == 0).astype(np.float64))
+            shift = np.where(used, o, 0)
+            cubic_indices[np.arange(n)[:, None], np.arange(len(offsets))[None, :], axis[:, None]] += shift
 
-        return (
-            np.asarray(x0, dtype=np.int32),
-            np.asarray(y0, dtype=np.int32),
-            np.asarray(z0, dtype=np.int32),
-            np.asarray(x1, dtype=np.int32),
-            np.asarray(y1, dtype=np.int32),
-            np.asarray(z1, dtype=np.int32),
-            np.asarray((1.0 - wx) * (1.0 - wy) * (1.0 - wz), dtype=compute_dtype),
-            np.asarray(wx * (1.0 - wy) * (1.0 - wz), dtype=compute_dtype),
-            np.asarray((1.0 - wx) * wy * (1.0 - wz), dtype=compute_dtype),
-            np.asarray(wx * wy * (1.0 - wz), dtype=compute_dtype),
-            np.asarray((1.0 - wx) * (1.0 - wy) * wz, dtype=compute_dtype),
-            np.asarray(wx * (1.0 - wy) * wz, dtype=compute_dtype),
-            np.asarray((1.0 - wx) * wy * wz, dtype=compute_dtype),
-            np.asarray(wx * wy * wz, dtype=compute_dtype),
-        )
+        active = np.abs(cubic_weights) > 1e-12
+        inside = np.all((cubic_indices >= 0) & (cubic_indices < shape), axis=-1)
+        valid = np.all(~active | inside, axis=1) & (fractional.sum(axis=1) <= slots)
+        safe = np.clip(cubic_indices, 0, shape - 1)
+        valid &= np.all(~active | ~solid_mask[tuple(np.moveaxis(safe, -1, 0))], axis=1)
+
+        size = len(offsets)
+        pad = size - linear_indices.shape[1]
+        padded_indices = np.concatenate([linear_indices, np.repeat(linear_indices[:, :1], pad, axis=1)], axis=1)
+        padded_weights = np.concatenate([linear_weights, np.zeros((n, pad))], axis=1)
+        indices = np.where(valid[:, None, None], np.clip(cubic_indices, 0, shape - 1), padded_indices)
+        weights = np.where(valid[:, None], cubic_weights, padded_weights)
+        return indices.astype(np.int32), weights.astype(compute_dtype)
 
     def _build_geometric_gpu_ray_kernel(self, ray_count):
         """
@@ -793,6 +952,7 @@ class Multiphase(LBMBase):
             return jnp.where(fraction < 0.5, lower, jnp.where(fraction > 0.5, upper, tie)) / scale
 
         def trace(index, direction, solid):
+            nx, ny, nz = solid.shape  # the (periodically padded) mask, see _create_geometric_wetting_data
             index = tuple(index[axis] for axis in range(3))
             direction = tuple(direction[axis] for axis in range(3))
             absolute = tuple(jnp.abs(value) for value in direction)
@@ -968,7 +1128,7 @@ class Multiphase(LBMBase):
         for data, valid in zip(point_data, validity, strict=True):
             invalid_rows = np.flatnonzero(~valid)
             if len(invalid_rows):
-                replacements = self._build_interpolation_data(fallback_points[invalid_rows])
+                replacements = self._build_interpolation_data(fallback_points[invalid_rows], solid_mask)
                 for values, replacement in zip(data, replacements, strict=True):
                     values[invalid_rows] = replacement
             repaired_data.append(data)
@@ -980,6 +1140,17 @@ class Multiphase(LBMBase):
             np.count_nonzero(all_invalid),
         )
         return tuple(repaired_data)
+
+    @staticmethod
+    def _characteristic_length_ok(indices, points, theta):
+        """
+        Whether characteristic samples are close enough to their wall node: at most 3 / sin(theta) + 2 nodes away. On a flat
+        wall the sample is 1 / sin(theta) away; a ray that travels much further before it finds fluid grazes the wall, and
+        the straight iso-surface the scheme assumes between the wall node and the sample does not hold over that distance.
+        Such rays are dropped like rays through solid (the node's other samples replace them).
+        """
+        distance = np.linalg.norm(np.asarray(points, dtype=np.float64) - np.asarray(indices, dtype=np.float64), axis=-1)
+        return distance <= 3.0 / np.maximum(np.abs(np.sin(theta)), 1e-3) + 2.0
 
     def _build_geometric_3d_characteristic_data(self, indices, normals, theta, solid_mask):
         """
@@ -1054,12 +1225,12 @@ class Multiphase(LBMBase):
             # drive the adjacent fluid density negative in one step.  Treat such rays like unresolved ones so they use
             # a local same-wall sample (or the nearest adjacent fluid node when every ray is unresolved).
             crosses_solid |= valid & through
-            valid &= ~through
+            valid &= ~through & self._characteristic_length_ok(indices, points, theta)
             first_valid = valid & ~has_fallback
             fallback_points[first_valid] = points[first_valid]
             has_fallback |= valid
             validity.append(valid)
-            point_data.append(self._build_interpolation_data(points))
+            point_data.append(self._build_interpolation_data(points, solid_mask))
         # Only the rays that pass through solid are dropped: _repair_invalid_geometric_point_data replaces each of them by
         # a valid ray of the same wall node, which leaves the extremum over the cone unchanged. A node falls back to its
         # nearest adjacent fluid node (a neutral wall) only when none of its rays is valid.
@@ -1073,6 +1244,120 @@ class Multiphase(LBMBase):
             solid_mask,
             fallback_points,
         )
+
+    # Halo width (x-planes) of each component's halo-form geometric-wetting data, None for the other forms (see
+    # _localize_component_wetting_data); static for the kernels
+    _geometric_wetting_halos = ()
+    # Device form of the geometric-wetting data (see _localize_component_wetting_data): None chooses, "global" forces the
+    # global form (for tests)
+    _GEOMETRIC_WETTING_FORM = None
+
+    # Largest periodic margin (nodes per side) of the padded solid mask the geometric characteristics are traced on
+    _GEOMETRIC_PERIODIC_MARGIN = 32
+
+    def _geometric_periodic_margin(self, BC):
+        """
+        Periodic margin per axis for tracing the characteristics of one component (see _create_geometric_wetting_data): the
+        samples lie about |cot(theta)| from their wall node (twice that for the second wall row) plus the interpolation
+        stencil, so 2 max|cot(theta)| + 6 nodes, at most _GEOMETRIC_PERIODIC_MARGIN and the domain size. A ray that runs
+        further (nearly tangent to the wall) is treated as before, as one that leaves the domain.
+        """
+        thetas = [np.asarray(bc.theta, dtype=np.float64).reshape(-1) for bc in BC if self._is_wetting_boundary_condition(bc) and bc.theta is not None]
+        theta = np.concatenate(thetas) if thetas else np.full(1, np.pi / 2)
+        cot = np.max(np.abs(np.cos(theta)) / np.maximum(np.abs(np.sin(theta)), 1e-6))
+        margin = int(min(self._GEOMETRIC_PERIODIC_MARGIN, np.ceil(2.0 * cot) + 6))
+        shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
+        return tuple(min(margin, n) for n in shape)
+
+    @staticmethod
+    def _geometric_score_nodes(walls, offsets, solid_mask):
+        """
+        Nodes that choose a wall node's characteristic sample (see _geometric_wetting_rows): for each sample its nearest node
+        and the node twice as far along the characteristic (the nearest node where the path to it crosses solid), wrapped into
+        the periodic domain, shape (n, K, 2, dim); and whether the nearest node is fluid, shape (n, K).
+        """
+        shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        walls = np.asarray(walls, dtype=np.int64)[:, None, :]
+        node = lambda t: np.mod(np.round(walls + t * offsets).astype(np.int64), shape)
+        fluid = lambda nodes: ~solid_mask[tuple(np.moveaxis(nodes, -1, 0))]
+        near, far = node(1.0), node(2.0)
+        # The far node only along a clear path from the sample: past a thin grain it would be another pore's density
+        clear = fluid(far)
+        for t in (1.25, 1.5, 1.75):
+            clear &= fluid(node(t))
+        far = np.where(clear[..., None], far, near)
+        return np.stack([near, far], axis=2), fluid(near)
+
+    @staticmethod
+    def _geometric_linear_samples(walls, offsets, solid_mask):
+        """
+        Multilinear interpolation data of every characteristic sample (see _geometric_wetting_rows): the 2^dim cell corners
+        wrapped into the periodic domain, shape (n, K, 2^dim, dim), their weights (zero for the corners a sample on a grid
+        line or plane does not use), and whether all corners with weight are fluid, shape (n, K).
+        """
+        shape = np.asarray(solid_mask.shape, dtype=np.int64)
+        dim = len(shape)
+        points = np.asarray(walls, dtype=np.float64)[:, None, :] + offsets
+        rounded = np.round(points)
+        # The points are rebuilt from float32 interpolation weights: snap the coordinates that are grid values up to that
+        points = np.where(np.abs(points - rounded) < 1e-4, rounded, points)
+        lower = np.floor(points).astype(np.int64)
+        frac = points - lower
+        corners = np.array([[(k >> axis) & 1 for axis in range(dim)] for k in range(2**dim)], dtype=np.int64)
+        nodes = np.mod(lower[:, :, None, :] + corners, shape)
+        weights = np.prod(np.where(corners == 1, frac[:, :, None, :], 1.0 - frac[:, :, None, :]), axis=-1)
+        weights = np.where(weights > 1e-9, weights, 0.0)
+        solid = solid_mask[tuple(np.moveaxis(nodes, -1, 0))]
+        return nodes, weights, np.all((weights == 0) | ~solid, axis=-1)
+
+    @staticmethod
+    def _unpad_wall_samples(indices, theta, points, pad):
+        """First-layer wall nodes and their samples in domain coordinates; the sample stencils are shifted but not wrapped,
+        so that their weighted means stay the sample points (the wall-population correction wraps the nodes itself)."""
+        offset = np.asarray(pad, dtype=np.int64)
+        return (
+            np.asarray(indices, dtype=np.int64) - offset,
+            theta,
+            tuple((np.asarray(index, dtype=np.int64) - offset, weight) for index, weight in points),
+        )
+
+    def _unpad_geometric_data(self, data, pad, shape, solid_mask=None):
+        """
+        Geometric-wetting data traced on the padded mask, back in domain coordinates: wall rows and stencil nodes wrapped
+        into the domain. A wall row that wraps onto the node of an earlier row (a second-layer node behind a wall at a
+        domain face that is the periodic image of a wall node) is dropped, so that each node is written once.
+        """
+        offset = np.asarray(pad, dtype=np.int64)
+        shape_array = np.asarray(shape, dtype=np.int64)
+        padded_nodes = np.stack([np.asarray(index, dtype=np.int64) for index in data["indices"]], axis=-1)
+        nodes = np.mod(padded_nodes - offset, shape_array)
+        _, first = np.unique(np.ravel_multi_index(tuple(nodes.T), shape), return_index=True)
+        keep = np.sort(first)
+        points = data["points"] if "points" in data else (data["point_1"], data["point_2"])
+        # Sample points relative to their wall node (unwrapped, so that they stay right across the periodic faces)
+        sample_offsets = np.stack([self._interpolation_points(point) for point in points], axis=1) - padded_nodes[:, None, :]
+
+        def unpad(point):
+            index, weight = point
+            return np.mod(np.asarray(index, dtype=np.int64)[keep] - offset, shape_array).astype(np.int32), np.asarray(weight)[keep]
+
+        result = dict(data)
+        result["indices"] = tuple(np.asarray(column, dtype=np.int32) for column in nodes[keep].T)
+        result["theta"] = np.asarray(data["theta"])[keep]
+        result["offsets"] = sample_offsets[keep]
+        # The wall rows come first and are all kept (distinct domain nodes), so the source rows stay valid
+        result["source"] = np.asarray(data.get("source", np.arange(len(nodes))))[keep]
+        if solid_mask is not None:
+            result["score_nodes"], result["score_ok"] = self._geometric_score_nodes(nodes[keep], sample_offsets[keep], solid_mask)
+            result["linear_nodes"], result["linear_weights"], result["linear_ok"] = self._geometric_linear_samples(
+                nodes[keep], sample_offsets[keep], solid_mask
+            )
+        for key in ("point_1", "point_2"):
+            if key in data:
+                result[key] = unpad(data[key])
+        if "points" in data:
+            result["points"] = tuple(unpad(point) for point in data["points"])
+        return result
 
     def _create_geometric_wetting_data(self, localize=True):
         """
@@ -1102,21 +1387,34 @@ class Multiphase(LBMBase):
         geometric_wetting_data = []
         geometric_fluid_mask = []
         geometric_force_mask = []
+        # First-layer wall nodes with their characteristic samples, per component, for the wall-population correction
+        # (see _create_geometric_wall_correction_data)
+        wall_samples = []
         characteristics_time = 0.0
         for BC in self.BCs:
+            wall_samples.append([])
             solid_mask = self._create_component_solid_mask(BC)
             fluid_mask_host = ~solid_mask[..., None]
             geometric_fluid_mask.append(self.distributed_array_init(fluid_mask_host.shape, jnp.bool_, init_val=fluid_mask_host))
             force_mask_host = self._create_geometric_force_mask(fluid_mask_host[..., 0])[..., None]
             geometric_force_mask.append(self.distributed_array_init(force_mask_host.shape, jnp.bool_, init_val=force_mask_host))
             component_data = []
+            # The domain is periodic: characteristics are traced on the solid mask padded with its periodic images, so that
+            # walls at the domain faces sample across them, and the results are wrapped back (see _unpad_geometric_data)
+            pad = self._geometric_periodic_margin(BC)
+            domain_mask = solid_mask
+            solid_mask = np.pad(domain_mask, [(m, m) for m in pad], mode="wrap")
             for bc in BC:
                 if not self._is_wetting_boundary_condition(bc):
                     continue
                 if bc.theta is None:
                     continue
 
-                indices = np.array(self._get_solid_indices(bc), dtype=np.int32).T
+                domain_indices = np.array(self._get_solid_indices(bc), dtype=np.int32).T
+                member_mask = np.zeros(domain_mask.shape, dtype=bool)
+                member_mask[tuple(domain_indices.T)] = True
+                member_mask = np.pad(member_mask, [(m, m) for m in pad], mode="wrap")
+                indices = domain_indices + np.asarray(pad, dtype=np.int32)
                 theta = np.asarray(bc.theta, dtype=np.float64).reshape(-1)
                 if theta.size == 1:
                     theta = np.full((indices.shape[0],), theta.item(), dtype=np.float64)
@@ -1130,6 +1428,11 @@ class Multiphase(LBMBase):
                 indices = indices[interface]
                 theta = theta[interface]
                 normals = self._compute_geometric_normals(bc, solid_mask, indices=indices, source_rows=source_rows)
+                # A one-layer wall on a domain face has fluid on both sides through the periodic face, and its neighbor
+                # normal cancels: keep the normal toward the fluid inside the domain, as without the periodic images
+                cancelled = np.flatnonzero(np.linalg.norm(normals, axis=1) <= 1e-12)
+                if len(cancelled):
+                    normals[cancelled] = self._one_sided_face_normals(domain_indices[source_rows[cancelled]], domain_mask)
                 valid_normal = np.linalg.norm(normals, axis=1) > 1e-12
                 if not np.any(valid_normal):
                     continue
@@ -1146,7 +1449,10 @@ class Multiphase(LBMBase):
                         "theta": np.asarray(theta.reshape(-1, 1), dtype=np.dtype(self.precision_policy.compute_dtype)),
                         "points": points,
                     }
-                    component_data.append(self._localize_geometric_wetting_data(data) if localize and self.n_devices > 1 else data)
+                    wall_samples[-1].append(self._unpad_wall_samples(indices, theta, tuple(points), pad))
+                    data = self._append_wall_rows(data, *self._stencil_reach_wall_rows(indices, member_mask, solid_mask), solid_mask)
+                    data = self._unpad_geometric_data(data, pad, domain_mask.shape, domain_mask)
+                    component_data.append(data)
                     continue
 
                 # Characteristics determination for density interpolation
@@ -1168,12 +1474,14 @@ class Multiphase(LBMBase):
 
                 points_1, valid_1 = self._first_fluid_mesh_intersection(indices, direction_1, solid_mask, return_valid=True)
                 points_2, valid_2 = self._first_fluid_mesh_intersection(indices, direction_2, solid_mask, return_valid=True)
+                valid_1 &= self._characteristic_length_ok(indices, points_1, theta)
+                valid_2 &= self._characteristic_length_ok(indices, points_2, theta)
                 characteristics_time += time.perf_counter() - characteristics_start
                 fallback_points = np.zeros_like(normals)
                 fallback_points[valid_1] = points_1[valid_1]
                 fallback_points[~valid_1 & valid_2] = points_2[~valid_1 & valid_2]
                 point_1, point_2 = self._repair_invalid_geometric_point_data(
-                    [self._build_interpolation_data(points_1), self._build_interpolation_data(points_2)],
+                    [self._build_interpolation_data(points_1, solid_mask), self._build_interpolation_data(points_2, solid_mask)],
                     [valid_1, valid_2],
                     indices,
                     normals,
@@ -1186,12 +1494,19 @@ class Multiphase(LBMBase):
                     "point_1": point_1,
                     "point_2": point_2,
                 }
-                component_data.append(self._localize_geometric_wetting_data(data) if localize and self.n_devices > 1 else data)
+                wall_samples[-1].append(self._unpad_wall_samples(indices, theta, (point_1, point_2), pad))
+                data = self._append_wall_rows(data, *self._stencil_reach_wall_rows(indices, member_mask, solid_mask), solid_mask)
+                data = self._unpad_geometric_data(data, pad, domain_mask.shape, domain_mask)
+                component_data.append(data)
+            if localize:
+                component_data, halo = self._localize_component_wetting_data(component_data)
+                self._geometric_wetting_halos.append(halo)
             geometric_wetting_data.append(component_data)
 
         logger.info(f"Time taken to determine geometric wetting characteristics: {characteristics_time:.6f} seconds")
 
         self.geometric_force_mask = geometric_force_mask
+        self._geometric_wall_samples = wall_samples
 
         return geometric_wetting_data, geometric_fluid_mask
 
@@ -1406,6 +1721,12 @@ class Multiphase(LBMBase):
         Hand the collision's density and force-corrected velocity to a coupled solver (see _export_macroscopic):
         u = sum_i c_i f_i / rho + F / (2 rho), with the same operations as Multiphase.macroscopic_velocity.
         """
+        if self._wall_correction_export is not None:
+            # Density and physical momentum j = rho u + F / 2 for the geometric-wetting bounce-back correction
+            self._wall_correction_export.append([
+                tuple([rho] + [rho * v + 0.5 * force[..., axis] for axis, v in enumerate(velocity)])
+                for rho, velocity, force in zip(rho_scalar_tree, velocity_tree, force_tree, strict=True)
+            ])
         if self._export_macroscopic is None:
             return
         rho_tree = [rho[..., None] for rho in rho_scalar_tree]
@@ -1470,179 +1791,653 @@ class Multiphase(LBMBase):
         wall_density = (theta <= jnp.pi / 2) * (local_phi[0] * rho_ave_boundary) + (theta > jnp.pi / 2) * (rho_ave_boundary - local_delta_rho[0])
         return rho.at[idx].set(wall_density, mode="drop")
 
-    def local_geometric_wetting_m(
-        self,
-        rho,
-        fluid_mask,
-        component_data,
-    ):
-        """Apply all geometric boundaries for one component inside one shard-local kernel."""
-        local_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
-        local_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
-        rho_min = jax.lax.pmin(local_min, "x")
-        rho_max = jax.lax.pmax(local_max, "x")
+    def _localize_component_wetting_data(self, component_data):
+        """
+        Device form of one component's geometric-wetting data (see _geometric_wetting_m): per shard, with the density padded
+        by halo x-planes of the neighbor shards, when every node a wall node reads lies within one shard width of it along x
+        (always on one device); otherwise global (indices into the whole density, for shards thinner than the stencils).
+        Returns (data, halo width, or None for the global form).
+        """
+        if not component_data:
+            self._geometric_wetting_orders.append([])
+            return component_data, None
+        halo = max(self._geometric_wetting_reach(data) for data in component_data)
+        if self._GEOMETRIC_WETTING_FORM == "global" or (self.n_devices > 1 and halo > self.nx // self.n_devices):
+            halo = None
+        localized = [self._device_geometric_wetting_data(data, halo) for data in component_data]
+        self._geometric_wetting_orders.append([order for _, order in localized])
+        return [arrays for arrays, _ in localized], halo
 
-        for data in component_data:
-            indices = data["local_indices"][0]
-            interpolation_indices = data["request_indices"][0]
-            weights = data["request_weights"][0]
+    def _geometric_wetting_points(self, data):
+        return data["points"] if self.dim == 3 else (data["point_1"], data["point_2"])
 
-            if self.dim == 2:
-                x0, y0, x1, y1 = (interpolation_indices[..., index] for index in range(4))
-                contributions = (
-                    weights[..., 0, None] * rho.at[x0, y0].get(mode="fill", fill_value=0.0)
-                    + weights[..., 1, None] * rho.at[x1, y0].get(mode="fill", fill_value=0.0)
-                    + weights[..., 2, None] * rho.at[x0, y1].get(mode="fill", fill_value=0.0)
-                    + weights[..., 3, None] * rho.at[x1, y1].get(mode="fill", fill_value=0.0)
-                )
-            else:
-                x0, y0, z0, x1, y1, z1 = (interpolation_indices[..., index] for index in range(6))
-                contributions = (
-                    weights[..., 0, None] * rho.at[x0, y0, z0].get(mode="fill", fill_value=0.0)
-                    + weights[..., 1, None] * rho.at[x1, y0, z0].get(mode="fill", fill_value=0.0)
-                    + weights[..., 2, None] * rho.at[x0, y1, z0].get(mode="fill", fill_value=0.0)
-                    + weights[..., 3, None] * rho.at[x1, y1, z0].get(mode="fill", fill_value=0.0)
-                    + weights[..., 4, None] * rho.at[x0, y0, z1].get(mode="fill", fill_value=0.0)
-                    + weights[..., 5, None] * rho.at[x1, y0, z1].get(mode="fill", fill_value=0.0)
-                    + weights[..., 6, None] * rho.at[x0, y1, z1].get(mode="fill", fill_value=0.0)
-                    + weights[..., 7, None] * rho.at[x1, y1, z1].get(mode="fill", fill_value=0.0)
-                )
+    def _geometric_wetting_reach(self, data):
+        """Largest periodic x distance from a wall node to a node it reads (sample stencils, multilinear corners, nearest nodes),
+        at least 1."""
+        wall_x = np.asarray(data["indices"][0], dtype=np.int64)
+        reach = 1
+        nodes = [(np.asarray(index, dtype=np.int64)[..., 0], np.asarray(weight) != 0) for index, weight in self._geometric_wetting_points(data)]
+        near_x = np.asarray(data["score_nodes"])[:, :, 0, 0]  # the nearest nodes (the far ones are the correction's)
+        nodes.append((near_x, np.ones(near_x.shape, dtype=bool)))
+        linear_x = np.asarray(data["linear_nodes"])[..., 0].reshape(len(wall_x), -1)
+        nodes.append((linear_x, np.asarray(data["linear_weights"]).reshape(len(wall_x), -1) != 0))
+        for x, active in nodes:
+            dx = (x - wall_x.reshape((-1,) + (1,) * (x.ndim - 1)) + self.nx // 2) % self.nx - self.nx // 2
+            if np.any(active):
+                reach = max(reach, int(np.abs(dx[active]).max()))
+        return reach
 
-            if "request_slots" in data:
-                template = data["reduce_scatter_template"][0] if "reduce_scatter_template" in data else data["sample_template"][0]
-                samples = jnp.zeros((*template.shape, rho.shape[-1]), dtype=rho.dtype)
-                samples = samples.reshape((-1, rho.shape[-1])).at[data["request_slots"][0]].set(contributions, mode="drop")
-                samples = samples.reshape((*template.shape, rho.shape[-1]))
-                if "reduce_scatter_template" in data:
-                    samples = jax.lax.psum_scatter(samples, "x", scatter_dimension=0)
-                else:
-                    samples = jax.lax.psum(samples, "x")
-                    samples = samples[data["local_sample_indices"][0]]
-            else:
-                samples = jax.lax.psum(contributions, "x")
-                samples = samples[data["local_sample_indices"][0]]
-            rho_wall = jnp.where(
-                data["local_select_max"][0],
-                jnp.max(samples, axis=-2),
-                jnp.min(samples, axis=-2),
+    def _device_geometric_wetting_data(self, data, halo):
+        """
+        Device form of one boundary's geometric-wetting data (see _geometric_wetting_m). Returns (arrays, row order): per
+        block, the wall nodes (linear index); per characteristic sample its nearest node, its multilinear corners and weights
+        and its interpolation stencil and weights (linear indices into the block's density source), whether the nearest node
+        and the corners are usable; the extremum to take; and per shard the data rows in the order of the kernel's output (the blocks one after the other, each
+        padded to its widest shard).
+
+        With a halo width, per shard: "interior", the wall nodes at least halo planes from both shard faces, which read only
+        the shard's density; "edge", the others, which read an edge array of the halo x-planes of the neighbor shards
+        (periodic) and the shard's own 2 * halo first and last planes (all planes, the halo-padded density, when the shard
+        is thinner than 4 * halo). Without (global form): one "interior" block, with the whole density.
+        """
+        global_form = halo is None
+        devices = 1 if global_form else self.n_devices
+        shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
+        local_nx = self.nx // devices
+        local_shape = shape if global_form else self._local_shape()
+        plane = int(np.prod(local_shape[1:]))
+        halo = 0 if global_form else halo
+        thin = 4 * halo > local_nx
+        edge_planes = local_nx + 2 * halo if thin else 6 * halo
+        walls = np.stack([np.asarray(index, dtype=np.int64) for index in data["indices"]], axis=-1)
+        points = self._geometric_wetting_points(data)
+        stencil = np.stack([np.asarray(index, dtype=np.int64) for index, _ in points], axis=1)  # (n, K, S, dim)
+        weights = np.stack([np.asarray(weight) for _, weight in points], axis=1)  # (n, K, S)
+        score_nodes = np.asarray(data["score_nodes"], dtype=np.int64)  # (n, K, 2, dim)
+        linear_nodes = np.asarray(data["linear_nodes"], dtype=np.int64)  # (n, K, 2^dim, dim)
+        linear_weights = np.asarray(data["linear_weights"])
+        # Only the corners with weight (a sample lies on a grid line or plane: at most 2^(dim - 1) of them)
+        order = np.argsort(linear_weights == 0, axis=-1, kind="stable")
+        corners = max(1, int(np.max(np.sum(linear_weights != 0, axis=-1))))
+        order = order[..., :corners]
+        linear_nodes = np.take_along_axis(linear_nodes, order[..., None], axis=2)
+        linear_weights = np.take_along_axis(linear_weights, order, axis=2)
+        theta = np.asarray(data["theta"]).reshape(-1)
+        owner = walls[:, 0] // local_nx
+        local_x = walls[:, 0] - owner * local_nx
+        K, S = stencil.shape[1:3]
+        dtype = np.dtype(self.precision_policy.compute_dtype)
+
+        def plane_of(x, edge):
+            """Plane in the block's density source of shard-local x (-halo <= x < local_nx + halo); -1 if not there."""
+            if global_form:
+                return np.mod(x, self.nx)
+            if not edge:
+                return np.where((x >= 0) & (x < local_nx), x, -1)
+            if thin:
+                return np.where((x >= -halo) & (x < local_nx + halo), x + halo, -1)
+            return np.select(
+                [
+                    (x >= -halo) & (x < 0),
+                    (x >= 0) & (x < 2 * halo),
+                    (x >= local_nx - 2 * halo) & (x < local_nx),
+                    (x >= local_nx) & (x < local_nx + halo),
+                ],
+                [x + halo, x + halo, x - local_nx + 5 * halo, x - local_nx + 5 * halo],
+                -1,
             )
-            idx = tuple(indices[:, axis] for axis in range(self.dim))
-            rho = rho.at[idx].set(jnp.clip(rho_wall, rho_min, rho_max), mode="drop")
-        return rho
 
-    def _localize_geometric_wetting_data(self, data):
-        """Convert one geometric boundary's interpolation data to sharded int32 requests."""
-        wall_indices = np.stack(data["indices"], axis=-1).astype(np.int32, copy=False)
-        theta = np.asarray(data["theta"], dtype=np.dtype(self.precision_policy.compute_dtype))
-        select_max = theta <= np.asarray(np.pi / 2, dtype=theta.dtype)
-        point_data = data["points"] if self.dim == 3 else (data["point_1"], data["point_2"])
-        index_count = 6 if self.dim == 3 else 4
-        sample_indices = np.stack([np.stack(point[:index_count], axis=-1) for point in point_data], axis=1).astype(np.int32, copy=False)
-        sample_weights = np.stack([np.stack(point[index_count:], axis=-1) for point in point_data], axis=1).astype(
-            np.dtype(self.precision_policy.compute_dtype),
-            copy=False,
-        )
-
-        sample_rows = np.arange(len(wall_indices), dtype=np.int32)
-        local_indices, (local_select_max, local_sample_indices) = self._split_local_indices(wall_indices, select_max, sample_rows)
-        local_nx = self.nx // self.n_devices
-        sample_count = sample_indices.shape[1]
-        x_positions = (0, 3) if self.dim == 3 else (0, 2)
-        wall_owner = wall_indices[:, 0] // local_nx
-        max_local = local_indices.shape[1]
-        local_wall_slot = np.empty(len(wall_indices), dtype=np.int32)
-        for destination in range(self.n_devices):
-            destination_rows = wall_owner == destination
-            local_wall_slot[destination_rows] = np.arange(np.count_nonzero(destination_rows), dtype=np.int32)
-        # Route balanced wall rows directly to their destination shard. If destination padding exceeds 12.5%,
-        # keep the compact all-reduce layout to prevent an imbalanced wall from increasing temporary memory.
-        use_reduce_scatter = self.n_devices * max_local <= int(np.ceil(1.125 * len(wall_indices)))
-
-        x0_owner = sample_indices[..., x_positions[0]] // local_nx
-        x1_owner = sample_indices[..., x_positions[1]] // local_nx
-        active = [(x0_owner == source) | (x1_owner == source) for source in range(self.n_devices)]
-        max_requests = max(np.count_nonzero(source_active) for source_active in active)
-        dense_request_count = len(wall_indices) * sample_count
-        # Compaction needs a scatter into collective slots. Retain the direct dense kernel when fewer than
-        # 12.5% of gathers would be removed, avoiding a slowdown for walls whose samples all live on one shard.
-        if max_requests > 0.875 * dense_request_count:
-            source_ids = np.arange(self.n_devices, dtype=np.int32)[:, None, None]
-            request_indices = np.broadcast_to(sample_indices[None], (self.n_devices,) + sample_indices.shape).copy()
-            request_indices[..., x_positions[0]] -= source_ids * local_nx
-            request_indices[..., x_positions[1]] -= source_ids * local_nx
-            request_weights = np.broadcast_to(sample_weights[None], (self.n_devices,) + sample_weights.shape).copy()
-            request_weights[..., 0::2] *= (x0_owner[None] == source_ids)[..., None]
-            request_weights[..., 1::2] *= (x1_owner[None] == source_ids)[..., None]
-            return {
-                "local_indices": self._distribute_local(local_indices, jnp.int32),
-                "local_select_max": self._distribute_local(local_select_max, jnp.bool_),
-                "local_sample_indices": self._distribute_local(local_sample_indices, jnp.int32),
-                "request_indices": self._distribute_local(request_indices, jnp.int32),
-                "request_weights": self._distribute_local(request_weights, self.precision_policy.compute_dtype),
+        def block(rows_per_device, edge):
+            planes = edge_planes if edge else local_shape[0]
+            sentinel = planes * plane
+            n = max(1, max(len(rows) for rows in rows_per_device))
+            out = {
+                "wall_lin": np.full((devices, n), int(np.prod(local_shape)), dtype=np.int32),
+                "near_lin": np.full((devices, n, K), sentinel, dtype=np.int32),
+                "near_ok": np.zeros((devices, n, K), dtype=bool),
+                "linear_lin": np.full((devices, n, K, corners), sentinel, dtype=np.int32),
+                "linear_weights": np.zeros((devices, n, K, corners), dtype=dtype),
+                "linear_ok": np.zeros((devices, n, K), dtype=bool),
+                "stencil_lin": np.full((devices, n, K, S), sentinel, dtype=np.int32),
+                "weights": np.zeros((devices, n, K, S), dtype=dtype),
+                "select_max": np.zeros((devices, n, 1), dtype=bool),
             }
 
-        request_indices = np.zeros((self.n_devices, max_requests, index_count), dtype=np.int32)
-        request_indices[..., x_positions[0]] = local_nx
-        request_indices[..., x_positions[1]] = local_nx
-        request_weights = np.zeros((self.n_devices, max_requests, sample_weights.shape[-1]), dtype=sample_weights.dtype)
-        sample_buffer_size = (self.n_devices * max_local if use_reduce_scatter else len(wall_indices)) * sample_count
-        request_slots = np.full((self.n_devices, max_requests), sample_buffer_size, dtype=np.int32)
+            def lin(nodes, rows):
+                wall_x = walls[rows][:, 0].reshape((-1,) + (1,) * (nodes.ndim - 2))
+                dx = (nodes[..., 0] - wall_x + self.nx // 2) % self.nx - self.nx // 2
+                x = plane_of(local_x[rows].reshape(wall_x.shape) + dx, edge)
+                inside = x >= 0
+                nodes = nodes.copy()
+                nodes[..., 0] = np.where(inside, x, 0)
+                return np.ravel_multi_index(tuple(np.moveaxis(nodes, -1, 0)), (planes, *local_shape[1:])), inside
 
-        for source, source_active in enumerate(active):
-            rows, samples = np.nonzero(source_active)
-            count = len(rows)
-            localized = sample_indices[rows, samples].copy()
-            localized[..., x_positions[0]] -= source * local_nx
-            localized[..., x_positions[1]] -= source * local_nx
-            request_indices[source, :count] = localized
+            for d, rows in enumerate(rows_per_device):
+                count = len(rows)
+                if count == 0:
+                    continue
+                local = walls[rows].copy()
+                local[:, 0] = local_x[rows]
+                out["wall_lin"][d, :count] = np.ravel_multi_index(tuple(local.T), local_shape)
+                index, inside = lin(stencil[rows], rows)
+                active = (weights[rows] != 0) & inside
+                out["stencil_lin"][d, :count] = np.where(active, index, sentinel)
+                out["weights"][d, :count] = np.where(active, weights[rows], 0.0)
+                index, inside = lin(score_nodes[rows][:, :, 0], rows)
+                out["near_lin"][d, :count] = np.where(inside, index, sentinel)
+                out["near_ok"][d, :count] = np.asarray(data["score_ok"])[rows] & inside
+                index, inside = lin(linear_nodes[rows], rows)
+                used = linear_weights[rows] != 0
+                out["linear_lin"][d, :count] = np.where(used & inside, index, sentinel)
+                out["linear_weights"][d, :count] = np.where(used & inside, linear_weights[rows], 0.0)
+                out["linear_ok"][d, :count] = np.asarray(data["linear_ok"])[rows] & np.all(inside | ~used, axis=-1)
+                out["select_max"][d, :count, 0] = theta[rows] <= np.pi / 2
+            if global_form:  # plain arrays, no shard axis
+                return {key: jnp.asarray(value[0]) for key, value in out.items()}, n
+            types = {
+                "wall_lin": jnp.int32,
+                "near_lin": jnp.int32,
+                "linear_lin": jnp.int32,
+                "stencil_lin": jnp.int32,
+                "near_ok": jnp.bool_,
+                "linear_ok": jnp.bool_,
+                "select_max": jnp.bool_,
+            }
+            return {key: self._distribute_local(value, types.get(key, self.precision_policy.compute_dtype)) for key, value in out.items()}, n
 
-            source_weights = sample_weights[rows, samples].copy()
-            source_weights[..., 0::2] *= (x0_owner[rows, samples] == source)[:, None]
-            source_weights[..., 1::2] *= (x1_owner[rows, samples] == source)[:, None]
-            request_weights[source, :count] = source_weights
-            if use_reduce_scatter:
-                request_slots[source, :count] = wall_owner[rows] * max_local * sample_count + local_wall_slot[rows] * sample_count + samples
-            else:
-                request_slots[source, :count] = rows * sample_count + samples
+        if global_form:
+            interior = [np.arange(len(walls))]
+            arrays, _ = block(interior, edge=False)
+            return {"interior": arrays}, interior
+        near_face = (local_x < halo) | (local_x >= local_nx - halo)
+        interior = [np.flatnonzero((owner == d) & ~near_face) for d in range(devices)]
+        edge = [np.flatnonzero((owner == d) & near_face) for d in range(devices)]
+        interior_arrays, width = block(interior, edge=False)
+        edge_arrays, edge_width = block(edge, edge=True)
+        # Output order per shard: the interior rows, then the edge rows, each padded to the widest shard (-1)
+        pad = lambda rows, n: np.pad(rows, (0, n - len(rows)), constant_values=-1)
+        order = [np.concatenate([pad(i, width), pad(e, edge_width)]) for i, e in zip(interior, edge, strict=True)]
+        return {"interior": interior_arrays, "edge": edge_arrays}, order
 
-        localized = {
-            "local_indices": self._distribute_local(local_indices, jnp.int32),
-            "local_select_max": self._distribute_local(local_select_max, jnp.bool_),
-            "request_indices": self._distribute_local(request_indices, jnp.int32),
-            "request_weights": self._distribute_local(request_weights, self.precision_policy.compute_dtype),
-            "request_slots": self._distribute_local(request_slots, jnp.int32),
-        }
-        if use_reduce_scatter:
-            localized["reduce_scatter_template"] = self._distribute_local(
-                np.zeros((self.n_devices, self.n_devices, max_local, sample_count), dtype=np.bool_), jnp.bool_
-            )
+    @staticmethod
+    def _best_sample(score):
+        """Index of the largest score along the sample axis (n, K), the first on ties: a running comparison over the few
+        samples, which XLA fuses into one pass (argmax is a two-operand reduction)."""
+        best, chosen = score[:, 0], jnp.zeros(score.shape[:1], dtype=jnp.int32)
+        for k in range(1, score.shape[1]):
+            better = score[:, k] > best
+            best = jnp.where(better, score[:, k], best)
+            chosen = jnp.where(better, k, chosen)
+        return chosen
+
+    @staticmethod
+    def _pick_sample(array, chosen, fill=0):
+        """array[r, chosen[r]] for array (n, K, ...): one gather of the chosen entries (take_along_axis over the sample axis
+        would read all K); fill where chosen is negative (no memory read)."""
+        n, K = array.shape[:2]
+        rows = jnp.arange(chosen.shape[0], dtype=jnp.int32)
+        index = jnp.where(chosen >= 0, rows * K + chosen, n * K)
+        return array.reshape((n * K,) + array.shape[2:]).at[index].get(mode="fill", fill_value=fill)
+
+    # Geometric wetting near interfaces only: a wall node whose score densities (see _geometric_wetting_rows) all agree
+    # within this fraction of the fluid's density range sits in one uniform phase; it takes the score density directly
+    # (the value any interpolation there gives) and is left out of the bounce-back correction (which vanishes there)
+    _GEOMETRIC_WETTING_ACTIVITY = 1e-4
+
+    def _geometric_wetting_rows(self, padded, data, rho_min, rho_max):
+        """
+        Wall densities of one block of wall nodes (see _geometric_wetting_m and _device_geometric_wetting_data): the extremum
+        (largest for theta <= 90 degrees, smallest otherwise) of each wall node's characteristic samples, the samples
+        compared by multilinear interpolation and the extremal one interpolated with its interpolation data (Catmull-Rom by
+        default), clipped to the fluid range. A wall node whose samples' nearest-node densities agree within
+        _GEOMETRIC_WETTING_ACTIVITY of the fluid range sits in a uniform phase: it takes the extremal nearest-node density
+        and reads nothing more. Returns (densities, -1 for the wall nodes in a uniform phase and 0 for the others, for the
+        bounce-back correction).
+        """
+        padded_rho = padded[..., 0]
+        size = padded_rho.shape[0]
+        sign = 2 * data["select_max"].astype(padded.dtype) - 1  # (n, 1): +1 for the largest, -1 for the smallest
+        near = padded_rho.at[data["near_lin"]].get(mode="fill", fill_value=0.0)  # (n, K)
+        spread = jnp.max(jnp.where(data["near_ok"], near, -jnp.inf), axis=1) - jnp.min(jnp.where(data["near_ok"], near, jnp.inf), axis=1)
+        active = spread > self._GEOMETRIC_WETTING_ACTIVITY * (rho_max - rho_min)
+        uniform = jnp.max(jnp.where(data["near_ok"], sign * near, -jnp.inf), axis=1) * sign[:, 0]
+        # Compare the samples by multilinear interpolation (its corners with weight only). Masking the indices of the
+        # uniform-phase wall nodes would cost a pass over the index array: XLA does not fuse it into the gather
+        n, K, _ = data["linear_lin"].shape
+        linear = jnp.sum(data["linear_weights"] * padded_rho.at[data["linear_lin"]].get(mode="fill", fill_value=0.0), axis=-1)  # (n, K)
+        chosen = self._best_sample(jnp.where(data["linear_ok"], sign * linear, -jnp.inf))
+        pick = jnp.where(active, jnp.arange(n, dtype=jnp.int32) * K + chosen, n * K)
+        stencil = data["stencil_lin"].reshape(n * K, -1).at[pick].get(mode="fill", fill_value=size)  # (n, S)
+        weights = data["weights"].reshape(n * K, -1).at[pick].get(mode="fill", fill_value=0.0)
+        interpolated = jnp.sum(weights[..., None] * padded.at[stencil].get(mode="fill", fill_value=0.0), axis=1)
+        rho_wall = jnp.where(active[:, None], interpolated, uniform[:, None])
+        return jnp.clip(rho_wall, rho_min, rho_max), jnp.where(active, 0, -1)
+
+    def _geometric_wetting_m(self, rho, fluid_mask, component_data, halo):
+        """
+        Geometric wetting of one component, shard-local (see _device_geometric_wetting_data): the interior wall nodes read the
+        shard's density, the edge ones an edge array that includes halo x-planes of the neighbor shards (one exchange of
+        2 * halo planes of one scalar field, which the interior work overlaps), and every wall node gets the density of its
+        chosen characteristic sample (_geometric_wetting_rows). Returns the density and, per boundary, the chosen samples
+        (shard-local rows in the order of _device_geometric_wetting_data, for the bounce-back correction).
+        """
+        rho_min = jax.lax.pmin(jnp.min(jnp.where(fluid_mask, rho, jnp.inf)), "x")
+        rho_max = jax.lax.pmax(jnp.max(jnp.where(fluid_mask, rho, -jnp.inf)), "x")
+        n = self.n_devices
+        if n > 1:
+            left = jax.lax.ppermute(rho[-halo:], "x", [(i, (i + 1) % n) for i in range(n)])  # last planes of the left neighbor
+            right = jax.lax.ppermute(rho[:halo], "x", [(i, (i - 1) % n) for i in range(n)])  # first planes of the right one
         else:
-            localized["local_sample_indices"] = self._distribute_local(local_sample_indices, jnp.int32)
-            localized["sample_template"] = self._distribute_local(
-                np.zeros((self.n_devices, len(wall_indices), sample_count), dtype=np.bool_), jnp.bool_
-            )
-        return localized
+            left, right = rho[-halo:], rho[:halo]
+        channels = rho.shape[-1]
+        flat = rho.reshape(-1, channels)
+        if 4 * halo > rho.shape[0]:
+            edge = jnp.concatenate([left, rho, right], axis=0)  # thin shard: the halo-padded density
+        else:
+            edge = jnp.concatenate([left, rho[: 2 * halo], rho[-2 * halo :], right], axis=0)
+        edge = edge.reshape(-1, channels)
+        rows = []
+        for data in component_data:
+            interior = self._geometric_wetting_rows(flat, {key: value[0] for key, value in data["interior"].items()}, rho_min, rho_max)
+            near = self._geometric_wetting_rows(edge, {key: value[0] for key, value in data["edge"].items()}, rho_min, rho_max)
+            rows.append((interior, near))
+        # Every sample before any write: a scatter into rho that a later gather still reads would copy rho
+        flat, rows = jax.lax.optimization_barrier((flat, rows))
+        chosen = []
+        for data, ((rho_interior, chosen_interior), (rho_edge, chosen_edge)) in zip(component_data, rows, strict=True):
+            flat = flat.at[data["interior"]["wall_lin"][0]].set(rho_interior, mode="drop")
+            flat = flat.at[data["edge"]["wall_lin"][0]].set(rho_edge, mode="drop")
+            chosen.append(jnp.concatenate([chosen_interior, chosen_edge])[None])
+        return flat.reshape(rho.shape), chosen
+
+    def _geometric_wetting_global(self, rho, fluid_mask, component_data):
+        """Global form of _geometric_wetting_m (indices into the whole density, see _localize_component_wetting_data)."""
+        rho_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
+        rho_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
+        flat = rho.reshape(-1, rho.shape[-1])
+        rows = [self._geometric_wetting_rows(flat, data["interior"], rho_min, rho_max) for data in component_data]
+        for data, (rho_wall, _) in zip(component_data, rows, strict=True):
+            flat = flat.at[data["interior"]["wall_lin"]].set(rho_wall, mode="drop")
+        return flat.reshape(rho.shape), [chosen for _, chosen in rows]
 
     def _build_local_geometric_wetting_kernels(self, scalar_spec):
-        """Build one fused shard-local geometric-wetting kernel per active component."""
+        """One geometric-wetting kernel per component (see _geometric_wetting_m), None without wetted walls."""
         kernels = []
-        for component_data in self.geometric_wetting_data:
+        for component_data, halo in zip(self.geometric_wetting_data, self._geometric_wetting_halos, strict=True):
             if not component_data:
                 kernels.append(None)
-                continue
-            data_specs = tree_map(lambda array: PartitionSpec("x", *([None] * (array.ndim - 1))), component_data)
-            kernels.append(
-                jit(
-                    shard_map(
-                        self.local_geometric_wetting_m,
-                        mesh=self.mesh,
-                        in_specs=(scalar_spec, scalar_spec, data_specs),
-                        out_specs=scalar_spec,
-                        check_vma=False,
+            elif halo is None:
+                kernels.append(jit(self._geometric_wetting_global))
+            else:
+                data_specs = tree_map(lambda array: PartitionSpec("x", *([None] * (array.ndim - 1))), component_data)
+                kernels.append(
+                    jit(
+                        shard_map(
+                            partial(self._geometric_wetting_m, halo=halo),
+                            mesh=self.mesh,
+                            in_specs=(scalar_spec, scalar_spec, data_specs),
+                            out_specs=(scalar_spec, [PartitionSpec("x")] * len(component_data)),
+                            check_vma=False,
+                        )
                     )
                 )
-            )
         return tuple(kernels)
+
+    # Geometric wetting: bounce-back correction along the characteristics
+
+    def _create_geometric_wall_correction_data(self):
+        """
+        Host-side setup of the bounce-back correction of geometric wetting (see _geometric_wall_correction_m).
+
+        Full-way bounce-back returns to the fluid node x = b + c_i the population g_opp(i)(x) instead of the population g_i(b)
+        that a fluid continued into the wall would send. At a contact line that defect is a kinetic error whose size depends on
+        the relaxation rates (the magic parameter of the odd moments), and the geometric scheme, which copies the first fluid
+        layer into the wall, amplifies it into a contact-angle error. The correction adds to the bounced population the same
+        defect measured inside the fluid at the wall node's characteristic sample s (the point the wall density is taken from,
+        on the same density iso-surface): D_i = G_i(s) - H_i(s + c_i), with G_i = g_i - 3 w_i c_i.j and H_i = g_opp(i) +
+        3 w_i c_i.j, where j = rho u + F / 2 is the physical momentum. D is exact for any planar interface, vanishes in a
+        uniform phase and for a uniform or linear shear flow (no slip is kept), and is evaluated at the sample's nearest node.
+        It is applied on planar wall faces only (edges and corners of staircased walls keep plain bounce-back), and only near
+        interfaces (see _GEOMETRIC_WETTING_ACTIVITY).
+
+        The sample is chosen per time step among the characteristic samples (2 in 2D, the cone samples in 3D): the one with
+        the largest (theta <= 90 degrees) or smallest density summed at its node and at the node twice as far along its
+        characteristic. The second point, two layers into the fluid, keeps the density overshoot next to the interface from
+        selecting the sample on the wrong side of the contact line.
+
+        Nodes are referenced by their shard-local linear index, or, when they belong to another shard, by local_size + their
+        row in a table of imported values (populations, density and momentum) exchanged once per time step.
+
+        Returns
+        -------
+        (list): Per component, (arrays, directions) for _geometric_wall_correction_m, or None.
+        """
+        shape = (self.nx, self.ny) if self.dim == 2 else (self.nx, self.ny, self.nz)
+        dim, q, n_devices = self.dim, self.q, self.n_devices
+        local_nx = self.nx // n_devices
+        local_shape = self._local_shape()
+        local_size = int(np.prod(local_shape))
+        c = np.asarray(self.lattice.c, dtype=np.int64).T  # (q, dim)
+        shape_array = np.asarray(shape, dtype=np.int64)
+
+        def lin(points):
+            return np.ravel_multi_index(tuple(np.moveaxis(np.mod(points, shape_array), -1, 0)), shape)
+
+        result = []
+        for component, (BC, samples) in enumerate(zip(self.BCs, self._geometric_wall_samples, strict=True)):
+            bounceback = np.zeros(shape, dtype=bool)
+            for bc in BC:
+                if isinstance(bc, BounceBack):
+                    bounceback[tuple(np.asarray(index) for index in bc.indices)] = True
+            if not samples or not bounceback.any():
+                result.append(None)
+                continue
+            # The defect is measured in ordinary fluid: not at solid nodes nor at the nodes of any boundary condition (inlets,
+            # outlets, extrapolations, ...), whose populations the boundary conditions set
+            constrained = self._create_component_solid_mask(BC) | bounceback
+            for bc in BC:
+                constrained[tuple(np.asarray(index) for index in bc.indices)] = True
+            fluid = ~constrained.reshape(-1)
+            walls = np.concatenate([np.asarray(indices, dtype=np.int64) for indices, _, _ in samples])
+            theta = np.concatenate([np.asarray(theta, dtype=np.float64).reshape(-1) for _, theta, _ in samples])
+            points = np.concatenate([
+                np.stack([self._interpolation_points(point) for point in sample_points], axis=1) for _, _, sample_points in samples
+            ])
+            keep = bounceback[tuple(walls.T)]
+            walls, theta, points = walls[keep], theta[keep], points[keep]
+            if len(walls) == 0:
+                result.append(None)
+                continue
+            n, K = points.shape[:2]
+
+            sample = lin(np.round(points).astype(np.int64))  # (n, K) nearest nodes
+            sample_ok = fluid[sample]
+            # The score nodes of geometric wetting (same rule, same solid mask), for choosing samples without its choices
+            score_nodes, score_ok = self._geometric_score_nodes(walls, points - walls[:, None, :], self._create_component_solid_mask(BC))
+            score_near, far = lin(score_nodes[:, :, 0]), lin(score_nodes[:, :, 1])
+            incoming = fluid[lin(walls[:, None, :] + c[None])]  # (n, q): b + c_i is fluid
+            incoming[:, ~np.any(c != 0, axis=1)] = False
+            # The correction holds where the wall is locally a plane (the defect is carried along it): only wall nodes on a
+            # lattice-aligned face, whose fluid neighbors are exactly the directions to one side of an axis plane; edges and
+            # corners of staircased walls keep plain bounce-back
+            planar = np.zeros(n, dtype=bool)
+            for axis in range(dim):
+                for sign in (1, -1):
+                    planar |= np.all(incoming == (sign * c[:, axis] > 0)[None], axis=1)
+            incoming &= planar[:, None]
+            directions = [i for i in range(q) if incoming[:, i].any()]
+            sample_coordinates = np.stack(np.unravel_index(sample, shape), axis=-1)
+            direction_rows, shifted, shifted_ok = {}, {}, {}
+            for i in directions:
+                rows = np.flatnonzero(incoming[:, i])
+                direction_rows[i] = rows
+                shifted[i] = lin(sample_coordinates[rows] + c[i])
+                shifted_ok[i] = sample_ok[rows] & fluid[shifted[i]]
+
+            # References: shard-local linear index, or local_size + row of the import table (block per source shard)
+            wall_owner = walls[:, 0] // local_nx
+            node_owner = lambda nodes: np.unravel_index(nodes, shape)[0] // local_nx
+
+            def local_lin(nodes, device):
+                coordinates = np.stack(np.unravel_index(nodes, shape), axis=-1)
+                coordinates[..., 0] -= device * local_nx
+                return np.ravel_multi_index(tuple(np.moveaxis(coordinates, -1, 0)), local_shape)
+
+            # Nodes of other shards each shard reads: with populations (samples and shifted samples) or only the density and
+            # momentum (the far score points); each block of the import tables holds what one shard sends
+            empty = np.zeros(0, np.int64)
+            remote = [[empty] * n_devices for _ in range(n_devices)]
+            remote_macro = [[empty] * n_devices for _ in range(n_devices)]
+            for d in range(n_devices):
+                mine = wall_owner == d
+                full_nodes = [sample[mine][sample_ok[mine]].ravel()]
+                for i in directions:
+                    sel = wall_owner[direction_rows[i]] == d
+                    full_nodes.append(shifted[i][sel][shifted_ok[i][sel]].ravel())
+                full_nodes = np.unique(np.concatenate(full_nodes))
+                macro_nodes = np.setdiff1d(np.unique(np.concatenate([score_near[mine].ravel(), far[mine].ravel()])), full_nodes)
+                for nodes, table in ((full_nodes, remote), (macro_nodes, remote_macro)):
+                    owners = node_owner(nodes)
+                    for e in range(n_devices):
+                        if e != d:
+                            table[d][e] = nodes[owners == e]
+            width = max(1, max(len(rows) for per in remote for rows in per)) if n_devices > 1 else 1
+            width_macro = max(1, max(len(rows) for per in remote_macro for rows in per)) if n_devices > 1 else 1
+            # Export buffers, one contiguous block per destination shard (all_to_all splits them so): the nodes with
+            # populations (width rows), and for the density and momentum those followed by the density-only nodes
+            export = np.full((n_devices, n_devices * width), local_size, dtype=np.int32)
+            export_macro = np.full((n_devices, n_devices * (width + width_macro)), local_size, dtype=np.int32)
+            for d in range(n_devices):
+                for e in range(n_devices):
+                    rows, rows_macro = remote[d][e], remote_macro[d][e]
+                    block = d * (width + width_macro)
+                    if len(rows):  # shard e sends shard d these nodes
+                        export[e, d * width : d * width + len(rows)] = local_lin(rows, e)
+                        export_macro[e, block : block + len(rows)] = local_lin(rows, e)
+                    if len(rows_macro):
+                        export_macro[e, block + width : block + width + len(rows_macro)] = local_lin(rows_macro, e)
+            # Imported rows (after the kernel reorders the density and momentum): the population nodes of each source shard,
+            # local_size + e * width + k, then its density-only nodes, local_size + n_devices * width + e * width_macro + k
+            sentinel = local_size + n_devices * (width + width_macro)  # out of range of everything
+
+            def reference(nodes, device, ok=None):
+                nodes = np.asarray(nodes)
+                ref = np.full(nodes.shape, sentinel, dtype=np.int64)
+                owners = node_owner(nodes)
+                here = owners == device
+                ref[here] = local_lin(nodes[here], device)
+                for e in range(n_devices):
+                    there = owners == e
+                    if e == device or not np.any(there):
+                        continue
+                    full_rows, macro_rows = remote[device][e], remote_macro[device][e]
+                    found = np.minimum(np.searchsorted(full_rows, nodes[there]), max(len(full_rows) - 1, 0))
+                    in_full = (full_rows[found] == nodes[there]) if len(full_rows) else np.zeros(np.count_nonzero(there), bool)
+                    found_macro = np.minimum(np.searchsorted(macro_rows, nodes[there]), max(len(macro_rows) - 1, 0))
+                    value = np.where(in_full, local_size + e * width + found, local_size + n_devices * width + e * width_macro + found_macro)
+                    ref[there] = value
+                if ok is not None:
+                    ref = np.where(ok, ref, sentinel)
+                return ref.astype(np.int32)
+
+            per_device = [np.flatnonzero(wall_owner == d) for d in range(n_devices)]
+            n_wall = max(len(rows) for rows in per_device) + 1  # one padding wall, written out of range
+            wall_lin = np.full((n_devices, n_wall), local_size, dtype=np.int32)
+            wall_lin[:, -1] = np.iinfo(np.int32).max  # the padding wall (out of range of the fields)
+            wall_select_max = np.zeros((n_devices, n_wall), dtype=bool)
+            wall_sample_ok = np.zeros((n_devices, n_wall, K), dtype=bool)
+            wall_sample = np.full((n_devices, n_wall, K), sentinel, dtype=np.int32)
+            wall_score = np.full((n_devices, n_wall, K, 2), sentinel, dtype=np.int32)
+            wall_slot = np.full(n, n_wall - 1, dtype=np.int64)
+            # Row of each wall node in the chosen samples of geometric wetting on its shard (the device data of every boundary,
+            # concatenated; within one, the wall rows of a shard come first, in order, see _device_geometric_wetting_data)
+            wall_choice = np.zeros((n_devices, n_wall), dtype=np.int32)
+            choice_row = np.zeros(n, dtype=np.int64)
+            row_offset, start = 0, 0
+            kept_position = np.cumsum(keep) - 1
+            orders = self._geometric_wetting_orders[component] if self._geometric_wetting_halos[component] is not None else None
+            for j, (indices, _, _) in enumerate(samples):
+                count = len(indices)
+                keep_j = keep[start : start + count]
+                if orders is not None:
+                    owner_j = np.asarray(indices)[:, 0] // local_nx
+                    position = np.zeros(count, dtype=np.int64)
+                    for d in range(n_devices):
+                        order = orders[j][d]
+                        rank = np.full(int(order.max(initial=-1)) + 2, -1, dtype=np.int64)
+                        rank[order[order >= 0]] = np.flatnonzero(order >= 0)
+                        mine_j = np.flatnonzero(owner_j == d)
+                        position[mine_j] = rank[mine_j]
+                    choice_row[kept_position[start : start + count][keep_j]] = row_offset + position[keep_j]
+                    row_offset += len(orders[j][0])
+                start += count
+            for d, rows in enumerate(per_device):
+                wall_slot[rows] = np.arange(len(rows))
+                wall_choice[d, : len(rows)] = choice_row[rows]
+                local = walls[rows].copy()
+                local[:, 0] -= d * local_nx
+                wall_lin[d, : len(rows)] = np.ravel_multi_index(tuple(local.T), local_shape)
+                wall_select_max[d, : len(rows)] = theta[rows] <= np.pi / 2
+                wall_sample_ok[d, : len(rows)] = score_ok[rows]
+                wall_sample[d, : len(rows)] = reference(sample[rows], d, sample_ok[rows])
+                wall_score[d, : len(rows)] = reference(np.stack([score_near[rows], far[rows]], axis=-1), d)
+
+            direction_slots, direction_shifted, direction_nodes = {}, {}, {}
+            for i in directions:
+                rows = direction_rows[i]
+                owners = wall_owner[rows]
+                counts = [np.count_nonzero(owners == d) for d in range(n_devices)]
+                width_i = max(1, max(counts))
+                slots = np.full((n_devices, width_i), n_wall - 1, dtype=np.int32)
+                shifted_ref = np.full((n_devices, width_i, K), sentinel, dtype=np.int32)  # sentinel: no correction
+                for d in range(n_devices):
+                    sel = owners == d
+                    slots[d, : counts[d]] = wall_slot[rows[sel]]
+                    shifted_ref[d, : counts[d]] = reference(shifted[i][sel], d, shifted_ok[i][sel])
+                nodes = np.take_along_axis(wall_lin, slots, axis=1).astype(np.int64)
+                # Distinct out-of-range nodes for the padding, so that the scatter of each direction has unique indices
+                padding = slots == n_wall - 1
+                nodes[padding] = local_size + np.cumsum(padding, axis=1)[padding]
+                direction_nodes[str(i)] = self._distribute_local(nodes.astype(np.int32), jnp.int32)
+                direction_slots[str(i)] = self._distribute_local(slots, jnp.int32)
+                direction_shifted[str(i)] = self._distribute_local(shifted_ref, jnp.int32)
+
+            arrays = {
+                "export": self._distribute_local(export, jnp.int32),
+                "export_macro": self._distribute_local(export_macro, jnp.int32),
+                "wall_choice": self._distribute_local(wall_choice, jnp.int32),
+                "fluid": self.geometric_fluid_mask[component],
+                "wall_select_max": self._distribute_local(wall_select_max, jnp.bool_),
+                "wall_sample_ok": self._distribute_local(wall_sample_ok, jnp.bool_),
+                "wall_sample": self._distribute_local(wall_sample, jnp.int32),
+                "wall_score": self._distribute_local(wall_score, jnp.int32),
+                "direction_slots": direction_slots,
+                "direction_shifted": direction_shifted,
+                "direction_nodes": direction_nodes,
+            }
+            logger.info(
+                f"Geometric wall correction: {n} wall nodes; imported per shard: {n_devices * width if n_devices > 1 else 0} nodes "
+                f"(populations) and {n_devices * width_macro if n_devices > 1 else 0} (density and momentum only)."
+            )
+            result.append((arrays, tuple(directions)))
+        return result
+
+    def _geometric_wall_correction_m(self, fields, macroscopic, arrays, chosen=None, directions=()):
+        """
+        Shard-local bounce-back correction of geometric wetting (see _create_geometric_wall_correction_data).
+
+        fields are the post-collision populations (bounce-back applied at the wall nodes), macroscopic the density and the
+        physical momentum components (rho, j_x, ...) the populations were collided with. Returns the fields with D added
+        to the populations each wall node sends into the fluid.
+        """
+        q, dim = self.q, self.dim
+        c = np.asarray(self.lattice.c, dtype=np.float64)  # (dim, q)
+        w = np.asarray(self.lattice.w, dtype=np.float64)
+        opposite = np.asarray(self.lattice.opp_indices)
+        columns = [f.reshape(-1) for f in fields]
+        local_size = columns[0].shape[0]
+        # Density and momentum interleaved, (nodes, dim + 1): one gather per node
+        macro = jnp.stack([m.reshape(-1) for m in macroscopic], axis=-1)
+        imported = imported_macro = None
+        if self.n_devices > 1:
+            export = arrays["export"][0]
+            sent = jnp.stack([column.at[export].get(mode="fill", fill_value=0.0) for column in columns])  # (q, rows)
+            imported = jax.lax.all_to_all(sent, "x", 1, 1, tiled=True)
+            imported_macro = jax.lax.all_to_all(macro.at[arrays["export_macro"][0]].get(mode="fill", fill_value=0.0), "x", 0, 0, tiled=True)
+            # Received per source shard: its population nodes, then its density-only nodes; reordered to all population nodes
+            # first (the references of _create_geometric_wall_correction_data)
+            width = imported.shape[1] // self.n_devices
+            per_source = imported_macro.reshape(self.n_devices, -1, dim + 1)
+            imported_macro = jnp.concatenate([per_source[:, :width].reshape(-1, dim + 1), per_source[:, width:].reshape(-1, dim + 1)])
+
+        def fetch(column, ref):
+            """Population column at references (shard-local nodes or imported rows)."""
+            value = columns[column].at[ref].get(mode="fill", fill_value=0.0)
+            if imported is None:
+                return value
+            return jnp.where(ref < local_size, value, imported[column].at[ref - local_size].get(mode="fill", fill_value=0.0))
+
+        def fetch_macro(ref):
+            """(rho, j) at references, (..., dim + 1)."""
+            value = macro.at[ref].get(mode="fill", fill_value=0.0)
+            if imported_macro is None:
+                return value
+            return jnp.where((ref < local_size)[..., None], value, imported_macro.at[ref - local_size].get(mode="fill", fill_value=0.0))
+
+        sentinel = local_size + (0 if imported_macro is None else imported_macro.shape[0])
+        ok = arrays["wall_sample_ok"][0]
+        n_wall, K = ok.shape
+        score_refs = arrays["wall_score"][0]  # (n, K, 2): nearest node and the node twice as far, per sample
+        if chosen is None:
+            # Uniform-phase test as in geometric wetting (_geometric_wetting_rows), on the samples' nearest nodes
+            near = fetch_macro(score_refs[..., 0])[..., 0]  # (n, K)
+            fluid, density = arrays["fluid"].reshape(-1), macro[:, 0]  # the mask is a sharded field (no device axis)
+            rho_range = jax.lax.pmax(jnp.max(jnp.where(fluid, density, -jnp.inf)), "x") - jax.lax.pmin(
+                jnp.min(jnp.where(fluid, density, jnp.inf)), "x"
+            )
+            spread = jnp.max(jnp.where(ok, near, -jnp.inf), axis=1) - jnp.min(jnp.where(ok, near, jnp.inf), axis=1)
+            active = spread > self._GEOMETRIC_WETTING_ACTIVITY * rho_range
+        else:
+            # The uniform-phase test geometric wetting made (its shard-local rows of these wall nodes)
+            active = chosen[0][arrays["wall_choice"][0]] >= 0
+        # Near interfaces, the sample on the iso-surface of the wall node: the largest (theta <= 90) or smallest density
+        # summed at its nearest node and at the node twice as far along the characteristic (robust to the density
+        # overshoot next to an interface). Out-of-range references elsewhere: no reads
+        values = fetch_macro(jnp.where(active[:, None, None], score_refs, sentinel))[..., 0]
+        score = jnp.sum(values, axis=-1)
+        score = jnp.where(arrays["wall_select_max"][0][:, None], score, -score)
+        chosen = jnp.where(active, self._best_sample(jnp.where(ok, score, -jnp.inf)), -1)
+        # Wall nodes in a uniform phase (chosen -1) get no correction: their references are out of range (no memory read)
+        chosen_sample = self._pick_sample(arrays["wall_sample"][0], chosen, fill=sentinel)
+        sample_macro = fetch_macro(chosen_sample)  # (n, dim + 1), shared by the directions
+
+        # All defects first (gathers from the unmodified fields), then the scatters: a scatter into a field that a later
+        # gather still reads would copy it
+        updates = []
+        for i in directions:
+            key, o = str(i), int(opposite[i])
+            slots = arrays["direction_slots"][key][0]
+            here = chosen_sample[slots]
+            there = self._pick_sample(arrays["direction_shifted"][key][0], chosen[slots], fill=sentinel)
+            # Python floats (weakly typed): the momentum term stays in the compute precision
+            ci = [(axis, float(c[axis, i])) for axis in range(dim) if c[axis, i] != 0]
+            weight = 3.0 * float(w[i])
+            cj = lambda macro_values: weight * sum(macro_values[:, 1 + axis] * value for axis, value in ci)
+            # G_i(s) - H_i(s + c_i), with G_i = g_i - 3 w_i c_i.j and H_i = g_opp(i) + 3 w_i c_i.j
+            defect = fetch(i, here) - cj(sample_macro[slots]) - fetch(o, there) - cj(fetch_macro(there))
+            updates.append((i, arrays["direction_nodes"][key][0], jnp.where(there < sentinel, defect, 0.0)))
+        fields, values = jax.lax.optimization_barrier((tuple(fields), [(nodes, defect) for _, nodes, defect in updates]))
+        fields = list(fields)
+        columns = [f.reshape(-1) for f in fields]
+        for (i, _, _), (nodes, defect) in zip(updates, values, strict=True):
+            fields[i] = columns[i].at[nodes].add(defect.astype(columns[i].dtype), mode="drop", unique_indices=True).reshape(fields[i].shape)
+        return tuple(fields)
+
+    def _build_geometric_wall_correction_kernels(self):
+        """shard_map'd kernels of the bounce-back correction per corrected component, (choosing the samples itself, with the
+        samples geometric wetting chose), None otherwise."""
+        spec = PartitionSpec("x")
+        kernels = []
+        for data in self.geometric_wall_correction_data:
+            if data is None:
+                kernels.append(None)
+                continue
+            function = partial(self._geometric_wall_correction_m, directions=data[1])
+            kernels.append((
+                shard_map(function, mesh=self.mesh, in_specs=(spec, spec, spec), out_specs=spec, check_vma=False),
+                shard_map(function, mesh=self.mesh, in_specs=(spec, spec, spec, spec), out_specs=spec, check_vma=False),
+            ))
+        return kernels
+
+    def _apply_geometric_wall_correction(self, component, macroscopic, choices, target, previous):
+        """Post-collision hook of _prepare_streaming: the bounce-back correction of one component (see
+        _geometric_wall_correction_m), with the samples geometric wetting chose (halo form) when it ran."""
+        arrays = self.geometric_wall_correction_data[component][0]
+        use_choices = choices is not None and self._geometric_wetting_halos[component] is not None
+        chosen = jnp.concatenate(choices, axis=1) if use_choices else None
+        kernel = self._geometric_wall_correction_kernels[component][1 if use_choices else 0]
+        fields = kernel(tuple(target.fields), macroscopic, arrays) if chosen is None else kernel(tuple(target.fields), macroscopic, arrays, chosen)
+        return PopulationState(fields, target.lo, target.hi)
 
     def _wetting_parameter_at_indices(self, value, indices):
         """Convert scalar, per-node, or full-domain wetting data to one scalar row per solid node."""
@@ -1730,7 +2525,6 @@ class Multiphase(LBMBase):
             out.append(jnp.where(has_fluid_neighbor, first, jnp.where(has_first_layer_neighbor, second, rho)))
         return out
 
-    @partial(jit, static_argnums=(0,))
     def apply_contact_angle(self, rho_tree):
         """
         Apply prescribed contact angles to wall-node densities.
@@ -1799,93 +2593,21 @@ class Multiphase(LBMBase):
                 )
             ]
         elif self.wetting_formulation == "geometric":
-            if self.local_geometric_wetting is not None:
-                return [
-                    kernel(rho, fluid_mask, component_data) if kernel is not None else rho
-                    for rho, fluid_mask, component_data, kernel in zip(
-                        rho_tree,
-                        self.geometric_fluid_mask,
-                        self.geometric_wetting_data,
-                        self.local_geometric_wetting,
-                        strict=True,
-                    )
-                ]
-
-            def interpolate_density(rho, interpolation_data):
-                """
-                Interpolate density at precomputed geometric wetting sample points.
-
-                Parameters
-                ----------
-                rho (jax.numpy.ndarray): Density field for one component.
-
-                interpolation_data (tuple): Index arrays and weights generated by _build_interpolation_data.
-
-                Returns
-                -------
-                (jax.numpy.ndarray): Interpolated density values at the sample points.
-                """
-                if self.dim == 2:
-                    x0, y0, x1, y1, w00, w10, w01, w11 = interpolation_data
-                    return w00[:, None] * rho[x0, y0] + w10[:, None] * rho[x1, y0] + w01[:, None] * rho[x0, y1] + w11[:, None] * rho[x1, y1]
-
-                x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = interpolation_data
-                return (
-                    w000[:, None] * rho[x0, y0, z0]
-                    + w100[:, None] * rho[x1, y0, z0]
-                    + w010[:, None] * rho[x0, y1, z0]
-                    + w110[:, None] * rho[x1, y1, z0]
-                    + w001[:, None] * rho[x0, y0, z1]
-                    + w101[:, None] * rho[x1, y0, z1]
-                    + w011[:, None] * rho[x0, y1, z1]
-                    + w111[:, None] * rho[x1, y1, z1]
-                )
-
-            def set_geometric_contact_angle(rho, component_data, fluid_mask):
-                """
-                Set wall density values for one component using precomputed geometric wetting data.
-
-                Parameters
-                ----------
-                rho (jax.numpy.ndarray): Density field for one component.
-
-                component_data (list): Boundary-wise geometric wetting data for one component.
-
-                fluid_mask (jax.numpy.ndarray): Boolean mask with True on fluid nodes.
-
-                Returns
-                -------
-                rho (jax.numpy.ndarray): Density field with wall values updated at wetted boundary nodes.
-                """
-                # Bound wall densities by the fluid density range so the wall can never introduce
-                # a density outside what exists in the fluid. Using the global field range instead
-                # would include the unphysical densities stored at solid nodes by bounce-back and
-                # let the wall values ratchet the fluid range upward.
-                rho_min = jnp.min(jnp.where(fluid_mask, rho, jnp.inf))
-                rho_max = jnp.max(jnp.where(fluid_mask, rho, -jnp.inf))
-                for data in component_data:
-                    if self.dim == 2:
-                        rho_1 = interpolate_density(rho, data["point_1"])
-                        rho_2 = interpolate_density(rho, data["point_2"])
-                        rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, jnp.maximum(rho_1, rho_2), jnp.minimum(rho_1, rho_2))
-                        rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
-                    else:
-                        rho_samples = [interpolate_density(rho, point_data) for point_data in data["points"]]
-                        rho_sample_min = rho_samples[0]
-                        rho_sample_max = rho_samples[0]
-                        for rho_sample in rho_samples[1:]:
-                            rho_sample_min = jnp.minimum(rho_sample_min, rho_sample)
-                            rho_sample_max = jnp.maximum(rho_sample_max, rho_sample)
-                        rho_wall = jnp.where(data["theta"] <= jnp.pi / 2, rho_sample_max, rho_sample_min)
-                        rho = rho.at[data["indices"]].set(jnp.clip(rho_wall, rho_min, rho_max))
-                return rho
-
-            return tree_map(
-                lambda rho, component_data, fluid_mask: set_geometric_contact_angle(rho, component_data, fluid_mask),
-                rho_tree,
-                self.geometric_wetting_data,
-                self.geometric_fluid_mask,
-            )
+            # One kernel per component (see _geometric_wetting_m); the chosen samples go to the bounce-back correction
+            result, choices = [], []
+            for rho, fluid_mask, component_data, kernel in zip(
+                rho_tree, self.geometric_fluid_mask, self.geometric_wetting_data, self.local_geometric_wetting, strict=True
+            ):
+                if kernel is None:
+                    result.append(rho)
+                    choices.append(None)
+                    continue
+                rho, chosen = kernel(rho, fluid_mask, component_data)
+                result.append(rho)
+                choices.append(chosen)
+            if self._wetting_choice_export is not None:
+                self._wetting_choice_export.append(choices)
+            return result
 
         return rho_tree
 
@@ -2288,11 +3010,50 @@ class Multiphase(LBMBase):
 
         f_postcollision_tree (list of jax.numpy.ndarray or None): Post-collision populations, or None.
         """
+        correction = getattr(self, "geometric_wall_correction_data", None) or [None] * self.n_components
+        corrected = any(data is not None for data in correction)
         f_poststreaming_tree = [self.stream(state) for state in state_tree]
-        f_postcollision_tree = self.post_collision(self.collision(f_poststreaming_tree, T=T), f_poststreaming_tree, timestep)
+        collision = self.collision
+        if corrected and "collision" not in self.__dict__ and hasattr(type(self).collision, "__wrapped__"):
+            # Traced inline (not as its own jit), so that the fields it exports belong to this trace
+            collision = partial(type(self).collision.__wrapped__, self)
+        self._wall_correction_export = [] if corrected else None
+        self._wetting_choice_export = [] if corrected else None
+        try:
+            f_postcollision_tree = collision(f_poststreaming_tree, T=T)
+            exported, exported_choices = self._wall_correction_export, self._wetting_choice_export
+        finally:
+            self._wall_correction_export = self._wetting_choice_export = None
+        # The characteristic samples geometric wetting chose this step (None per component where the correction chooses)
+        choices = exported_choices[-1] if exported_choices else [None] * self.n_components
+        f_postcollision_tree = self.post_collision(f_postcollision_tree, f_poststreaming_tree, timestep)
+        macroscopic = [None] * self.n_components
+        if corrected:
+            if exported:
+                macroscopic = exported[0]
+            else:
+                # Collision without the export (e.g. a user override): density and mean of the pre- and post-collision momenta
+                macroscopic = []
+                for f, g in zip(f_poststreaming_tree, f_postcollision_tree, strict=True):
+                    c = jnp.asarray(self.lattice.c, dtype=f.dtype)
+                    j = 0.5 * (jnp.einsum("...q,dq->...d", f, c) + jnp.einsum("...q,dq->...d", g.astype(f.dtype), c))
+                    macroscopic.append(tuple([jnp.sum(f, axis=-1)] + [j[..., axis] for axis in range(self.dim)]))
+            # Materialized once: otherwise XLA fuses these expressions of the populations and the force into the
+            # correction's gathers and recomputes them (with the psi-gradient stencil) at every gathered node
+            macroscopic = list(jax.lax.optimization_barrier(tuple(m if m is not None else () for m in macroscopic)))
         results = [
-            self._prepare_streaming(f_postcollision, state, timestep, bc_data)
-            for f_postcollision, state, bc_data in zip(f_postcollision_tree, state_tree, self.streaming_bc_data, strict=True)
+            self._prepare_streaming(
+                f_postcollision,
+                state,
+                timestep,
+                bc_data,
+                postcollision_hook=None
+                if data is None
+                else partial(self._apply_geometric_wall_correction, component, macroscopic[component], choices[component]),
+            )
+            for component, (f_postcollision, state, bc_data, data) in enumerate(
+                zip(f_postcollision_tree, state_tree, self.streaming_bc_data, correction, strict=True)
+            )
         ]
         new_state_tree = [state for state, _ in results]
         return new_state_tree, ([jnp.stack(fields, axis=-1) for _, fields in results] if return_fpost else None)

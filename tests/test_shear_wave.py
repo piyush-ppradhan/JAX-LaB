@@ -41,11 +41,14 @@ def _shear_wave(base, lattice, dim, omega):
     return ShearWave(**kwargs)
 
 
-@pytest.mark.parametrize("omega", [1.0, 1.6, 1.9])
 @pytest.mark.parametrize(
-    ("base", "lattice", "dim"),
-    [(BGKSim, LatticeD2Q9, 2), (KBCSim, LatticeD2Q9, 2), (BGKSim, LatticeD3Q27, 3), (KBCSim, LatticeD3Q27, 3)],
-    ids=["BGK-D2Q9", "KBC-D2Q9", "BGK-D3Q27", "KBC-D3Q27"],
+    ("base", "lattice", "dim", "omega"),
+    # KBC (entropic: its relaxation depends on the flow) at three viscosities; BGK on D3Q27 at the lowest viscosity only
+    # (2D BGK and its viscosity are covered by the Taylor-Green tests of test_collision.py)
+    [(KBCSim, LatticeD2Q9, 2, omega) for omega in (1.0, 1.6, 1.9)]
+    + [(KBCSim, LatticeD3Q27, 3, omega) for omega in (1.0, 1.6, 1.9)]
+    + [(BGKSim, LatticeD3Q27, 3, 1.9)],
+    ids=["KBC-D2Q9-1.0", "KBC-D2Q9-1.6", "KBC-D2Q9-1.9", "KBC-D3Q27-1.0", "KBC-D3Q27-1.6", "KBC-D3Q27-1.9", "BGK-D3Q27-1.9"],
 )
 def test_shear_wave_decays_with_lattice_viscosity(base, lattice, dim, omega):
     sim = _shear_wave(base, lattice, dim, omega)

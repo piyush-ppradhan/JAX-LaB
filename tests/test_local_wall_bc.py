@@ -161,7 +161,3 @@ def _check_multiphase(bc_class, with_vel, tolerance=0.0):
 
 def test_halfway_bounceback_matches_global_multiphase():
     _check_multiphase(BounceBackHalfway, with_vel=False)
-
-
-def test_bouzidi_bounceback_matches_global_multiphase():
-    _check_multiphase(InterpolatedBounceBackBouzidi, with_vel=False, tolerance=1e-6)

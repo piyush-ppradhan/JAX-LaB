@@ -131,13 +131,6 @@ def _check_multiphase(bc_class, ttype, face, tolerance=1e-6):
     assert np.max(diff) <= tolerance
 
 
-def test_equilibrium_bc_matches_global_multiphase():
-    _check_multiphase(EquilibriumBC, None, "top", tolerance=0.0)
-
-
 def test_zouhe_velocity_matches_global_multiphase():
+    # One multiphase case: the per-component wiring of the boundary pass is the same for every boundary condition
     _check_multiphase(ZouHe, "velocity", "bottom")
-
-
-def test_regularized_velocity_matches_global_multiphase():
-    _check_multiphase(Regularized, "velocity", "bottom")

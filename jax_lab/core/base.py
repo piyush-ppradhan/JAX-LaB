@@ -1386,7 +1386,7 @@ class LBMBase(object):
         """The state after a collision (see _prepare_streaming)."""
         return self._prepare_streaming(f_postcollision, previous, timestep, bc_data)[0]
 
-    def _prepare_streaming(self, f_postcollision, previous, timestep, bc_data=None):
+    def _prepare_streaming(self, f_postcollision, previous, timestep, bc_data=None, postcollision_hook=None):
         """
         The state after a collision: the post-collision populations split into per-direction fields, with the boundary
         conditions applied in this order:
@@ -1411,6 +1411,9 @@ class LBMBase(object):
 
         bc_data (StreamingBCs, optional): The component's boundary data; defaults to this simulation's.
 
+        postcollision_hook (callable, optional): hook(target, previous) -> target, applied to the post-collision state after
+        the PostCollision boundary conditions (e.g. the geometric-wetting bounce-back correction of Multiphase).
+
         Returns
         -------
         (PopulationState, tuple): The state, and the post-collision fields after the PostCollision boundary conditions.
@@ -1421,6 +1424,8 @@ class LBMBase(object):
         target = PopulationState(fields, None, None)
         for kind, data in bc_data.postcollision if bounceback_fused else bc_data.postcollision_bounceback:
             target = self._run_pass(kind, data, target, previous, timestep)
+        if postcollision_hook is not None:
+            target = postcollision_hook(target, previous)
         postcollision_fields = target.fields
         state = PopulationState(postcollision_fields, *self._halo_kernel(postcollision_fields))
         for kind, data in bc_data.poststreaming:

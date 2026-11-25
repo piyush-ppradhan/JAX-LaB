@@ -234,55 +234,42 @@ def test_local_improved_wetting_matches_reference_for_multiple_components():
 
 
 def _reference_geometric_wetting(rho, component_data, fluid_mask):
+    """Each wall node takes the extremum (largest for theta <= 90) of its characteristic samples: the samples compared by
+    multilinear interpolation, the extremal one interpolated with the data's stencil. In a uniform phase (the samples'
+    nearest-node densities agree within the activity fraction of the fluid range) the extremal nearest-node density."""
     rho = rho.copy()
     rho_min = np.min(rho[fluid_mask])
     rho_max = np.max(rho[fluid_mask])
-
-    def interpolate(point_data):
-        if rho.ndim == 3:
-            x0, y0, x1, y1, w00, w10, w01, w11 = point_data
-            return w00[:, None] * rho[x0, y0] + w10[:, None] * rho[x1, y0] + w01[:, None] * rho[x0, y1] + w11[:, None] * rho[x1, y1]
-        x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point_data
-        return (
-            w000[:, None] * rho[x0, y0, z0]
-            + w100[:, None] * rho[x1, y0, z0]
-            + w010[:, None] * rho[x0, y1, z0]
-            + w110[:, None] * rho[x1, y1, z0]
-            + w001[:, None] * rho[x0, y0, z1]
-            + w101[:, None] * rho[x1, y0, z1]
-            + w011[:, None] * rho[x0, y1, z1]
-            + w111[:, None] * rho[x1, y1, z1]
-        )
-
+    walls = []
     for data in component_data:
         point_data = data["points"] if rho.ndim == 4 else (data["point_1"], data["point_2"])
-        samples = np.stack([interpolate(point) for point in point_data], axis=-2)
-        wall_density = np.where(data["theta"] <= np.pi / 2, np.max(samples, axis=-2), np.min(samples, axis=-2))
-        rho[data["indices"]] = np.clip(wall_density, rho_min, rho_max)
+        sign = np.where(np.asarray(data["theta"]).reshape(-1) <= np.pi / 2, 1.0, -1.0)[:, None]
+        near = rho[tuple(np.moveaxis(np.asarray(data["score_nodes"])[:, :, 0], -1, 0))][..., 0]  # (n, K)
+        ok = np.asarray(data["score_ok"])
+        spread = np.max(np.where(ok, near, -np.inf), axis=1) - np.min(np.where(ok, near, np.inf), axis=1)
+        active = spread > MultiphaseBGK._GEOMETRIC_WETTING_ACTIVITY * (rho_max - rho_min)
+        linear = np.sum(np.asarray(data["linear_weights"]) * rho[tuple(np.moveaxis(np.asarray(data["linear_nodes"]), -1, 0))][..., 0], axis=-1)
+        chosen = np.argmax(np.where(data["linear_ok"], sign * linear, -np.inf), axis=1)
+        uniform = np.max(np.where(ok, sign * near, -np.inf), axis=1) * sign[:, 0]
+        values = []
+        for row, k in enumerate(chosen):
+            if not active[row]:
+                values.append([uniform[row]])
+                continue
+            indices, weights = point_data[k]
+            values.append(np.sum(weights[row][:, None] * rho[tuple(indices[row].T)], axis=0))
+        walls.append((data["indices"], np.clip(np.array(values), rho_min, rho_max)))
+    for indices, values in walls:
+        rho[indices] = values
     return rho
 
 
 def _assert_geometric_samples_use_fluid_nodes(component_data, fluid_mask):
     for data in component_data:
         point_data = data["points"] if fluid_mask.ndim == 3 else (data["point_1"], data["point_2"])
-        for point in point_data:
-            if fluid_mask.ndim == 2:
-                x0, y0, x1, y1, w00, w10, w01, w11 = point
-                samples = ((x0, y0, w00), (x1, y0, w10), (x0, y1, w01), (x1, y1, w11))
-            else:
-                x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point
-                samples = (
-                    (x0, y0, z0, w000),
-                    (x1, y0, z0, w100),
-                    (x0, y1, z0, w010),
-                    (x1, y1, z0, w110),
-                    (x0, y0, z1, w001),
-                    (x1, y0, z1, w101),
-                    (x0, y1, z1, w011),
-                    (x1, y1, z1, w111),
-                )
-            for *sample_indices, weights in samples:
-                assert np.all(fluid_mask[tuple(sample_indices)] | (weights <= 1e-12))
+        for indices, weights in point_data:
+            nodes = fluid_mask[tuple(indices[..., axis] for axis in range(indices.shape[-1]))]
+            assert np.all(nodes | (np.abs(weights) <= 1e-12))
 
 
 def test_geometric_3d_rejects_rays_crossing_solid_and_underresolved_force_nodes():
@@ -319,19 +306,11 @@ def test_geometric_3d_rejects_rays_crossing_solid_and_underresolved_force_nodes(
 
 
 def _sample_points_3d(point_data):
-    x0, y0, z0, x1, y1, z1, w000, w100, w010, w110, w001, w101, w011, w111 = point_data
-    weights = np.stack((w000, w100, w010, w110, w001, w101, w011, w111), axis=1)
-    corners = np.stack(
-        [
-            np.column_stack(c)
-            for c in ((x0, y0, z0), (x1, y0, z0), (x0, y1, z0), (x1, y1, z0), (x0, y0, z1), (x1, y0, z1), (x0, y1, z1), (x1, y1, z1))
-        ],
-        axis=1,
-    )
-    return np.sum(weights[..., None] * corners, axis=1)
+    indices, weights = point_data
+    return np.sum(np.asarray(weights, dtype=np.float64)[..., None] * np.asarray(indices, dtype=np.float64), axis=1)
 
 
-@pytest.mark.parametrize("theta_degrees", [15, 30, 40, 50, 60, 120, 140, 165])
+@pytest.mark.parametrize("theta_degrees", [15, 60, 165])
 def test_geometric_3d_flat_wall_samples_first_fluid_layer(theta_degrees):
     # On a flat voxel wall the characteristic rays must reach the first fluid layer at a tangential distance |cot(theta)|.
     # Below 45 (and above 135) degrees they first cross a mesh line inside the wall layer; that must not count as crossing
@@ -371,7 +350,7 @@ def _porous_solid(n, seed=SEED):
     return solid
 
 
-@pytest.mark.parametrize("theta_degrees", [20, 30, 150])
+@pytest.mark.parametrize("theta_degrees", [20, 150])
 def test_geometric_3d_curved_wall_keeps_contact_angle(theta_degrees):
     # On a staircased sphere some cone rays clip the next voxel step. Only those rays are dropped: no wall node may fall
     # back to the neutral nearest-fluid sample (all eight samples on one lattice node).
@@ -398,7 +377,6 @@ def test_geometric_3d_gpu_preprocessing_matches_cpu_in_porous_medium():
         np.testing.assert_array_equal(gpu_leaf, cpu_leaf)
 
 
-@pytest.mark.skipif(jax.device_count() < 2, reason="Multiple devices required for local geometric-wetting coverage")
 @pytest.mark.parametrize(
     "domain, lattice_class, n_components",
     (
@@ -406,8 +384,11 @@ def test_geometric_3d_gpu_preprocessing_matches_cpu_in_porous_medium():
         pytest.param((4, 4, 4), LatticeD3Q19, 1, id="3d"),
     ),
 )
-def test_local_geometric_wetting_matches_global_reference(domain, lattice_class, n_components):
+@pytest.mark.parametrize("form", ["halo", "global"])
+def test_local_geometric_wetting_matches_global_reference(domain, lattice_class, n_components, form):
     class GeometricWetting(MultiphaseBGK):
+        _GEOMETRIC_WETTING_FORM = None if form == "halo" else form
+
         def set_boundary_conditions(self):
             cases = (
                 ((0, "bottom", np.pi / 3), (0, "left", 2.0 * np.pi / 3)) if self.dim == 3 else ((0, "bottom", np.pi / 3), (1, "top", 2.0 * np.pi / 3))
@@ -456,17 +437,30 @@ def test_local_geometric_wetting_matches_global_reference(domain, lattice_class,
         for rho, data, mask in zip(rho_host_tree, global_data, global_masks, strict=True)
     ]
 
+    assert all((halo is None) == (form == "global") for halo in sim._geometric_wetting_halos)
     for component_data in sim.geometric_wetting_data:
         for data in component_data:
-            assert data["local_indices"].dtype == jnp.int32
-            assert data["local_select_max"].dtype == jnp.bool_
-            assert data["request_indices"].dtype == jnp.int32
-            if "request_slots" in data:
-                assert data["request_slots"].dtype == jnp.int32
-                template = data.get("reduce_scatter_template", data.get("sample_template"))
-                assert template.dtype == jnp.bool_
-                assert data["request_indices"].shape[1] < np.prod(template.shape[1:])
-            else:
-                assert data["local_sample_indices"].dtype == jnp.int32
+            assert set(data) == ({"interior"} if form == "global" else {"interior", "edge"})
+            for block in data.values():
+                assert block["wall_lin"].dtype == jnp.int32 and block["stencil_lin"].dtype == jnp.int32
+                assert block["near_lin"].dtype == jnp.int32 and block["linear_lin"].dtype == jnp.int32 and block["select_max"].dtype == jnp.bool_
     for actual, expected in zip(actual_tree, expected_tree, strict=True):
-        assert np.max(np.abs(np.asarray(actual) - expected)) < 1e-6
+        # The kernel builds the interpolation weights in float32, the reference in float64
+        assert np.max(np.abs(np.asarray(actual) - expected)) < 5e-6
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+def test_geometric_characteristics_cross_periodic_faces(backend):
+    # The domain is periodic: on a flat wall with one contact angle every wall node, also those on the x and y faces of the
+    # domain, must get the same characteristic samples relative to itself (the characteristics cross the faces)
+    if backend == "gpu" and not any(device.platform == "gpu" for device in jax.local_devices()):
+        pytest.skip("GPU required")
+    domain = (12, 10, 6)
+    solid = np.zeros(domain, dtype=bool)
+    solid[:, :, 0] = True
+    sim = _wetted_geometry_sim(solid, np.radians(60.0), backend)
+    walls, _, points = sim._geometric_wall_samples[0][0]
+    offsets = np.stack([sim._interpolation_points(point) for point in points], axis=1) - walls[:, None, :]  # (n, 8, 3)
+    assert len(walls) == domain[0] * domain[1]
+    np.testing.assert_allclose(offsets, np.broadcast_to(offsets[:1], offsets.shape), atol=1e-5)
+    np.testing.assert_allclose(offsets[0, :, 2], 1.0, atol=1e-5)

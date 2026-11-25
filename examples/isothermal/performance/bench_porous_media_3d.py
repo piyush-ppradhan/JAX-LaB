@@ -43,28 +43,26 @@ def require_gpu():
 
 
 def _mrt_matrix_d3q19():
+    """D3Q19 MRT moment basis in the order MultiphaseMRT relaxes it (density, energy, energy square, momentum and heat flux per
+    axis, the stress moments, the third-order moments): the rates s_rho, s_e, s_eta, s_j, s_q, s_v, s_pi, s_m apply to those
+    rows. A basis in another order (e.g. raw monomials) would put the rates on the wrong moments."""
     e = np.asarray(LatticeD3Q19().c).T
-    ex, ey, ez = e[:, 0], e[:, 1], e[:, 2]
+    x, y, z = e.T
+    en2 = np.sum(e**2, axis=1)
     M = np.zeros((19, 19))
-    M[0, :] = ex**0
-    M[1, :] = ex
-    M[2, :] = ey
-    M[3, :] = ez
-    M[4, :] = ex * ey
-    M[5, :] = ex * ez
-    M[6, :] = ey * ez
-    M[7, :] = ex * ex
-    M[8, :] = ey * ey
-    M[9, :] = ez * ez
-    M[10, :] = ex * ey * ey
-    M[11, :] = ex * ez * ez
-    M[12, :] = ey * ex * ex
-    M[13, :] = ez * ex * ex
-    M[14, :] = ey * ez * ez
-    M[15, :] = ez * ey * ey
-    M[16, :] = ex * ex * ey * ey
-    M[17, :] = ex * ex * ez * ez
-    M[18, :] = ey * ey * ez * ez
+    M[0] = 1
+    M[1] = 19 * en2 - 30
+    M[2] = (21 * en2**2 - 53 * en2 + 24) / 2
+    M[3], M[5], M[7] = x, y, z
+    M[4], M[6], M[8] = (5 * en2 - 9) * x, (5 * en2 - 9) * y, (5 * en2 - 9) * z
+    M[9] = 3 * x**2 - en2
+    M[10] = (3 * en2 - 5) * (3 * x**2 - en2)
+    M[11] = y**2 - z**2
+    M[12] = (3 * en2 - 5) * (y**2 - z**2)
+    M[13], M[14], M[15] = x * y, y * z, x * z
+    M[16] = (y**2 - z**2) * x
+    M[17] = (z**2 - x**2) * y
+    M[18] = (x**2 - y**2) * z
     return M
 
 
